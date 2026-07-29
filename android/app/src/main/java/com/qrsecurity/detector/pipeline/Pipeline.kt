@@ -179,179 +179,19 @@ class Pipeline(
                         _estado.value = Estado.ResultadoListo(resultado)
                     }
                     is ExtractorUrls.Extraido.Urls -> {
-                        // Bug C2 (fix): iterar TODAS las URLs extraidas y
-                        // producir un [ResultadoAnalisis.ResultadoUrl] por cada
-                        // una, despues elegir el **peor veredicto** (por orden
-                        // ordinal de [ControladorAlerta.NivelAlerta]: MALICIOSO
-                        // > SOSPECHOSO > SEGURO). Antes solo analizabamos
-                        // `.first()` — bypass de seguridad: atacante podia poner
-                        // URL segura primera y maliciosa segunda sin ser
-                        // detectado.
-                        //
-                        // Bug D1-P1 (fix Lote H): la persistencia a Room
-                        // (`registrarEscaneoLocal`) ahora ocurre **fuera del
-                        // loop**, una sola vez, sobre `peorResultado`. Antes se
-                        // persistia la **primera** URL iterada (fuera del orden
-                        // de peor-veredicto), lo que divergia la fila del
-                        // historial (que mostraba URL #1 en orden de aparicion)
-                        // del resultado mostrado en UI (la peor). Siete
-                        // auditoria de la 1ra oleada lo detecto como caveat C2
-                        // y la 2da oleada (D1-P1) bear-trap: la UI mostraba
-                        // "malicioso" pero el historial mostraba "seguro".
-                        //
-                        // Bug D1-P2 (fix Lote H): usamos `obtenerOActualizar`
-                        // (atomic get-or-put, M-13+M-23) en lugar del patron
-                        // manual `obtener`+`poner` que tenia una carrera TOCTOU
-                        // — dos corutinas podian ambas observar miss, computar,
-                        // y poner, duplicando la persistencia del backend. La
-                        // auditoria D1-P2 noto que `obtenerOActualizar` ya
-                        // existia en [CacheResultados] pero el Pipeline nunca lo
-                        // invocaba (dead method path).
-                        //
-                        // Cache: la cache sigue siendo por URL unica (cache-
-                        // key = urlLimpia de cada URL). Solo persistimos a
-                        // Room/Backend la fila correspondiente a la peor URL —
-                        // el resto se informa en `urlsAdicionales` para la UI
-                        // pero no generan filas Room separadas (evita
-                        // duplicados y mantiene el contrato historial+outbox).
-                        val urlsPorAnalizar = extraido.urls
-                        val resultadosUrls = ArrayList<ResultadoAnalisis.ResultadoUrl>(urlsPorAnalizar.size)
-
-                        for (urlOriginal in urlsPorAnalizar) {
-                            val urlLimpiaIndividual = Preprocesador.limpiarUrl(urlOriginal)
-
-                            // ── Cache get-or-put atomico (D1-P2 fix) ──
-                            // Bug M8 (fix): cache hit propaga el delegado
-                            // **original** cacheado (no el delegado actual
-                            // del motorInferencia, que pudo haber cambiado
-                            // desde la inferencia original). Antes:
-                            //  - delegado = motorInferencia.nombreDelegado
-                            //    (actual, potencialmente distinto al original)
-                            //  - no se registraba en Room → el historial
-                            //    perdia filas en escaneos repetidos.
-                            //
-                            // D1-P2 (fix): antes el patron era
-                            //   val cacheado = cache.obtener(url)
-                            //   if (cacheado != null) { resultadosUrls += ... ; return@for }
-                            //   ... inferencia ...
-                            //   cache.poner(url, entrada)
-                            // que tenia una TOCTOU race entre el `obtener` y el
-                            // `poner`. Ahora delegamos al atomico
-                            // [CacheResultados.obtenerOActualizar] (M-13+M-23),
-                            // que ejecuta el get-or-put completo dentro de una
-                            // seccion critica con double-check (la inferencia
-                            // se ejecuta fuera del lock; solo la verificacion y
-                            // la insercion sostienen el candado). La factory
-                            // `calcular` solo se invoca en cache miss real, y
-                            // si otra corutina gano la carrera mientras esta
-                            // computaba, se descarta el resultado local y se
-                            // devuelve el existente (winner-takes-all).
-                            //
-                            // No persistimos a Room aqui — la persistencia
-                            // ocurre **fuera del loop** sobre `peorResultado`
-                            // (D1-P1 fix). La cache se actualiza por cada URL,
-                            // pero la fila del historial corresponde a la peor.
-                            val entradaFinal = cache.obtenerOActualizar(urlLimpiaIndividual) {
-                                // ── Cache miss: tokenizar + inferir (CANINE) ──
-                                val tokenizado = Preprocesador.tokenizarLote(urlLimpiaIndividual)
-                                val salida = motorInferencia.inferir(tokenizado)
-
-                                // Bug C1 (fix): el placeholder devuelve probabilidad
-                                // [0,1] (NO logits). El futuro motor TFLite real
-                                // devolvera logits crudos. Consultamos
-                                // `motorInferencia.devuelveLogits` para decidir el
-                                // path correcto:
-                                //  - true  → salida son logits  → [desdeLogits] aplica sigmoid.
-                                //  - false → salida ya es probab → [clasificar] directo, sin sigmoid.
-                                // Antes siempre llamabamos `desdeLogits`, lo que
-                                // aplicaba sigmoid dos veces y comprimia el rango
-                                // [0,1] del placeholder a [0.5,0.731] — umbral
-                                // MALICIOSO (0.7) casi inalcanzable.
-                                val resultadoAlerta = if (motorInferencia.devuelveLogits) {
-                                    ControladorAlerta.desdeLogits(salida)
-                                } else {
-                                    // Camino placeholder: salida[0] ya es prob [0,1].
-                                    val prob = salida.getOrElse(0) { 0f }
-                                    ControladorAlerta.ResultadoAlerta(
-                                        probabilidad = prob,
-                                        nivel = ControladorAlerta.clasificar(prob)
-                                    )
-                                }
-
-                                CacheResultados.EntradaCache(
-                                    url = urlLimpiaIndividual,
-                                    probabilidad = resultadoAlerta.probabilidad,
-                                    nivelAlerta = resultadoAlerta.nivel,
-                                    timestampMs = System.currentTimeMillis(),
-                                    delegado = motorInferencia.nombreDelegado
-                                )
-                            }
-                            // `entradaFinal` es la entrada cacheada (sea pre-
-                            // existente o recien computada). La procedencia
-                            // (cacheada vs. recien computada) se refleja en
-                            // `entradaFinal.delegado` — si esta cacheada,
-                            // contiene el delegado original (M8 fix); si fue
-                            // recien computada, contiene el delegado actual.
-                            resultadosUrls += ResultadoAnalisis.ResultadoUrl(
-                                urlOriginal = urlOriginal,
-                                urlLimpia = entradaFinal.url,
-                                probabilidad = entradaFinal.probabilidad,
-                                nivelAlerta = entradaFinal.nivelAlerta,
-                                delegado = entradaFinal.delegado
-                            )
-                        }
-
-                        if (resultadosUrls.isEmpty()) {
-                            // No deberia ocurrir (ExtractorUrls.Extraido.Urls
-                            // garantiza urls no vacio) — defensive.
+                        val resultado = procesarMultiplesUrls(extraido.urls)
+                        if (resultado == null) {
                             _estado.value = Estado.Error("Sin URLs analizables")
-                            return@withContext
-                        }
-
-                        // ── Elegir peor veredicto (C2 fix) ──
-                        // Ordinal de NivelAlerta: SEGURO=0 < SOSPECHOSO=1 < MALICIOSO=2.
-                        // Mayor probabilidad rompe empates (mas maligno).
-                        // Usamos compareByDescending + thenByDescending en lugar
-                        // de `Pair<Int, Float>` porque Pair's Comparable impl
-                        // requiere que ambos tipos implementen Comparable, y
-                        // Float/Float en Kotlin no siempre resuelve el constraint
-                        // generico en este contexto (Kotlin 1.8).
-                        val peorResultado = resultadosUrls.maxWithOrNull(
-                            compareByDescending<ResultadoAnalisis.ResultadoUrl> { it.nivelAlerta.ordinal }
-                                .thenByDescending { it.probabilidad }
-                        )!!  // no-null: resultadosUrls garantizado no vacio arriba
-
-                        // ── Persistencia Room UNA sola vez sobre peorResultado (D1-P1 fix) ──
-                        // Antes este bloque estaba DENTRO del loop (en dos
-                        // puntos distintos: cache-hit y cache-miss), y
-                        // persistia la PRIMERA URL iterada (independientemente
-                        // de si termino siendo la peor). Eso divergia la fila
-                        // del historial (que decia "URL #1 + su veredicto")
-                        // del resultado mostrado en UI (la peor URL). Ahora:
-                        //  - Seleccionamos `peorResultado` primero.
-                        //  - Persistimos UNA fila con `peorResultado`'s datos.
-                        //  - `urlsAdicionales` se informa a la UI pero no
-                        //    genera filas Room (contrato historial == 1 fila/QR).
-                        registrarEscaneoLocal(
-                            urlOriginal = peorResultado.urlOriginal,
-                            urlLimpia = peorResultado.urlLimpia,
-                            probabilidad = peorResultado.probabilidad,
-                            nivelAlerta = peorResultado.nivelAlerta,
-                            delegado = peorResultado.delegado
-                        )
-
-                        // Construir lista de URLs adicionales: el resto
-                        // ordenado de peor a mejor, EXCLUYENDO la peor (que sera
-                        // el primario del ResultadoUrl devuelto).
-                        val adicionales = resultadosUrls
-                            .sortedWith(
-                                compareByDescending<ResultadoAnalisis.ResultadoUrl> { it.nivelAlerta.ordinal }
-                                    .thenByDescending { it.probabilidad }
+                        } else {
+                            registrarEscaneoLocal(
+                                urlOriginal = resultado.urlOriginal,
+                                urlLimpia = resultado.urlLimpia,
+                                probabilidad = resultado.probabilidad,
+                                nivelAlerta = resultado.nivelAlerta,
+                                delegado = resultado.delegado
                             )
-                            .filter { it !== peorResultado }
-
-                        val resultado = peorResultado.copy(urlsAdicionales = adicionales)
-                        _estado.value = Estado.ResultadoListo(resultado)
+                            _estado.value = Estado.ResultadoListo(resultado)
+                        }
                     }
                 }
             } catch (e: Exception) {
@@ -369,6 +209,67 @@ class Pipeline(
                 _estado.value = Estado.Error("$clase: $msg")
             }
         }
+    }
+
+    /**
+     * Procesa multiples URLs extraidas de un QR: tokeniza, infiere (o usa cache),
+     * y selecciona el peor veredicto (C2 fix). Devuelve el [ResultadoUrl] peor
+     * con [urlsAdicionales] poblado, o null si no hubo URLs analizables.
+     *
+     * NO persiste a Room — el caller persiste el peor resultado fuera del loop
+     * (D1-P1 fix).
+     */
+    private suspend fun procesarMultiplesUrls(
+        urlsPorAnalizar: List<String>
+    ): ResultadoAnalisis.ResultadoUrl? {
+        val resultadosUrls = ArrayList<ResultadoAnalisis.ResultadoUrl>(urlsPorAnalizar.size)
+
+        for (urlOriginal in urlsPorAnalizar) {
+            val urlLimpiaIndividual = Preprocesador.limpiarUrl(urlOriginal)
+
+            val entradaFinal = cache.obtenerOActualizar(urlLimpiaIndividual) {
+                val tokenizado = Preprocesador.tokenizarLote(urlLimpiaIndividual)
+                val salida = motorInferencia.inferir(tokenizado)
+
+                val resultadoAlerta = if (motorInferencia.devuelveLogits) {
+                    ControladorAlerta.desdeLogits(salida)
+                } else {
+                    val prob = salida.getOrElse(0) { 0f }
+                    ControladorAlerta.ResultadoAlerta(
+                        probabilidad = prob,
+                        nivel = ControladorAlerta.clasificar(prob)
+                    )
+                }
+
+                CacheResultados.EntradaCache(
+                    url = urlLimpiaIndividual,
+                    probabilidad = resultadoAlerta.probabilidad,
+                    nivelAlerta = resultadoAlerta.nivel,
+                    timestampMs = System.currentTimeMillis(),
+                    delegado = motorInferencia.nombreDelegado
+                )
+            }
+            resultadosUrls += ResultadoAnalisis.ResultadoUrl(
+                urlOriginal = urlOriginal,
+                urlLimpia = entradaFinal.url,
+                probabilidad = entradaFinal.probabilidad,
+                nivelAlerta = entradaFinal.nivelAlerta,
+                delegado = entradaFinal.delegado
+            )
+        }
+
+        if (resultadosUrls.isEmpty()) return null
+
+        val comparador = compareByDescending<ResultadoAnalisis.ResultadoUrl> { it.nivelAlerta.ordinal }
+            .thenByDescending { it.probabilidad }
+
+        val peorResultado = resultadosUrls.maxWithOrNull(comparador)!!
+
+        val adicionales = resultadosUrls
+            .sortedWith(comparador)
+            .filter { it !== peorResultado }
+
+        return peorResultado.copy(urlsAdicionales = adicionales)
     }
 
     /**

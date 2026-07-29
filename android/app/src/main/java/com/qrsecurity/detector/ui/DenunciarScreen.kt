@@ -306,39 +306,17 @@ fun PantallaDenunciar(
                     return@Button
                 }
                 enviando = true
-                scope.launch {
-                    try {
-                        // Offline-first: guarda la denuncia en Room + encola op CREATE
-                        // en pending_ops. El SyncWorker la envia al backend cuando haya
-                        // red. onExito() se llama inmediatamente (no espera al backend).
-                        repoDenuncias.crearLocal(
-                            url = urlSospechosa.trim(),
-                            idCategoria = idCategoriaPhishing,
-                            descripcion = descripcion.ifBlank { null }
-                        )
-                        // Dispara sync unica: si hay red, el worker envia la denuncia
-                        // casi enseguida; si no, queda encolada hasta que vuelva la red.
-                        mediadorSync.dispararSyncUnica()
-                        onMensaje(TipoMensaje.EXITO, "Denuncia enviada")
-                        onExito()
-                    } catch (e: HttpBackendException) {
-                        onMensaje(TipoMensaje.ERROR, buildString {
-                            append("Error ")
-                            append(e.codigo)
-                            append(" del servidor")
-                            if (!e.cuerpo.isNullOrBlank()) {
-                                append(": ")
-                                val cuerpo = e.cuerpo.take(200)
-                                append(cuerpo)
-                            }
-                        })
-                    } catch (e: Exception) {
-                        if (e is CancellationException) throw e
-                        onMensaje(TipoMensaje.ERROR, "Error al guardar la denuncia: ${e.message ?: "error"}")
-                    } finally {
-                        enviando = false
-                    }
-                }
+                enviarDenuncia(
+                    scope = scope,
+                    url = urlSospechosa,
+                    idCategoria = idCategoriaPhishing,
+                    descripcion = descripcion,
+                    repoDenuncias = repoDenuncias,
+                    mediadorSync = mediadorSync,
+                    onMensaje = onMensaje,
+                    onExito = onExito,
+                    onEnviando = { enviando = it }
+                )
             },
             enabled = !enviando,
             modifier = Modifier.fillMaxWidth().height(56.dp).testTag("btn_enviar_denuncia"),
@@ -365,5 +343,47 @@ fun PantallaDenunciar(
         ) {
             Text(stringResource(R.string.action_cancel), color = CyberTextoSecundario)
         }
+    }
+}
+
+private fun enviarDenuncia(
+    scope: kotlinx.coroutines.CoroutineScope,
+    url: String,
+    idCategoria: Int,
+    descripcion: String,
+    repoDenuncias: RepositorioDenuncias,
+    mediadorSync: MediadorSincronizacion,
+    onMensaje: (TipoMensaje, String) -> Unit,
+    onExito: () -> Unit,
+    onEnviando: (Boolean) -> Unit
+) {
+    scope.launch {
+        try {
+            repoDenuncias.crearLocal(
+                url = url.trim(),
+                idCategoria = idCategoria,
+                descripcion = descripcion.ifBlank { null }
+            )
+            mediadorSync.dispararSyncUnica()
+            onMensaje(TipoMensaje.EXITO, "Denuncia enviada")
+            onExito()
+        } catch (e: HttpBackendException) {
+            onMensaje(TipoMensaje.ERROR, construirMensajeErrorBackend(e))
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            onMensaje(TipoMensaje.ERROR, "Error al guardar la denuncia: ${e.message ?: "error"}")
+        } finally {
+            onEnviando(false)
+        }
+    }
+}
+
+private fun construirMensajeErrorBackend(e: HttpBackendException): String = buildString {
+    append("Error ")
+    append(e.codigo)
+    append(" del servidor")
+    if (!e.cuerpo.isNullOrBlank()) {
+        append(": ")
+        append(e.cuerpo.take(200))
     }
 }

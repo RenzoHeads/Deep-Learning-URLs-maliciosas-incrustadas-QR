@@ -177,49 +177,13 @@ class ModuloCamara(
 
         escanerCodigosBarras.process(imagenEntrada)
             .addOnSuccessListener { codigosBarras ->
-                for (codigo in codigosBarras) {
-                    if (codigo.format == Barcode.FORMAT_QR_CODE) {
-                        val valorCrudo = codigo.rawValue
-                        if (!valorCrudo.isNullOrBlank()) {
-                            // Bug A3 fix: debounce — si la ultima deteccion
-                            // aceptada fue hace menos de [debounceMs] ms,
-                            // ignoramos esta deteccion para no saturar el
-                            // pipeline con ~30 inferencias/segundo.
-                            // M4 fix: el read-modify-write de `@Volatile var`
-                            // tenia una carrera entre el `if (ahora - ultimo <
-                            // debounceMs) continue` y `ultimo = ahora`. El
-                            // callback de ML Kit puede invocarse desde hilos
-                            // internos del cliente GMS. Sustituimos por
-                            // updateAndGet atomico que preserva la ventana de
-                            // debounce y dispara solo si este callback gano la
-                            // carrera por actualizar el timestamp.
-                            //
-                            // Nota: la version sugerida en el brief con
-                            // `getAndUpdate { if (ts > cur) ts else cur }` +
-                            // `if (aceptado == ts)` invierte la semantica
-                            // (getAndUpdate retorna el valor PREVIO, no el
-                            // nuevo), disparando en duplicados y silenciando
-                            // la primera deteccion. Reproduccion:
-                            //   - First: cur=0, ts=1000 → f=1000, retorna 0,
-                            //     0==1000 = false → no fire.
-                            //   - Duplicate same-ms: cur=1000, ts=1000 → f=1000,
-                            //     retorna 1000, 1000==1000 = true → fire (duplicado).
-                            // Por eso usamos updateAndGet (retorna el NUEVO
-                            // valor) y fire solo si ese valor es nuestro ts.
-                            val ts = System.currentTimeMillis()
-                            val aceptado = ultimoTimestampAceptado.updateAndGet { cur ->
-                                if (ts - cur >= debounceMs) ts else cur
-                            }
-                            if (aceptado == ts) {
-                                // Procesa frame: este callback gano la carrera
-                                // por actualizar el timestamp a su propio ts.
-                                ContextCompat.getMainExecutor(context).execute {
-                                    onQrDetectado(valorCrudo)
-                                }
-                            }
-                        }
-                    }
-                }
+                procesarCodigosDetectados(
+                    codigosBarras,
+                    context,
+                    onQrDetectado,
+                    ultimoTimestampAceptado,
+                    debounceMs
+                )
             }
             .addOnFailureListener { e ->
                 android.util.Log.w("ModuloCamara", "frame fail", e)
@@ -227,6 +191,35 @@ class ModuloCamara(
             .addOnCompleteListener {
                 imageProxy.close()
             }
+    }
+
+    /**
+     * Procesa la lista de codigos de barras detectados por ML Kit.
+     * Filtra solo QR, aplica debounce y dispara el callback en hilo principal.
+     */
+    private fun procesarCodigosDetectados(
+        codigosBarras: List<Barcode>,
+        context: Context,
+        onQrDetectado: (String) -> Unit,
+        ultimoTimestamp: AtomicLong,
+        debounceMs: Long
+    ) {
+        for (codigo in codigosBarras) {
+            if (codigo.format == Barcode.FORMAT_QR_CODE) {
+                val valorCrudo = codigo.rawValue
+                if (!valorCrudo.isNullOrBlank()) {
+                    val ts = System.currentTimeMillis()
+                    val aceptado = ultimoTimestamp.updateAndGet { cur ->
+                        if (ts - cur >= debounceMs) ts else cur
+                    }
+                    if (aceptado == ts) {
+                        ContextCompat.getMainExecutor(context).execute {
+                            onQrDetectado(valorCrudo)
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /**

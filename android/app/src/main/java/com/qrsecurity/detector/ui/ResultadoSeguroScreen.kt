@@ -2,45 +2,30 @@ package com.qrsecurity.detector.ui
 
 import android.content.Intent
 import android.net.Uri
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -51,9 +36,7 @@ import com.qrsecurity.detector.R
 import com.qrsecurity.detector.pipeline.Pipeline
 import com.qrsecurity.detector.ui.theme.CyberCyan
 import com.qrsecurity.detector.ui.theme.CyberVerdeAlerta
-import com.qrsecurity.detector.ui.theme.CyberGlassBorde
 import com.qrsecurity.detector.ui.theme.CyberFondo
-import com.qrsecurity.detector.ui.theme.CyberGlass
 import com.qrsecurity.detector.ui.theme.CyberTextoPrincipal
 import com.qrsecurity.detector.ui.theme.CyberTextoSecundario
 
@@ -86,46 +69,19 @@ fun PantallaResultadoSeguro(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(20.dp)
     ) {
-        // ── Barra superior ──
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "Resultado del analisis",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                color = CyberTextoPrincipal
-            )
-            IconButton(onClick = onEscanearOtro) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "Cerrar",
-                    tint = CyberTextoSecundario
-                )
-            }
-        }
+        // ── Barra superior (shared component) ──
+        BarraSuperiorResultado(
+            titulo = "Resultado del analisis",
+            onCerrar = onEscanearOtro
+        )
 
-        // ── Icono CheckCircle con glow verde esmeralda ──
-        Box(
-            modifier = Modifier
-                .size(120.dp)
-                .clip(CircleShape)
-                .background(
-                    Brush.radialGradient(
-                        colors = listOf(CyberVerdeAlerta.copy(alpha = 0.25f), CyberFondo)
-                    )
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = Icons.Filled.CheckCircle,
-                contentDescription = "Seguro",
-                tint = CyberVerdeAlerta,
-                modifier = Modifier.size(64.dp)
-            )
-        }
+        // ── Icono CheckCircle con glow verde esmeralda (shared component) ──
+        IconoGlowCircular(
+            icono = Icons.Filled.CheckCircle,
+            colorGlow = CyberVerdeAlerta,
+            contentDescription = "Seguro",
+            alphaGlow = 0.25f
+        )
 
         // ── Titulo + probabilidad ──
             Text(
@@ -142,58 +98,30 @@ fun PantallaResultadoSeguro(
             color = CyberTextoSecundario
         )
 
-        // ── Tarjeta glass con detalles de URL ──
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .border(BorderStroke(1.dp, CyberGlassBorde), RoundedCornerShape(20.dp)),
-            shape = RoundedCornerShape(20.dp),
-            colors = CardDefaults.cardColors(containerColor = CyberGlass)
+        // ── Tarjeta glass con detalles de URL (shared component) ──
+        TarjetaUrlDetectada(
+            urlTexto = resultado.urlOriginal,
+            colorUrl = CyberTextoPrincipal,
+            delegado = resultado.delegado,
+            mostrarBorde = true,
+            modifier = Modifier.testTag("url_original_detectada")
         ) {
-            Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            // Contenido extra: URL normalizada si difiere
+            if (resultado.urlLimpia != resultado.urlOriginal.removePrefix("https://")
+                    .removePrefix("http://").removePrefix("www.")) {
+                Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "URL DETECTADA",
+                    text = "URL NORMALIZADA",
                     style = MaterialTheme.typography.labelMedium,
                     color = CyberTextoSecundario
                 )
                 Text(
-                    text = resultado.urlOriginal,
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.Medium,
+                    text = resultado.urlLimpia,
+                    style = MaterialTheme.typography.bodyMedium,
                     color = CyberTextoPrincipal,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.testTag("url_original_detectada")
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
                 )
-
-                if (resultado.urlLimpia != resultado.urlOriginal.removePrefix("https://")
-                        .removePrefix("http://").removePrefix("www.")) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "URL NORMALIZADA",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = CyberTextoSecundario
-                    )
-                    Text(
-                        text = resultado.urlLimpia,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = CyberTextoPrincipal,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(4.dp))
-                // Bug 16 fix (mirror): ocultar "Inferencia: cache" cuando el
-                // resultado viene del cache. Solo mostrar delegados reales
-                // (NNAPI/GPU/CPU) para consistencia con AcercaDe.
-                if (resultado.delegado != "cache") {
-                    Text(
-                        text = "Inferencia: ${resultado.delegado}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = CyberTextoSecundario
-                    )
-                }
             }
         }
 
@@ -250,79 +178,16 @@ fun PantallaResultadoSeguro(
             Text(stringResource(R.string.action_open_url), color = CyberCyan)
         }
 
-        // ── Botones secundarios: Copiar + Compartir ──
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            TextButton(
-                onClick = {
-                    val portapapeles = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
-                        as android.content.ClipboardManager
-                    portapapeles.setPrimaryClip(
-                        android.content.ClipData.newPlainText("URL", resultado.urlOriginal)
-                    )
-                    onMensaje(TipoMensaje.EXITO, "URL copiada al portapapeles")
-                },
-                modifier = Modifier.weight(1f)
-            ) {
-                Icon(Icons.Filled.ContentCopy, contentDescription = null, tint = CyberTextoSecundario)
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(stringResource(R.string.action_copy), color = CyberTextoSecundario)
-            }
-            TextButton(
-                onClick = {
-                    val texto = construirTextoCompartirSeguro(resultado)
-                    val intent = Intent(Intent.ACTION_SEND).apply {
-                        type = "text/plain"
-                        putExtra(Intent.EXTRA_TEXT, texto)
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    }
-                    // H2 fix: envolver startActivity(createChooser(...)) en
-                    // try/catch para evitar ActivityNotFoundException crashear
-                    // la app en dispositivos sin handler de share (Android TV,
-                    // dispositivos hardened sin apps de mensajeria/firestore).
-                    // Patron identico al bloque "Abrir enlace" de arriba.
-                    try {
-                        context.startActivity(
-                            Intent.createChooser(intent, "Compartir")
-                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        )
-                        onMensaje(TipoMensaje.EXITO, "Compartiendo enlace…")
-                    } catch (e: android.content.ActivityNotFoundException) {
-                        onMensaje(TipoMensaje.ERROR, "No hay app para compartir")
-                    } catch (e: Exception) {
-                        onMensaje(TipoMensaje.ERROR, "No se pudo compartir")
-                    }
-                },
-                modifier = Modifier.weight(1f)
-            ) {
-                Icon(Icons.Filled.Share, contentDescription = null, tint = CyberTextoSecundario)
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(stringResource(R.string.action_share), color = CyberTextoSecundario)
-            }
-        }
+        // ── Botones secundarios: Copiar + Compartir (shared component) ──
+        FilaCopiarCompartir(
+            urlTexto = resultado.urlOriginal,
+            onMensaje = onMensaje
+        )
 
-        // ── Boton Escanear otro ──
-        Button(
-            onClick = onEscanearOtro,
-            modifier = Modifier.fillMaxWidth().height(56.dp).testTag("btn_escanear_otro"),
-            shape = RoundedCornerShape(16.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = CyberCyan,
-                contentColor = CyberFondo
-            )
-        ) {
-            Text(stringResource(R.string.action_scan_again), fontWeight = FontWeight.Bold)
-        }
-    }
-}
-
-private fun construirTextoCompartirSeguro(resultado: Pipeline.ResultadoAnalisis.ResultadoUrl): String {
-    return buildString {
-        appendLine("Resultado del analisis QR Guardian:")
-        appendLine("  URL: ${resultado.urlOriginal}")
-        appendLine("  Probabilidad de amenaza: ${(resultado.probabilidad * 100).toInt()}%")
-        appendLine("  Veredicto: SEGURO")
+        // ── Boton Escanear otro (shared component) ──
+        BotonEscanearOtro(
+            onEscanearOtro = onEscanearOtro,
+            modifier = Modifier.testTag("btn_escanear_otro")
+        )
     }
 }

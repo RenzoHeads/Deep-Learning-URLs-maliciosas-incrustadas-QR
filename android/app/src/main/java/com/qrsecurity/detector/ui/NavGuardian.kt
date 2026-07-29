@@ -180,28 +180,18 @@ fun NavGuardian() {
     // H8 fix: popUpTo(ESCANEAR) sin inclusive + launchSingleTop preserva el
     // back stack y evita instancias duplicadas de RESULTADO_*.
     LaunchedEffect(estadoPipeline) {
-        if (navController.currentDestination?.route != Rutas.ESCANEAR) return@LaunchedEffect
-        when (val estado = estadoPipeline) {
-            is Pipeline.Estado.ResultadoListo -> {
-                val resultado = estado.resultado
-                if (resultado is Pipeline.ResultadoAnalisis.ResultadoUrl &&
-                    ultimoResultadoNavegado !== resultado) {
-                    ultimoResultadoNavegado = resultado
-                    val ruta = if (resultado.nivelAlerta ==
-                        com.qrsecurity.detector.ml.ControladorAlerta.NivelAlerta.MALICIOSO
-                    ) {
-                        Rutas.RESULTADO_MALICIOSO
-                    } else {
-                        Rutas.RESULTADO_SEGURO
-                    }
-                    navController.navigate(ruta) {
-                        popUpTo(Rutas.ESCANEAR) { inclusive = false }
-                        launchSingleTop = true
-                    }
+        manejarNavegacionResultado(
+            estadoPipeline = estadoPipeline,
+            rutaActual = navController.currentDestination?.route,
+            ultimoResultadoNavegado = ultimoResultadoNavegado,
+            onNavegar = { ruta ->
+                ultimoResultadoNavegado = ruta.marca
+                navController.navigate(ruta.ruta) {
+                    popUpTo(Rutas.ESCANEAR) { inclusive = false }
+                    launchSingleTop = true
                 }
             }
-            else -> { /* no-op */ }
-        }
+        )
     }
 
     val backStackEntry by navController.currentBackStackEntryAsState()
@@ -411,68 +401,17 @@ fun NavGuardian() {
                 )
             ) { backStackEntry ->
                 val id = backStackEntry.arguments?.getString("id") ?: ""
-                var escaneo by remember { mutableStateOf<EscaneoEntity?>(null) }
-                var urlBloqueada by remember { mutableStateOf(false) }
-                LaunchedEffect(id) {
-                    scope.launch(Dispatchers.IO) {
-                        val db = BaseDatosSeguridad.get(context)
-                        escaneo = db.escaneoDao().obtenerPorId(id)
-                        // Bug BLOQUEO-1: verificar si la URL del escaneo esta
-                        // bloqueada. Si lo esta, DetalleEscaneoScreen deshabilita
-                        // Abrir/Copiar/Compartir y muestra un badge "URL bloqueada".
-                        val escaneoCargado = escaneo
-                        if (escaneoCargado != null) {
-                            val urlDao = db.urlBloqueadaDao()
-                            urlBloqueada = urlDao.obtenerPorUrl(escaneoCargado.urlLimpia) != null
-                        }
-                    }
-                }
-                val escaneoActual = escaneo
-                if (escaneoActual != null) {
-                    PantallaDetalleEscaneo(
-                        escaneo = escaneoActual,
-                        urlBloqueada = urlBloqueada,
-                        onVolver = { navController.popBackStack() },
-                        onBloquear = {
-                            scope.launch(Dispatchers.IO) {
-                                // Bug payloadJson=NULL fix: antes creabamos el
-                                // PendingOpEntity a mano con payloadJson=null,
-                                // lo que provocaba NPE en procesarCreate del
-                                // SyncWorker. Ahora usamos el repositorio que
-                                // serializa la entidad a JSON correctamente.
-                                val db = BaseDatosSeguridad.get(context)
-                                val backend = ClienteBackend(ClienteBackend.BASE_POR_DEFECTO)
-                                val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
-                                val repoUrls = RepositorioUrlsBloqueadas(db, backend, json)
-                                val mediadorSync = MediadorSincronizacion(context)
-                                repoUrls.bloquearLocal(
-                                    url = escaneoActual.urlLimpia,
-                                    razon = "Bloqueado desde detalle de escaneo"
-                                )
-                                mediadorSync.dispararSyncUnica()
-                                // Actualizar estado para reflejar badge inmediatamente
-                                urlBloqueada = true
-                                mostrarMensaje(TipoMensaje.EXITO, "URL bloqueada")
-                            }
-                        },
-                        onDenunciar = { url ->
-                            val urlCodificada = URLEncoder.encode(url, "UTF-8")
-                            navController.navigate("denunciar?url=$urlCodificada")
-                        },
-                        onMensaje = ::mostrarMensaje
-                    )
-                } else {
-                    // Cargando o no encontrado: spinner simple
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "Cargando...",
-                            color = CyberTextoSecundario
-                        )
-                    }
-                }
+                DetalleEscaneoContainer(
+                    id = id,
+                    context = context,
+                    scope = scope,
+                    onVolver = { navController.popBackStack() },
+                    onDenunciar = { url ->
+                        val urlCodificada = URLEncoder.encode(url, "UTF-8")
+                        navController.navigate("denunciar?url=$urlCodificada")
+                    },
+                    onMensaje = ::mostrarMensaje
+                )
             }
 
             // ── URLs Bloqueadas ──
@@ -581,6 +520,28 @@ internal fun calcularDestinoInicial(
     else -> Rutas.ESCANEAR
 }
 
+private data class RutaNavegacion(val ruta: String, val marca: Any?)
+
+private fun manejarNavegacionResultado(
+    estadoPipeline: Pipeline.Estado,
+    rutaActual: String?,
+    ultimoResultadoNavegado: Any?,
+    onNavegar: (RutaNavegacion) -> Unit
+) {
+    if (rutaActual != Rutas.ESCANEAR) return
+    val estado = estadoPipeline as? Pipeline.Estado.ResultadoListo ?: return
+    val resultado = estado.resultado as? Pipeline.ResultadoAnalisis.ResultadoUrl ?: return
+    if (ultimoResultadoNavegado === resultado) return
+    val ruta = if (resultado.nivelAlerta ==
+        com.qrsecurity.detector.ml.ControladorAlerta.NivelAlerta.MALICIOSO
+    ) {
+        Rutas.RESULTADO_MALICIOSO
+    } else {
+        Rutas.RESULTADO_SEGURO
+    }
+    onNavegar(RutaNavegacion(ruta, resultado))
+}
+
 // ──────────────────────────────────────────────────────────────────
 // Bottom Navigation Bar — 4 items: Escanear, Historial, Alertas, Acerca.
 // ──────────────────────────────────────────────────────────────────
@@ -640,6 +601,65 @@ private fun BarraNavegacionInferior(
                     indicatorColor = CyberCyan.copy(alpha = 0.15f)
                 )
             )
+        }
+    }
+}
+
+@Composable
+private fun DetalleEscaneoContainer(
+    id: String,
+    context: android.content.Context,
+    scope: kotlinx.coroutines.CoroutineScope,
+    onVolver: () -> Unit,
+    onDenunciar: (String) -> Unit,
+    onMensaje: (TipoMensaje, String) -> Unit
+) {
+    var escaneo by remember { mutableStateOf<EscaneoEntity?>(null) }
+    var urlBloqueada by remember { mutableStateOf(false) }
+
+    LaunchedEffect(id) {
+        scope.launch(Dispatchers.IO) {
+            val db = BaseDatosSeguridad.get(context)
+            escaneo = db.escaneoDao().obtenerPorId(id)
+            val escaneoCargado = escaneo
+            if (escaneoCargado != null) {
+                urlBloqueada = db.urlBloqueadaDao()
+                    .obtenerPorUrl(escaneoCargado.urlLimpia) != null
+            }
+        }
+    }
+
+    val escaneoActual = escaneo
+    if (escaneoActual != null) {
+        PantallaDetalleEscaneo(
+            escaneo = escaneoActual,
+            urlBloqueada = urlBloqueada,
+            onVolver = onVolver,
+            onBloquear = {
+                scope.launch(Dispatchers.IO) {
+                    val db = BaseDatosSeguridad.get(context)
+                    val backend = ClienteBackend(ClienteBackend.BASE_POR_DEFECTO)
+                    val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+                    val repoUrls = RepositorioUrlsBloqueadas(db, backend, json)
+                    val mediadorSync = MediadorSincronizacion(context)
+                    repoUrls.bloquearLocal(
+                        url = escaneoActual.urlLimpia,
+                        razon = "Bloqueado desde detalle de escaneo"
+                    )
+                    mediadorSync.dispararSyncUnica()
+                    urlBloqueada = true
+                    onMensaje(TipoMensaje.EXITO, "URL bloqueada")
+                }
+            },
+            onDenunciar = onDenunciar,
+            onMensaje = onMensaje
+        )
+    } else {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(text = "Cargando...", color = CyberTextoSecundario)
         }
     }
 }

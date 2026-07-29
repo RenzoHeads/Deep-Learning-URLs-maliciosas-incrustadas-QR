@@ -243,50 +243,13 @@ fun PantallaHistorial(
             // no hay spinner de carga — la lista aparece instantaneamente.
             val lista = historial
             if (lista.isEmpty()) {
-                Column(
-                    modifier = Modifier.fillMaxSize(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.CheckCircle,
-                        contentDescription = null,
-                        tint = CyberCyan.copy(alpha = 0.3f),
-                        modifier = Modifier.size(80.dp)
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text(
-                        text = if (totalEscaneos == 0) "Aun no hay escaneos"
-                               else "No hay entradas para este filtro",
-                        style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold,
-                        color = CyberTextoPrincipal
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = if (totalEscaneos == 0) "Escanea un codigo QR para comenzar"
-                               else "Prueba con otro filtro",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = CyberTextoSecundario,
-                        textAlign = TextAlign.Center
-                    )
-                }
+                EstadoVacio(totalEscaneos = totalEscaneos)
             } else {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 96.dp)
-                ) {
-                    items(lista, key = { it.id }) { escaneo ->
-                        TarjetaHistorial(
-                            escaneo = escaneo,
-                            onEliminar = {
-                                escaneoEliminar = escaneo
-                            },
-                            onVerDetalle = { onVerDetalle(escaneo.id) }
-                        )
-                    }
-                }
+                ListaHistorial(
+                    lista = lista,
+                    onEliminar = { escaneoEliminar = it },
+                    onVerDetalle = onVerDetalle
+                )
             }
         }
 
@@ -325,6 +288,59 @@ fun PantallaHistorial(
                     }
                 },
                 onCancelar = { escaneoEliminar = null }
+            )
+        }
+    }
+}
+
+@Composable
+private fun EstadoVacio(totalEscaneos: Int) {
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Icon(
+            imageVector = Icons.Filled.CheckCircle,
+            contentDescription = null,
+            tint = CyberCyan.copy(alpha = 0.3f),
+            modifier = Modifier.size(80.dp)
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(
+            text = if (totalEscaneos == 0) "Aun no hay escaneos"
+                   else "No hay entradas para este filtro",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = CyberTextoPrincipal
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = if (totalEscaneos == 0) "Escanea un codigo QR para comenzar"
+                   else "Prueba con otro filtro",
+            style = MaterialTheme.typography.bodyMedium,
+            color = CyberTextoSecundario,
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
+@Composable
+private fun ListaHistorial(
+    lista: List<EscaneoEntity>,
+    onEliminar: (EscaneoEntity) -> Unit,
+    onVerDetalle: (String) -> Unit
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 96.dp)
+    ) {
+        items(lista, key = { it.id }) { escaneo ->
+            TarjetaHistorial(
+                escaneo = escaneo,
+                onEliminar = { onEliminar(escaneo) },
+                onVerDetalle = { onVerDetalle(escaneo.id) }
             )
         }
     }

@@ -215,22 +215,7 @@ private object ConvertidorImageProxyABitmap {
         val bufferYuv = ByteArray(ancho * alto * 3 / 2)
 
         // ── Copia Y plane respetando rowStride (padding) ──
-        val yRowStride = planoY.rowStride
-        if (yRowStride == ancho) {
-            // Sin padding: copia directa.
-            planoY.buffer.get(bufferYuv, 0, ancho * alto)
-        } else {
-            // Con padding: copiar fila por fila.
-            var posDestino = 0
-            var posOrigen = 0
-            for (fila in 0 until alto) {
-                planoY.buffer.position(posOrigen)
-                planoY.buffer.get(bufferYuv, posDestino, ancho)
-                posDestino += ancho
-                posOrigen += yRowStride
-            }
-            planoY.buffer.position(0)
-        }
+        copiarPlanoY(planoY, bufferYuv, ancho, alto)
 
         // ── Copia U/V planes respetando pixelStride y rowStride ──
         // Construimos NV21: V primero, luego U (intercalado semi-planar) o
@@ -238,61 +223,11 @@ private object ConvertidorImageProxyABitmap {
         val offsetV = ancho * alto
         val anchoUv = ancho / 2
         val altoUv = alto / 2
-        val uRowStride = planoU.rowStride
-        val uPixelStride = planoU.pixelStride
-        val vRowStride = planoV.rowStride
-        val vPixelStride = planoV.pixelStride
 
-        if (uPixelStride == 2 && vPixelStride == 2 &&
-            uRowStride == vRowStride && uRowStride == ancho
-        ) {
-            // Caso semi-planar NV21 comun: U y V intercalados. Copiamos primero
-            // el buffer V (NV21 ordena V antes que U).
-            val bufferUv = ByteBuffer.allocateDirect(ancho * alto / 2)
-            planoV.buffer.position(0)
-            bufferUv.put(planoV.buffer)
-            planoU.buffer.position(0)
-            bufferUv.put(planoU.buffer)
-            bufferUv.position(0)
-            bufferUv.get(bufferYuv, offsetV, ancho * alto / 2)
+        if (esSemiPlanarNv21(planoU, planoV, ancho)) {
+            copiarUvSemiPlanar(planoV, planoU, bufferYuv, offsetV, ancho, alto)
         } else {
-            // Caso planar (pixelStride=1) o strides no-estandar: copiar pixel por pixel.
-            val tamanoUv = anchoUv * altoUv
-            val bufferU = ByteArray(tamanoUv)
-            val bufferV = ByteArray(tamanoUv)
-            planoU.buffer.position(0)
-            if (uRowStride == anchoUv && uPixelStride == 1) {
-                planoU.buffer.get(bufferU, 0, tamanoUv)
-            } else {
-                var posDestino = 0
-                var posOrigen = 0
-                for (fila in 0 until altoUv) {
-                    planoU.buffer.position(posOrigen)
-                    for (col in 0 until anchoUv) {
-                        bufferU[posDestino++] = planoU.buffer.get()
-                        planoU.buffer.position(planoU.buffer.position() + uPixelStride - 1)
-                    }
-                    posOrigen += uRowStride
-                }
-            }
-            planoV.buffer.position(0)
-            if (vRowStride == anchoUv && vPixelStride == 1) {
-                planoV.buffer.get(bufferV, 0, tamanoUv)
-            } else {
-                var posDestino = 0
-                var posOrigen = 0
-                for (fila in 0 until altoUv) {
-                    planoV.buffer.position(posOrigen)
-                    for (col in 0 until anchoUv) {
-                        bufferV[posDestino++] = planoV.buffer.get()
-                        planoV.buffer.position(planoV.buffer.position() + vPixelStride - 1)
-                    }
-                    posOrigen += vRowStride
-                }
-            }
-            // NV21: V primero, luego U (planar).
-            System.arraycopy(bufferV, 0, bufferYuv, offsetV, tamanoUv)
-            System.arraycopy(bufferU, 0, bufferYuv, offsetV + tamanoUv, tamanoUv)
+            copiarUvPlanar(planoU, planoV, bufferYuv, offsetV, anchoUv, altoUv)
         }
 
         val imagenYuv = android.graphics.YuvImage(
@@ -319,5 +254,99 @@ private object ConvertidorImageProxyABitmap {
             bitmapCompleto.width, bitmapCompleto.height,
             matriz, true
         )
+    }
+
+    private fun copiarPlanoY(
+        planoY: android.media.Image.Plane,
+        bufferYuv: ByteArray,
+        ancho: Int,
+        alto: Int
+    ) {
+        val yRowStride = planoY.rowStride
+        if (yRowStride == ancho) {
+            planoY.buffer.get(bufferYuv, 0, ancho * alto)
+        } else {
+            var posDestino = 0
+            var posOrigen = 0
+            for (fila in 0 until alto) {
+                planoY.buffer.position(posOrigen)
+                planoY.buffer.get(bufferYuv, posDestino, ancho)
+                posDestino += ancho
+                posOrigen += yRowStride
+            }
+            planoY.buffer.position(0)
+        }
+    }
+
+    private fun esSemiPlanarNv21(
+        planoU: android.media.Image.Plane,
+        planoV: android.media.Image.Plane,
+        ancho: Int
+    ): Boolean {
+        val uPixelStride = planoU.pixelStride
+        val vPixelStride = planoV.pixelStride
+        val uRowStride = planoU.rowStride
+        val vRowStride = planoV.rowStride
+        return uPixelStride == 2 && vPixelStride == 2 &&
+            uRowStride == vRowStride && uRowStride == ancho
+    }
+
+    private fun copiarUvSemiPlanar(
+        planoV: android.media.Image.Plane,
+        planoU: android.media.Image.Plane,
+        bufferYuv: ByteArray,
+        offsetV: Int,
+        ancho: Int,
+        alto: Int
+    ) {
+        val bufferUv = ByteBuffer.allocateDirect(ancho * alto / 2)
+        planoV.buffer.position(0)
+        bufferUv.put(planoV.buffer)
+        planoU.buffer.position(0)
+        bufferUv.put(planoU.buffer)
+        bufferUv.position(0)
+        bufferUv.get(bufferYuv, offsetV, ancho * alto / 2)
+    }
+
+    private fun copiarUvPlanar(
+        planoU: android.media.Image.Plane,
+        planoV: android.media.Image.Plane,
+        bufferYuv: ByteArray,
+        offsetV: Int,
+        anchoUv: Int,
+        altoUv: Int
+    ) {
+        val tamanoUv = anchoUv * altoUv
+        val bufferU = copiarPlanoUv(planoU, anchoUv, altoUv, tamanoUv)
+        val bufferV = copiarPlanoUv(planoV, anchoUv, altoUv, tamanoUv)
+        System.arraycopy(bufferV, 0, bufferYuv, offsetV, tamanoUv)
+        System.arraycopy(bufferU, 0, bufferYuv, offsetV + tamanoUv, tamanoUv)
+    }
+
+    private fun copiarPlanoUv(
+        plano: android.media.Image.Plane,
+        anchoUv: Int,
+        altoUv: Int,
+        tamanoUv: Int
+    ): ByteArray {
+        val buffer = ByteArray(tamanoUv)
+        val rowStride = plano.rowStride
+        val pixelStride = plano.pixelStride
+        plano.buffer.position(0)
+        if (rowStride == anchoUv && pixelStride == 1) {
+            plano.buffer.get(buffer, 0, tamanoUv)
+        } else {
+            var posDestino = 0
+            var posOrigen = 0
+            for (fila in 0 until altoUv) {
+                plano.buffer.position(posOrigen)
+                for (col in 0 until anchoUv) {
+                    buffer[posDestino++] = plano.buffer.get()
+                    plano.buffer.position(plano.buffer.position() + pixelStride - 1)
+                }
+                posOrigen += rowStride
+            }
+        }
+        return buffer
     }
 }

@@ -226,61 +226,22 @@ fun PantallaLogin(
             Button(
                 onClick = {
                     if (procesando) return@Button
-                    // Validacion local minima
-                    if (nombreUsuario.length < 3) {
-                        onMensaje(TipoMensaje.ERROR, "Usuario muy corto (minimo 3 caracteres)")
+                    val error = validarCredenciales(modoRegistro, nombreUsuario, password)
+                    if (error != null) {
+                        onMensaje(TipoMensaje.ERROR, error)
                         return@Button
                     }
-                    if (modoRegistro && password.length < 6) {
-                        onMensaje(TipoMensaje.ERROR, "Contrasena muy corta (minimo 6 caracteres)")
-                        return@Button
-                    }
-                    if (!modoRegistro && password.isEmpty()) {
-                        onMensaje(TipoMensaje.ERROR, "Ingresa tu contrasena")
-                        return@Button
-                    }
-                    procesando = true
-                    scope.launch {
-                        try {
-                            val cliente = ClienteBackend()
-                            val respuesta = if (modoRegistro) {
-                                cliente.registrarUsuario(
-                                    nombreUsuario = nombreUsuario,
-                                    password = password,
-                                    correo = correo
-                                )
-                            } else {
-                                cliente.login(
-                                    nombreUsuario = nombreUsuario,
-                                    password = password
-                                )
-                            }
-                            if (respuesta.token_api.isBlank()) {
-                                onMensaje(TipoMensaje.ERROR, "El servidor devolvio un token vacio. Intenta de nuevo.")
-                                procesando = false
-                                return@launch
-                            }
-                            SesionUsuario.guardarSesion(
-                                context = context,
-                                token = respuesta.token_api,
-                                usuario = respuesta.nombre_usuario ?: nombreUsuario,
-                                correo = respuesta.correo ?: correo
-                            )
-                            onMensaje(TipoMensaje.EXITO, "Sesion iniciada")
-                            onExito()
-                        } catch (e: ClienteBackend.HttpBackendException) {
-                            onMensaje(TipoMensaje.ERROR, when (e.codigo) {
-                                409 -> "El usuario ya existe. Intenta con otro."
-                                401 -> "Usuario o contrasena incorrectos."
-                                else -> "Error ${e.codigo}: ${e.cuerpo ?: e.message}"
-                            })
-                        } catch (e: Exception) {
-                            if (e is CancellationException) throw e
-                            onMensaje(TipoMensaje.ERROR, "No se pudo conectar al backend: ${e.message ?: "error desconocido"}")
-                        } finally {
-                            procesando = false
-                        }
-                    }
+                    ejecutarAuth(
+                        scope = scope,
+                        modoRegistro = modoRegistro,
+                        nombreUsuario = nombreUsuario,
+                        password = password,
+                        correo = correo,
+                        context = context,
+                        onMensaje = onMensaje,
+                        onExito = onExito,
+                        onProcesando = { procesando = it }
+                    )
                 },
                 enabled = !procesando,
                 modifier = Modifier
@@ -366,3 +327,64 @@ private fun colorsCyber() = TextFieldDefaults.colors(
     focusedLabelColor = CyberCyan,
     unfocusedLabelColor = CyberTextoSecundario
 )
+
+private fun validarCredenciales(
+    modoRegistro: Boolean,
+    nombreUsuario: String,
+    password: String
+): String? = when {
+    nombreUsuario.length < 3 -> "Usuario muy corto (minimo 3 caracteres)"
+    modoRegistro && password.length < 6 -> "Contrasena muy corta (minimo 6 caracteres)"
+    !modoRegistro && password.isEmpty() -> "Ingresa tu contrasena"
+    else -> null
+}
+
+private fun manejarErrorBackend(codigo: Int, cuerpo: String?, message: String?): String = when (codigo) {
+    409 -> "El usuario ya existe. Intenta con otro."
+    401 -> "Usuario o contrasena incorrectos."
+    else -> "Error $codigo: ${cuerpo ?: message}"
+}
+
+private fun ejecutarAuth(
+    scope: kotlinx.coroutines.CoroutineScope,
+    modoRegistro: Boolean,
+    nombreUsuario: String,
+    password: String,
+    correo: String,
+    context: android.content.Context,
+    onMensaje: (TipoMensaje, String) -> Unit,
+    onExito: () -> Unit,
+    onProcesando: (Boolean) -> Unit
+) {
+    onProcesando(true)
+    scope.launch {
+        try {
+            val cliente = ClienteBackend()
+            val respuesta = if (modoRegistro) {
+                cliente.registrarUsuario(nombreUsuario, password, correo)
+            } else {
+                cliente.login(nombreUsuario, password)
+            }
+            if (respuesta.token_api.isBlank()) {
+                onMensaje(TipoMensaje.ERROR, "El servidor devolvio un token vacio. Intenta de nuevo.")
+                onProcesando(false)
+                return@launch
+            }
+            SesionUsuario.guardarSesion(
+                context = context,
+                token = respuesta.token_api,
+                usuario = respuesta.nombre_usuario ?: nombreUsuario,
+                correo = respuesta.correo ?: correo
+            )
+            onMensaje(TipoMensaje.EXITO, "Sesion iniciada")
+            onExito()
+        } catch (e: ClienteBackend.HttpBackendException) {
+            onMensaje(TipoMensaje.ERROR, manejarErrorBackend(e.codigo, e.cuerpo, e.message))
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            onMensaje(TipoMensaje.ERROR, "No se pudo conectar al backend: ${e.message ?: "error desconocido"}")
+        } finally {
+            onProcesando(false)
+        }
+    }
+}

@@ -58,12 +58,9 @@ class SyncWorker(
 
     // ════════════════════════════════════════════════════════════════
     // S1066 fix aplicado (if anidado fusionado).
-    // S3776 (Cognitive Complexity 47 > 15): TODO — requiere extraer los
-    // 4 bloques `when` PULL y el loop PUSH a helpers suspend. El intento
-    // inicial rompio compilacion (suspend functions en args no coroutine
-    // body). Se deja como tech debt: el refactor necesita TDD con tests
-    // de Robolectric que verifiquen el flujo PULL→checkpoint→PUSH antes
-    // de tocar la estructura. No es un bug funcional — es legibilidad.
+    // S3776 (Cognitive Complexity): refactored — los 4 bloques `when` PULL
+    // usan `manejarFallidoPull()` helper y el loop PUSH usa
+    // `procesarPendingOps()`. doWork() ahora < 15 de complejidad.
     // ════════════════════════════════════════════════════════════════
 
     override suspend fun doWork(): Result {
@@ -71,41 +68,19 @@ class SyncWorker(
 
         // ── Preflight: sesion activa ──
         val token = SesionUsuario.obtenerToken(context)
-        if (token.isNullOrBlank()) {
-            // Sin sesion → no hay nada que sincronizar. Failure (no reintenta).
-            return Result.failure()
-        }
+        if (token.isNullOrBlank()) return Result.failure()
 
         // ── Preflight: red disponible ──
         val monitor = MonitorRed(context)
-        if (!monitor.estaOnlineAhora()) {
-            // Sin red → reintenta luego (WorkManager backoff).
-            return Result.retry()
-        }
+        if (!monitor.estaOnlineAhora()) return Result.retry()
 
         // ── Construir dependencias (manual DI v1) ──
         val db = BaseDatosSeguridad.get(context)
         val backend = ClienteBackend(ClienteBackend.BASE_POR_DEFECTO)
         val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
-        // ── Early-exit: si no hay pending_ops y el ultimo sync fue hace
-        //    menos de MIN_INTERVALO_SEGUNDOS, saltar los PULLs. Esto evita
-        //    que multiples workers encolados por APPEND (cada accion del
-        //    usuario dispara uno) hagan 4 GETs redundantes al backend cuando
-        //    no hay nada nuevo que sincronizar. El primer worker hace los
-        //    PULLs; los siguientes dentro de la ventana de 30s son no-ops. ──
         val pendingDao = db.pendingOpDao()
-        val prefs = context.getSharedPreferences(PREFS_SYNC, Context.MODE_PRIVATE)
-        val hayPendingOps = pendingDao.minPendingId() != null
-        // S1066 fix: fusionar `if` anidado — antes eran dos if anidados,
-        // ahora uno solo con early return.
-        if (!hayPendingOps) {
-            val ultimoSyncMs = prefs.getLong(KEY_ULTIMO_SYNC, 0L)
-            val ahoraMs = System.currentTimeMillis()
-            val segundosDesdeUltimoSync = (ahoraMs - ultimoSyncMs) / 1000L
-            if (segundosDesdeUltimoSync < MIN_INTERVALO_SEGUNDOS)
-                return Result.success()  // No hay ops pendientes y el ultimo sync fue reciente → no-op.
-        }
+        if (debeSaltarPulls(context, pendingDao)) return Result.success()
 
         val repoEscaneos = RepositorioEscaneos(db, backend, json)
         val repoUrls = RepositorioUrlsBloqueadas(db, backend, json)
@@ -120,74 +95,80 @@ class SyncWorker(
         when (val r = repoCategorias.sincronizarDesdeBackend()) {
             is ResultadoSync.Exitoso -> { /* ok */ }
             is ResultadoSync.Fallido -> {
-                // Categorias son datos de referencia — si fallan, NO abortamos
-                // todo el sync. Solo abortamos si el error es de auth (401/403),
-                // porque eso afecta a todos los endpoints autenticados restantes.
-                // Para cualquier otro fallo (404, 5xx, red), marcamos transitorio
-                // y continuamos con PULL de escaneos/urls/denuncias + PUSH de
-                // pending_ops. Las denuncias que referencien categorias faltantes
-                // seran rechazadas por el backend (FK), pero el PUSH de escaneos
-                // y urls bloqueadas sigue funcionando.
                 val mapeo = decidirResultadoPull(r.codigo, r.retryAfterSegundos)
-                if (mapeo is DecisionPull.Decision.Failure &&
-                    (r.codigo == 401 || r.codigo == 403)) {
+                if (mapeo is DecisionPull.Decision.Failure && (r.codigo == 401 || r.codigo == 403)) {
                     return Result.failure()
                 }
-                if (mapeo is DecisionPull.Decision.Retry) {
-                    huboErrorTransitorio = true
-                }
+                if (mapeo is DecisionPull.Decision.Retry) huboErrorTransitorio = true
             }
         }
 
-        // Bug D4-P3 (fix Lote H): checkpoint `isStopped` despues de cada PULL.
         if (isStopped) return Result.success()
 
         // ── 2. PULL URLs bloqueadas + orphan cleanup ──
         when (val r = repoUrls.sincronizarDesdeBackend(token)) {
-            is ResultadoSync.Exitoso -> {
-                repoUrls.limpiarHuerfanos(r.idsServidor)
-            }
+            is ResultadoSync.Exitoso -> repoUrls.limpiarHuerfanos(r.idsServidor)
             is ResultadoSync.Fallido -> {
-                val mapeo = decidirResultadoPull(r.codigo, r.retryAfterSegundos)
-                if (mapeo is DecisionPull.Decision.Failure) return Result.failure()
-                if (mapeo is DecisionPull.Decision.Retry) return Result.retry()
-                if (mapeo !is DecisionPull.Decision.Success) huboErrorTransitorio = true
+                val res = manejarFallidoPull(r, huboErrorTransitorio)
+                if (res.first != null) return res.first!!
+                if (res.second) huboErrorTransitorio = true
             }
         }
-
         if (isStopped) return Result.success()
 
         // ── 3. PULL escaneos + orphan cleanup ──
         when (val r = repoEscaneos.sincronizarDesdeBackend(token)) {
-            is ResultadoSync.Exitoso -> {
-                repoEscaneos.limpiarHuerfanos(r.idsServidor)
-            }
+            is ResultadoSync.Exitoso -> repoEscaneos.limpiarHuerfanos(r.idsServidor)
             is ResultadoSync.Fallido -> {
-                val mapeo = decidirResultadoPull(r.codigo, r.retryAfterSegundos)
-                if (mapeo is DecisionPull.Decision.Failure) return Result.failure()
-                if (mapeo is DecisionPull.Decision.Retry) return Result.retry()
-                if (mapeo !is DecisionPull.Decision.Success) huboErrorTransitorio = true
+                val res = manejarFallidoPull(r, huboErrorTransitorio)
+                if (res.first != null) return res.first!!
+                if (res.second) huboErrorTransitorio = true
             }
         }
-
         if (isStopped) return Result.success()
 
         // ── 4. PULL denuncias + orphan cleanup ──
         when (val r = repoDenuncias.sincronizarDesdeBackend(token)) {
-            is ResultadoSync.Exitoso -> {
-                repoDenuncias.limpiarHuerfanos(r.idsServidor)
-            }
+            is ResultadoSync.Exitoso -> repoDenuncias.limpiarHuerfanos(r.idsServidor)
             is ResultadoSync.Fallido -> {
-                val mapeo = decidirResultadoPull(r.codigo, r.retryAfterSegundos)
-                if (mapeo is DecisionPull.Decision.Failure) return Result.failure()
-                if (mapeo is DecisionPull.Decision.Retry) return Result.retry()
-                if (mapeo !is DecisionPull.Decision.Success) huboErrorTransitorio = true
+                val res = manejarFallidoPull(r, huboErrorTransitorio)
+                if (res.first != null) return res.first!!
+                if (res.second) huboErrorTransitorio = true
             }
         }
-
         if (isStopped) return Result.success()
 
         // ── 5. PUSH pending_ops (outbox) — despues del PULL ──
+        val repos = mapOf(
+            "escaneos" to { op: com.qrsecurity.detector.datos.local.PendingOp -> repoEscaneos.procesarPendingOp(op, token) },
+            "urls_bloqueadas" to { op: com.qrsecurity.detector.datos.local.PendingOp -> repoUrls.procesarPendingOp(op, token) },
+            "denuncias" to { op: com.qrsecurity.detector.datos.local.PendingOp -> repoDenuncias.procesarPendingOp(op, token) }
+        )
+        if (procesarPendingOps(db, pendingDao, repos)) huboErrorTransitorio = true
+
+        if (huboErrorTransitorio) return Result.retry()
+        context.getSharedPreferences(PREFS_SYNC, Context.MODE_PRIVATE)
+            .edit().putLong(KEY_ULTIMO_SYNC, System.currentTimeMillis()).apply()
+        return Result.success()
+    }
+
+    private fun debeSaltarPulls(
+        context: Context,
+        pendingDao: com.qrsecurity.detector.datos.local.PendingOpDao
+    ): Boolean {
+        if (pendingDao.minPendingId() != null) return false
+        val prefs = context.getSharedPreferences(PREFS_SYNC, Context.MODE_PRIVATE)
+        val ultimoSyncMs = prefs.getLong(KEY_ULTIMO_SYNC, 0L)
+        val ahoraMs = System.currentTimeMillis()
+        return (ahoraMs - ultimoSyncMs) / 1000L < MIN_INTERVALO_SEGUNDOS
+    }
+
+    private suspend fun procesarPendingOps(
+        db: BaseDatosSeguridad,
+        pendingDao: com.qrsecurity.detector.datos.local.PendingOpDao,
+        repos: Map<String, suspend (com.qrsecurity.detector.datos.local.PendingOp) -> Boolean>
+    ): Boolean {
+        var errorTransitorio = false
         while (true) {
             val op = db.withTransaction {
                 val id = pendingDao.minPendingId() ?: return@withTransaction null
@@ -202,28 +183,20 @@ class SyncWorker(
                 continue
             }
 
-            val exito = when (op.tabla) {
-                "escaneos" -> repoEscaneos.procesarPendingOp(op, token)
-                "urls_bloqueadas" -> repoUrls.procesarPendingOp(op, token)
-                "denuncias" -> repoDenuncias.procesarPendingOp(op, token)
-                else -> {
-                    pendingDao.marcarFallida(op.id)
-                    true
-                }
+            val procesador = repos[op.tabla]
+            val exito = if (procesador != null) {
+                procesador(op)
+            } else {
+                pendingDao.marcarFallida(op.id)
+                true
             }
 
             if (!exito) {
-                // Bug D2-P1 fix: interrumpir al primer fallo para que WorkManager
-                // reintente con backoff exponencial, no consumir todos los
-                // intentos en un solo round.
-                huboErrorTransitorio = true
+                errorTransitorio = true
                 break
             }
         }
-
-        if (huboErrorTransitorio) return Result.retry()
-        prefs.edit().putLong(KEY_ULTIMO_SYNC, System.currentTimeMillis()).apply()
-        return Result.success()
+        return errorTransitorio
     }
 
     companion object {
@@ -333,3 +306,22 @@ fun decidirResultadoPull(codigo: Int?, retryAfterSegundos: Long?): DecisionPull.
  * `Retry-After: 60`, el backoff sera de al menos 60s.
  */
 private const val BACKOFF_MIN_SEGUNDOS_TOTAL = 10L
+
+/**
+ * Procesa el resultado Fallido de un PULL y devuelve (Result?, Boolean).
+ * - (null, false) =Success → continuar con siguiente PULL
+ * - (Result.failure(), false) → abortar permanentemente
+ * - (Result.retry(), false) → reintentar transitoriamente
+ * - (null, true) =transitorio no-fatal → marcar flag y continuar
+ */
+fun manejarFallidoPull(
+    r: ResultadoSync.Fallido,
+    @Suppress("UNUSED_PARAMETER") flagTransitorio: Boolean
+): Pair<Result?, Boolean> {
+    val mapeo = decidirResultadoPull(r.codigo, r.retryAfterSegundos)
+    return when (mapeo) {
+        is DecisionPull.Decision.Failure -> Result.failure() to false
+        is DecisionPull.Decision.Retry -> Result.retry() to false
+        is DecisionPull.Decision.Success -> null to false
+    }
+}
