@@ -8,7 +8,7 @@ Endpoints:
   DELETE /escaneos/{id}        — Elimina un escaneo del historial
 """
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -18,11 +18,15 @@ from app.routers.auth import verificar_token
 
 router = APIRouter(prefix="/escaneos", tags=["escaneos"])
 
+# SonarQube S1192 fix: el literal " AND " se duplicaba 3 veces.
+# Extraido como constante para mantener un unico punto de cambio.
+_OP_AND = " AND "
+
 
 @router.post("", response_model=EscaneoRespuesta, status_code=201)
 async def crear_escaneo(
     datos: CrearEscaneoEntrada,
-    id_usuario: str = Depends(verificar_token),
+    id_usuario: Annotated[str, Depends(verificar_token)],
 ):
     """Registra un nuevo escaneo en el historial."""
     pool = await obtener_pool()
@@ -51,14 +55,13 @@ async def crear_escaneo(
 
 @router.get("", response_model=list[EscaneoRespuesta])
 async def listar_escaneos(
-    filtro: Literal["todos", "seguros", "maliciosos"] = Query("todos"),
-    limite: int = Query(20, ge=1, le=200),
-    offset: int = Query(0, ge=0),
-    modificados_desde: datetime | None = Query(
-        None,
+    id_usuario: Annotated[str, Depends(verificar_token)],
+    filtro: Annotated[Literal["todos", "seguros", "maliciosos"], Query()] = "todos",
+    limite: Annotated[int, Query(ge=1, le=200)] = 20,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    modificados_desde: Annotated[datetime | None, Query(
         description="Fecha ISO 8601 desde donde obtener modificados (delta sync). Incluye tombstones (deleted_at != null)."
-    ),
-    id_usuario: str = Depends(verificar_token),
+    )] = None,
 ):
     """Lista el historial de escaneos con filtro opcional y paginacion server-side.
 
@@ -86,7 +89,7 @@ async def listar_escaneos(
         # Modo delta: filtrar por updated_at, incluir tombstones
         condiciones.append("updated_at >= $2")
         params.append(modificados_desde)
-        where = " AND ".join(condiciones)
+        where = _OP_AND.join(condiciones)
         query = (
             f"SELECT id, url_original, url_limpia, probabilidad, "
             f"nivel_alerta, delegado, es_malicioso, creado_en, "
@@ -102,7 +105,7 @@ async def listar_escaneos(
         elif filtro == "maliciosos":
             condiciones.append("es_malicioso = true")
 
-        where = " AND ".join(condiciones)
+        where = _OP_AND.join(condiciones)
         # IMPORTANTE: la clausula OFFSET va despues de LIMIT en PostgreSQL.
         query = (
             f"SELECT id, url_original, url_limpia, probabilidad, "
@@ -123,8 +126,8 @@ async def listar_escaneos(
 
 @router.get("/count", response_model=dict)
 async def contar_escaneos(
-    filtro: Literal["todos", "seguros", "maliciosos"] = Query("todos"),
-    id_usuario: str = Depends(verificar_token),
+    id_usuario: Annotated[str, Depends(verificar_token)],
+    filtro: Annotated[Literal["todos", "seguros", "maliciosos"], Query()] = "todos",
 ):
     """Devuelve el total de escaneos del usuario segun el filtro, sin paginacion.
 
@@ -141,7 +144,7 @@ async def contar_escaneos(
     elif filtro == "maliciosos":
         condiciones.append("es_malicioso = true")
 
-    where = " AND ".join(condiciones)
+    where = _OP_AND.join(condiciones)
     query = f"SELECT COUNT(*) FROM historial_escaneos WHERE {where}"
 
     async with pool.acquire() as conexion:
@@ -150,10 +153,14 @@ async def contar_escaneos(
     return {"total": total or 0}
 
 
-@router.get("/{escaneo_id}", response_model=EscaneoRespuesta)
+@router.get(
+    "/{escaneo_id}",
+    response_model=EscaneoRespuesta,
+    responses={404: {"description": "Escaneo no encontrado"}},
+)
 async def obtener_escaneo(
     escaneo_id: str,
-    id_usuario: str = Depends(verificar_token),
+    id_usuario: Annotated[str, Depends(verificar_token)],
 ):
     """Obtiene un escaneo especifico por ID."""
     pool = await obtener_pool()
@@ -175,10 +182,14 @@ async def obtener_escaneo(
     return fila_a_escaneo(fila)
 
 
-@router.delete("/{escaneo_id}", status_code=204)
+@router.delete(
+    "/{escaneo_id}",
+    status_code=204,
+    responses={404: {"description": "Escaneo no encontrado o ya eliminado"}},
+)
 async def eliminar_escaneo(
     escaneo_id: str,
-    id_usuario: str = Depends(verificar_token),
+    id_usuario: Annotated[str, Depends(verificar_token)],
 ):
     """Elimina un escaneo del historial."""
     pool = await obtener_pool()

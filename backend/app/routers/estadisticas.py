@@ -5,6 +5,7 @@ Endpoints:
   GET /estadisticas — Devuelve total_escaneos, amenazas, ultimos_7_dias
 """
 from datetime import datetime, timezone, timedelta
+from typing import Annotated
 
 from fastapi import APIRouter, Depends
 
@@ -17,7 +18,7 @@ router = APIRouter(prefix="/estadisticas", tags=["estadisticas"])
 
 @router.get("", response_model=EstadisticasRespuesta)
 async def obtener_estadisticas(
-    id_usuario: str = Depends(verificar_token),
+    id_usuario: Annotated[str, Depends(verificar_token)],
 ):
     """Devuelve estadisticas agregadas del usuario."""
     pool = await obtener_pool()

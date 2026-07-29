@@ -7,6 +7,7 @@ Endpoints:
   GET    /denuncias/categorias — Lista las categorias disponibles
 """
 from datetime import datetime
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -31,10 +32,15 @@ async def listar_categorias():
     ]
 
 
-@router.post("", response_model=DenunciaRespuesta, status_code=201)
+@router.post(
+    "",
+    response_model=DenunciaRespuesta,
+    status_code=201,
+    responses={400: {"description": "Categoria de denuncia invalida"}},
+)
 async def crear_denuncia(
     datos: CrearDenunciaEntrada,
-    id_usuario: str = Depends(verificar_token),
+    id_usuario: Annotated[str, Depends(verificar_token)],
 ):
     """Crea una denuncia de URL maliciosa."""
     pool = await obtener_pool()
@@ -75,12 +81,11 @@ async def crear_denuncia(
 
 @router.get("", response_model=list[DenunciaRespuesta])
 async def listar_denuncias(
-    limite: int = Query(50, ge=1, le=200),
-    modificados_desde: datetime | None = Query(
-        None,
+    id_usuario: Annotated[str, Depends(verificar_token)],
+    limite: Annotated[int, Query(ge=1, le=200)] = 50,
+    modificados_desde: Annotated[datetime | None, Query(
         description="Fecha ISO 8601 desde donde obtener modificados (delta sync). Incluye tombstones."
-    ),
-    id_usuario: str = Depends(verificar_token),
+    )] = None,
 ):
     """Lista las denuncias del usuario.
 
@@ -123,10 +128,14 @@ async def listar_denuncias(
     return [fila_a_denuncia(f) for f in filas]
 
 
-@router.delete("/{denuncia_id}", status_code=204)
+@router.delete(
+    "/{denuncia_id}",
+    status_code=204,
+    responses={404: {"description": "Denuncia no encontrada o ya eliminada"}},
+)
 async def eliminar_denuncia(
     denuncia_id: str,
-    id_usuario: str = Depends(verificar_token),
+    id_usuario: Annotated[str, Depends(verificar_token)],
 ):
     """Elimina (soft-delete) una denuncia del usuario."""
     pool = await obtener_pool()

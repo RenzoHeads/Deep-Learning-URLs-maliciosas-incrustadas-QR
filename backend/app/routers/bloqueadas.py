@@ -7,6 +7,7 @@ Endpoints:
   DELETE /urls-bloqueadas/{id}     — Desbloquea una URL
 """
 from datetime import datetime
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -19,12 +20,11 @@ router = APIRouter(prefix="/urls-bloqueadas", tags=["urls-bloqueadas"])
 
 @router.get("", response_model=list[UrlBloqueadaRespuesta])
 async def listar_urls_bloqueadas(
-    limite: int = Query(50, ge=1, le=200),
-    modificados_desde: datetime | None = Query(
-        None,
+    id_usuario: Annotated[str, Depends(verificar_token)],
+    limite: Annotated[int, Query(ge=1, le=200)] = 50,
+    modificados_desde: Annotated[datetime | None, Query(
         description="Fecha ISO 8601 desde donde obtener modificados (delta sync). Incluye tombstones."
-    ),
-    id_usuario: str = Depends(verificar_token),
+    )] = None,
 ):
     """Lista las URLs bloqueadas del usuario.
 
@@ -63,10 +63,15 @@ async def listar_urls_bloqueadas(
     return [fila_a_url_bloqueada(f) for f in filas]
 
 
-@router.post("", response_model=UrlBloqueadaRespuesta, status_code=201)
+@router.post(
+    "",
+    response_model=UrlBloqueadaRespuesta,
+    status_code=201,
+    responses={409: {"description": "Esta URL ya esta bloqueada"}},
+)
 async def bloquear_url(
     datos: BloquearUrlEntrada,
-    id_usuario: str = Depends(verificar_token),
+    id_usuario: Annotated[str, Depends(verificar_token)],
 ):
     """Bloquea una URL para el usuario.
 
@@ -122,10 +127,14 @@ async def bloquear_url(
     return fila_a_url_bloqueada(fila)
 
 
-@router.delete("/{url_id}", status_code=204)
+@router.delete(
+    "/{url_id}",
+    status_code=204,
+    responses={404: {"description": "URL bloqueada no encontrada o ya eliminada"}},
+)
 async def desbloquear_url(
     url_id: str,
-    id_usuario: str = Depends(verificar_token),
+    id_usuario: Annotated[str, Depends(verificar_token)],
 ):
     """Desbloquea (soft-delete) una URL de la lista de bloqueadas."""
     pool = await obtener_pool()
