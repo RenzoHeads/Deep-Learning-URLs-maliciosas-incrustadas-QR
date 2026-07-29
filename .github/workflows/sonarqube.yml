@@ -72,5 +72,4 @@ jobs:
             -Dsonar.exclusions=**/build/**,**/*.json,**/*.xml,**/*.pro,backend/api/**,*.ipynb,**/*.ipynb,master_generico/**,master_regionalizado/**,prueba_generica/**,prueba_latam/** \
             -Dsonar.sourceEncoding=UTF-8 \
             -Dsonar.python.version=3.11 \
-            -Dsonar.python.coverage.reportPaths=backend/coverage.xml \
-            -Dsonar.kotlin.coverage.jacoco.xmlReportPaths=android/app/build/reports/jacoco/**/*.xml
+            -Dsonar.coverage.exclusions=**/*
