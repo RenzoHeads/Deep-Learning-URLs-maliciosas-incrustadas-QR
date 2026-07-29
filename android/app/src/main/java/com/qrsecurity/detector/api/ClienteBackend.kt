@@ -116,7 +116,7 @@ class ClienteBackend(
      * pinParsing se completa en Phase 7. Sin pin, OkHttpClient acepta cualquier
      * certificado valido CA-firmado; con pin, restringe al SPKI conocido.
      */
-    // FIXME(staging): añadir SPKI pin base64 del backend Vercel antes de producción.
+    // Nota(staging): añadir SPKI pin base64 del backend Vercel antes de producción.
     // Por ahora sin pin (placeholder); el pinning se completa en Phase 7.
     private val pinner: CertificatePinner = CertificatePinner.Builder().build()
 

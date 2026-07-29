@@ -78,7 +78,7 @@ private const val TEXTO_CERRAR_SESION = "Cerrar sesion"
  *
  * @param onVolver Callback para volver a la pantalla anterior.
  * @param onCerrarSesion Callback para cerrar sesion del usuario y limpiar
- *   todo el estado persistido (Room, token, etc.). Se disparara despues de
+ *   el estado persistido (Room, token, etc.). Se disparara despues de
  *   confirmar con un AlertDialog de "estas seguro?". El caller (NavGuardian)
  *   lanza una corutina IO que invoca [LogoutCoordinator.logout] y luego
  *   navega a la pantalla de Login.
