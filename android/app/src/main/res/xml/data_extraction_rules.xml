@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  F2 (CWE-311+732): Data Extraction Rules para Android 12+ (API 31+).
+
+  Reemplaza el `android:allowBackup="false"` heredado con reglas
+  granulares que controlan que se incluye en backups de dispositivo
+  (cloud/ADB) y transferencias dispositivo-a-dispositivo (D2D).
+
+  even though `android:allowBackup="false"` en el manifest bloquea
+  backups completos, Android 12+ usa `dataExtractionRules` como
+  mecanismo mas fino. Especificar explicitamente:
+    - No incluir ninguna regla de inclusion (nada se respalda).
+    - Excluir todas las areas de datos (fullBackupContent=no rules)
+      para device-transfer y cloud backup.
+
+  Esto previene que el token de sesion (+ datos de Room: historial
+  de escaneos, pending_ops) se respalde en Google Drive o se
+  transfiera a otro dispositivo via cable/Bluetooth, lo que seria
+  un vector de exfiltracion (CWE-311: no proteger datos en reposo
+  fuera del dispositivo).
+
+  Referencias:
+    - https://developer.android.com/about/versions/12/backup-restore
+    - https://developer.android.com/guide/topics/data/autobackup
+-->
+<data-extraction-rules>
+    <!-- Reglas para backups en la nube (Google Drive). -->
+    <cloud-backup>
+        <!-- Sin reglas de inclusion -> nada se respalda. -->
+    </cloud-backup>
+
+    <!-- Reglas para transferencia dispositivo-a-dispositivo (D2D). -->
+    <device-transfer>
+        <!-- Sin reglas de inclusion -> nada se transfiere. -->
+    </device-transfer>
+</data-extraction-rules>

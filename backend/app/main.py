@@ -1,0 +1,86 @@
+"""
+QR Guardian Backend — App principal FastAPI.
+
+Arranque local:
+    uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+
+Vercel serverless:
+    La app se monta via api/index.py que importa `app` desde este modulo.
+    El pool se crea perezosamente (ver base_datos.py).
+
+Documentacion interactiva:
+    http://localhost:8000/docs    (Swagger UI)
+    http://localhost:8000/redoc   (ReDoc)
+"""
+import os
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+from app.routers import auth, historial, bloqueadas, denuncias, estadisticas
+
+
+app = FastAPI(
+    title="QR Guardian API",
+    description="Backend para la app Android QR Guardian — deteccion de URLs maliciosas en codigos QR",
+    version="1.0.0",
+)
+
+# Bug B7 fix: CORS middleware. Combos `allow_methods=["*"]` + `allow_credentials=True`
+# son invalidos segun la spec CORS (los navegadores rechazan `*` para methods/headers
+# cuando credentials=true). Lista explicita en vez de `*`.
+# La app Android no lo necesita (OkHttp directo, no navegador), pero
+# desarrollo/debug desde localhost:3000 u origins web futuros si lo requieren.
+# ALLOWED_ORIGINS en .env puede ampliar la allowlist.
+_origins = os.getenv("ALLOWED_ORIGINS", "https://qr-guardian-api.vercel.app").split(",")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[o.strip() for o in _origins if o.strip()],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
+)
+
+# Registrar routers
+app.include_router(auth.router)
+app.include_router(historial.router)
+app.include_router(bloqueadas.router)
+app.include_router(denuncias.router)
+app.include_router(estadisticas.router)
+
+
+@app.get("/", tags=["inicio"])
+async def raiz():
+    """Endpoint de verificacion."""
+    return {
+        "aplicacion": "QR Guardian API",
+        "version": "1.0.0",
+        "estado": "activo",
+    }
+
+
+@app.get("/salud", tags=["inicio"])
+async def salud():
+    """Healthcheck — verifica la conexion a la base de datos Neon.
+
+    Bug B10 fix: antes devolvia 200 incluso cuando la BD estaba caida
+    (solo cambiaba ``estado`` a "degradado"). Los monitores de uptime no
+    podian distinguir saludable de degradado por codigo HTTP. Ahora:
+      - 200 OK   -> BD responde.
+      - 503      -> BD no responde (los monitores pueden retroceder).
+    """
+    from app.base_datos import obtener_pool
+    try:
+        pool = await obtener_pool()
+        async with pool.acquire() as conexion:
+            valor = await conexion.fetchval("SELECT 1")
+        return {"estado": "ok" if valor == 1 else "error", "base_datos": "qr_guardian"}
+    except Exception:
+        # Bug B8 fix: antes ``str(e)`` podia exponer la URL de conexion a Neon
+        # (que incluye el password) si asyncpg la incluyera en el mensaje.
+        # Ahora devolvemos un mensaje generico sin exponer detalles internos.
+        return JSONResponse(
+            status_code=503,
+            content={"estado": "degradado", "detalle": "No se puede conectar a la base de datos"},
+        )

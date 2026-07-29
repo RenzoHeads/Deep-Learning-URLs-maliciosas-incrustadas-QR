@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Alert status colors -->
+    <color name="alert_safe">#FF2E7D32</color>
+    <color name="alert_suspicious">#FFF9A825</color>
+    <color name="alert_malicious">#FFD32F2F</color>
+    <!-- Theme surface colors -->
+    <color name="purple_200">#FFBB86FC</color>
+    <color name="purple_500">#FF6200EE</color>
+    <color name="purple_700">#FF3700B3</color>
+    <color name="teal_200">#FF03DAC5</color>
+    <color name="teal_700">#FF018786</color>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+    <color name="gray_light">#FFF5F5F5</color>
+    <color name="gray_dark">#FF121212</color>
+    <color name="overlay_background">#80000000</color>
+    <color name="overlay_border">#FFFFFFFF</color>
+    <color name="ic_launcher_background">#0A0E1A</color>
+</resources>

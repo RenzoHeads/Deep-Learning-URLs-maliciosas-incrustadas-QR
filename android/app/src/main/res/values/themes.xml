@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        Base theme for the app. Compose handles all styling, so this XML theme
+        is only used for the activity window before Compose content is set.
+        It uses Material3 DayNight to match the Compose [QRSecurityDetectorTheme].
+    -->
+    <style name="Theme.QRSecurityDetector" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="android:windowBackground">@color/gray_light</item>
+        <item name="android:statusBarColor">@color/white</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>

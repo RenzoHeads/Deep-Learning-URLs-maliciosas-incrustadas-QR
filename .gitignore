@@ -1,0 +1,110 @@
+# ===========================================
+# Excluir TODO excepto frontend Android + backend
+# ===========================================
+
+# --- Vibecoding / AI assistance artifacts ---
+.omo/
+.codegraph/
+.opencode/
+docs/superpowers/
+docs/tech_spec.md
+docs/auditoria_pais_generico.md
+docs/modulos.md
+docs/navegacion.md
+docs/arquitectura.mmd
+MODEL_CARD.md
+PLAN_IMPLEMENTACION_SEMINARIO2.md
+README.md
+android/docs/
+android/lint_full.txt
+android/app/debug.keystore
+
+# --- Logs y sesiones ---
+appium-err.log
+appium.log
+session.json
+*.log
+
+# --- Notebooks de entrenamiento ---
+*.ipynb
+
+# --- Scripts de entrenamiento/exportación ---
+train_canine_s.py
+export_onnx.py
+export_tflite.py
+
+# --- Config de modelo ---
+max_len_config.json
+thresholds.json
+
+# --- Datasets ---
+master_regionalizado/
+master_generico/
+master_regionalizado_v2/
+prueba_latam/
+prueba_generica/
+corpus_aumento_*.csv
+auditoria_pais_generico_benigno.csv
+
+# --- Entregas ---
+entrega/
+entregas/
+
+# --- Evaluation ---
+evaluation/
+
+# --- Python (deps de entrenamiento) ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+venv/
+.venv/
+requirements.txt
+
+# --- Model outputs ---
+outputs_roberta/
+*.pt
+*.pth
+*.onnx
+*.tflite
+
+# --- Evaluation results ---
+evaluation/results/
+*.png
+
+# --- Android build artifacts ---
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/captures/
+android/app/release/
+*.apk
+*.aab
+*.keystore
+!android/**/*.keystore
+android/app/debug.keystore
+android/keystore.properties
+
+# --- IDE ---
+.idea/
+*.iml
+.vscode/
+*.swp
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+
+# --- Env vars ---
+.env
+backend/servidor.out
+
+# --- Jupyter ---
+.ipynb_checkpoints/

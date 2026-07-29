@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  F2 (CWE-311+732): Network Security Configuration.
+
+  Antes de este fix, la app no tenia networkSecurityConfig explicito.
+  En Android < 28 (minSdk=26 en esta app), el comportamiento por defecto
+  permite cleartext HTTP a cualquier host. Aunque el backend de produccion
+  usa HTTPS (Vercel), la ausencia de configuracion explicita permite que
+  un MITM downgrade la connexion a HTTP cleartext sin que la app lo bloquee.
+
+  Esta configuracion:
+    1. Bloquea cleartext HTTP globalmente (cleartextTrafficPermitted=false).
+    2. Permite cleartext UNICAMENTE a localhost/10.0.2.2 para debugging
+       local contra el backend de desarrollo (Emulator: 10.0.2.2 -> host
+       loopback). Estos dominios nunca resuelven a hosts de produccion:
+        localhost es el loopback del propio dispositivo y 10.0.2.2 es el
+        puente exclusivo del emulador Android al host de desarrollo. No
+        representa riesgo en release porque ningun backend de produccion
+        vive ahi.
+    3. <debug-overrides> anade trust-anchors de usuario (CA instaladas
+       por el desarrollador en el dispositivo de debug) — NO afecta los
+       dominios cleartext; solo permite que builds debuggeables confien
+       en CAs de usuario para inspeccion de trafico con Charles/mitmproxy.
+       En release, las CAs de usuario NO son confiadas.
+
+  Nota: se intento mover el <domain-config> dentro de <debug-overrides>,
+  pero el schema de Android NO permite <domain-config> anidado en
+  <debug-overrides> (ParserException: Nested domain-config not allowed
+  in debug-overrides). La estructura actual es la correcta.
+
+  Referencias:
+    - https://developer.android.com/privacy/security/config
+    - CWE-319: Cleartext Transmission of Sensitive Information
+-->
+<network-security-config>
+
+    <!-- Base: bloquear cleartext HTTP globalmente. -->
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <!-- Excepcion: localhost y emulator 10.0.2.2 para desarrollo local.
+         Estos dominios nunca resuelven a backends de produccion reales:
+         localhost = loopback del propio dispositivo; 10.0.2.2 = puente
+         exclusivo del emulador al host. No hay superficie de ataque
+         MITM contra produccion aqui. -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">10.0.2.2</domain>
+    </domain-config>
+
+    <!-- Debug-only: confiar en CAs de usuario (para Charles/mitmproxy).
+         NO anade excepciones de cleartext; solo afecta trust anchors.
+         En release, las CAs de usuario NO son confiadas. -->
+    <debug-overrides>
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </debug-overrides>
+
+</network-security-config>

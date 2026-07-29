@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- App name -->
+    <string name="app_name">Detector QR Seguro</string>
+    <string name="action_scan_again">Escanear otro código</string>
+    <string name="action_open_url">Abrir enlace</string>
+    <string name="action_close">Cerrar</string>
+    <string name="action_share_result">Compartir resultado</string>
+    <string name="alert_title_safe">Enlace Seguro</string>
+    <string name="alert_title_suspicious">Enlace Sospechoso</string>
+    <string name="alert_title_malicious">Enlace Malicioso</string>
+    <string name="alert_desc_safe">El análisis no detectó amenazas significativas.</string>
+    <string name="alert_desc_suspicious">El análisis detectó indicadores de riesgo. Proceda con precaución.</string>
+    <string name="alert_desc_malicious">El análisis detectó que este enlace es malicioso. No lo abra.</string>
+    <string name="label_probability">Probabilidad de amenaza</string>
+    <string name="label_probability_format">%.1f%%</string>
+    <string name="label_scanning">Escaneando...</string>
+    <string name="label_no_qr_detected">Apunte la cámara a un código QR</string>
+    <string name="label_urls_found">enlaces detectados en el código QR</string>
+    <string name="label_scan_history">Historial de escaneos</string>
+    <string name="label_empty_history">No hay escaneos registrados aún</string>
+    <string name="permission_camera_required">Se requiere permiso de cámara para escanear códigos QR</string>
+    <string name="button_grant_permission">Conceder permiso</string>
+    <string name="error_tokenizer">error_tokenizer</string>
+    <string name="supporting_text_safe">No se encontraron amenazas</string>
+
+    <!-- P3-E: action buttons reused across screens -->
+    <string name="action_unblock">Desbloquear</string>
+    <string name="action_cancel">Cancelar</string>
+
+    <!-- P3-F: action buttons and labels reused across screens -->
+    <string name="action_report_url">Denunciar URL</string>
+    <string name="action_block">Bloquear</string>
+    <string name="action_block_in_progress">Bloqueando...</string>
+    <string name="action_view_blocked">Ver URLs bloqueadas</string>
+    <string name="action_copy">Copiar</string>
+    <string name="action_share">Compartir</string>
+    <string name="action_grant">Conceder</string>
+    <string name="action_grant_permission">Conceder permiso</string>
+    <string name="action_login">Iniciar sesion</string>
+    <string name="action_send_report">Enviar denuncia</string>
+    <string name="action_sending">Enviando...</string>
+    <string name="action_connecting">Conectando...</string>
+
+    <!-- P3-F: DenunciarScreen placeholders -->
+    <string name="placeholder_url_suspicious">https://ejemplo-malicioso.com</string>
+    <string name="placeholder_description">Describe como encontraste esta URL...</string>
+
+    <!-- P3-F: LoginScreen labels -->
+    <string name="label_username">Usuario</string>
+    <string name="label_password">Contrasena</string>
+    <string name="label_email_optional">Correo (opcional)</string>
+    <string name="placeholder_username">usuario123</string>
+    <string name="placeholder_email">usuario@correo.com</string>
+</resources>

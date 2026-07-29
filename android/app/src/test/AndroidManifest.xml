@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Manifest de tests unitarios — registra un host activity expuesto
+  (androidx.activity.ComponentActivity) para que Robolectric pueda
+  resolverlo al usar createAndroidComposeRule<ComponentActivity>().
+  Sin este manifest, Robolectric falla con:
+    "Unable to resolve activity for Intent { act=android.intent.action.MAIN
+     cat=[android.intent.category.LAUNCHER]
+     cmp=org.robolectric.default/androidx.activity.ComponentActivity }"
+  Ver: https://github.com/robolectric/robolectric/pull/4736
+
+  Este manifest no se incluye en el APK de produccion; solo se usa en la
+  variante unitTest (Robolectric).
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.qrsecurity.detector">
+
+    <application>
+        <activity
+            android:name="androidx.activity.ComponentActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
