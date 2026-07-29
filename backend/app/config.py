@@ -17,17 +17,12 @@ class Ajustes(BaseSettings):
     # Entorno de ejecucion
     ENTORNO: str = "desarrollo"
 
+    # S1845 fix: renombrar property para evitar clash con el campo
+    # DATABASE_URL. Pydantic v2 trata `database_url` y `DATABASE_URL`
+    # como la misma clave de env var, causando ambiguedad.
     @property
-    def database_url(self) -> str:
+    def obtener_database_url(self) -> str:
         return self.DATABASE_URL
-
-    @property
-    def puerto(self) -> int:
-        return self.PORT
-
-    @property
-    def entorno(self) -> str:
-        return self.ENTORNO
 
     # Bug B8 fix: ``class Config`` esta deprecated en Pydantic v2 y rompe en v3.
     # Migrado a ``model_config = SettingsConfigDict(...)`` (estilo v2 normalizado).

@@ -41,7 +41,7 @@ async def obtener_pool() -> asyncpg.Pool:
     ajustes = obtener_ajustes()
     try:
         _pool = await asyncpg.create_pool(
-            dsn=ajustes.database_url,
+            dsn=ajustes.obtener_database_url,
             # Bug B9 fix: ``min_size=1`` abre una conexion TCP eagerly al
             # crear el pool. En Vercel serverless el primer request tras un
             # cold-start bloquea ~5s esperando esaconexion (Neon cold-start),
