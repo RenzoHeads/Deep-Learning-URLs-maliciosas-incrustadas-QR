@@ -305,7 +305,10 @@ private object ConvertidorImageProxyABitmap {
         planoU.buffer.position(0)
         bufferUv.put(planoU.buffer)
         bufferUv.position(0)
-        bufferUv.get(bufferYuv, offsetV, ancho * alto / 2)
+        val tamano = ancho * alto / 2
+        for (i in 0 until tamano) {
+            bufferYuv[offsetV + i] = bufferUv[i]
+        }
     }
 
     private fun copiarUvPlanar(

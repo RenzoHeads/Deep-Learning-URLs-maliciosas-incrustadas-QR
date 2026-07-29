@@ -87,55 +87,11 @@ class SyncWorker(
         val repoDenuncias = RepositorioDenuncias(db, backend, json)
         val repoCategorias = RepositorioCategorias(db, backend)
 
-        var huboErrorTransitorio = false
-
-        // ── 1. PULL categorias (no requiere token) — debe correr ANTES que
-        //    PULL denuncias porque `denuncias.id_categoria` FK depende de
-        //    que las categorias existan localmente. ──
-        when (val r = repoCategorias.sincronizarDesdeBackend()) {
-            is ResultadoSync.Exitoso -> { /* ok */ }
-            is ResultadoSync.Fallido -> {
-                val mapeo = decidirResultadoPull(r.codigo, r.retryAfterSegundos)
-                if (mapeo is DecisionPull.Decision.Failure && (r.codigo == 401 || r.codigo == 403)) {
-                    return Result.failure()
-                }
-                if (mapeo is DecisionPull.Decision.Retry) huboErrorTransitorio = true
-            }
-        }
-
-        if (isStopped) return Result.success()
-
-        // ── 2. PULL URLs bloqueadas + orphan cleanup ──
-        when (val r = repoUrls.sincronizarDesdeBackend(token)) {
-            is ResultadoSync.Exitoso -> repoUrls.limpiarHuerfanos(r.idsServidor)
-            is ResultadoSync.Fallido -> {
-                val res = manejarFallidoPull(r, huboErrorTransitorio)
-                if (res.first != null) return res.first!!
-                if (res.second) huboErrorTransitorio = true
-            }
-        }
-        if (isStopped) return Result.success()
-
-        // ── 3. PULL escaneos + orphan cleanup ──
-        when (val r = repoEscaneos.sincronizarDesdeBackend(token)) {
-            is ResultadoSync.Exitoso -> repoEscaneos.limpiarHuerfanos(r.idsServidor)
-            is ResultadoSync.Fallido -> {
-                val res = manejarFallidoPull(r, huboErrorTransitorio)
-                if (res.first != null) return res.first!!
-                if (res.second) huboErrorTransitorio = true
-            }
-        }
-        if (isStopped) return Result.success()
-
-        // ── 4. PULL denuncias + orphan cleanup ──
-        when (val r = repoDenuncias.sincronizarDesdeBackend(token)) {
-            is ResultadoSync.Exitoso -> repoDenuncias.limpiarHuerfanos(r.idsServidor)
-            is ResultadoSync.Fallido -> {
-                val res = manejarFallidoPull(r, huboErrorTransitorio)
-                if (res.first != null) return res.first!!
-                if (res.second) huboErrorTransitorio = true
-            }
-        }
+        // ── 1-4. PULLs en orden (categorias → urls → escaneos → denuncias) ──
+        val estadoPulls = procesarPulls(
+            repoCategorias, repoUrls, repoEscaneos, repoDenuncias, token
+        )
+        if (estadoPulls.falloPermanente) return Result.failure()
         if (isStopped) return Result.success()
 
         // ── 5. PUSH pending_ops (outbox) — despues del PULL ──
@@ -144,12 +100,73 @@ class SyncWorker(
             "urls_bloqueadas" to { op: com.qrsecurity.detector.datos.local.PendingOp -> repoUrls.procesarPendingOp(op, token) },
             "denuncias" to { op: com.qrsecurity.detector.datos.local.PendingOp -> repoDenuncias.procesarPendingOp(op, token) }
         )
-        if (procesarPendingOps(db, pendingDao, repos)) huboErrorTransitorio = true
+        val errorPush = procesarPendingOps(db, pendingDao, repos)
 
-        if (huboErrorTransitorio) return Result.retry()
+        if (estadoPulls.huboErrorTransitorio || errorPush) return Result.retry()
         context.getSharedPreferences(PREFS_SYNC, Context.MODE_PRIVATE)
             .edit().putLong(KEY_ULTIMO_SYNC, System.currentTimeMillis()).apply()
         return Result.success()
+    }
+
+    /** Estado consolidado de los 4 PULLs para reducir complejidad de doWork(). */
+    private data class EstadoPulls(
+        val falloPermanente: Boolean = false,
+        val huboErrorTransitorio: Boolean = false
+    )
+
+    /**
+     * Ejecuta los 4 PULLs en orden correcto (categorias → urls → escaneos → denuncias).
+     * Bug H6 fix: orden correccto — categorias antes que denuncias (FK).
+     */
+    private suspend fun procesarPulls(
+        repoCategorias: RepositorioCategorias,
+        repoUrls: RepositorioUrlsBloqueadas,
+        repoEscaneos: RepositorioEscaneos,
+        repoDenuncias: RepositorioDenuncias,
+        token: String
+    ): EstadoPulls {
+        var estado = EstadoPulls()
+
+        // 1. PULL categorias (no requiere token) — antes que denuncias (FK)
+        when (val r = repoCategorias.sincronizarDesdeBackend()) {
+            is ResultadoSync.Exitoso -> { /* ok */ }
+            is ResultadoSync.Fallido -> {
+                val mapeo = decidirResultadoPull(r.codigo, r.retryAfterSegundos)
+                if (mapeo is DecisionPull.Decision.Failure && (r.codigo == 401 || r.codigo == 403)) {
+                    return EstadoPulls(falloPermanente = true)
+                }
+                if (mapeo is DecisionPull.Decision.Retry) estado = estado.copy(huboErrorTransitorio = true)
+            }
+        }
+
+        // 2. PULL URLs bloqueadas + orphan cleanup
+        when (val r = repoUrls.sincronizarDesdeBackend(token)) {
+            is ResultadoSync.Exitoso -> repoUrls.limpiarHuerfanos(r.idsServidor)
+            is ResultadoSync.Fallido -> estado = aplicarFallidoPull(r, estado)
+        }
+
+        // 3. PULL escaneos + orphan cleanup
+        when (val r = repoEscaneos.sincronizarDesdeBackend(token)) {
+            is ResultadoSync.Exitoso -> repoEscaneos.limpiarHuerfanos(r.idsServidor)
+            is ResultadoSync.Fallido -> estado = aplicarFallidoPull(r, estado)
+        }
+
+        // 4. PULL denuncias + orphan cleanup
+        when (val r = repoDenuncias.sincronizarDesdeBackend(token)) {
+            is ResultadoSync.Exitoso -> repoDenuncias.limpiarHuerfanos(r.idsServidor)
+            is ResultadoSync.Fallido -> estado = aplicarFallidoPull(r, estado)
+        }
+
+        return estado
+    }
+
+    /** Aplica el resultado de un PULL fallido al estado consolidado. */
+    private fun aplicarFallidoPull(
+        r: ResultadoSync.Fallido,
+        estado: EstadoPulls
+    ): EstadoPulls {
+        val (resultado, transitorio) = manejarFallidoPull(r, estado.huboErrorTransitorio)
+        return estado.copy(huboErrorTransitorio = estado.huboErrorTransitorio || transitorio)
     }
 
     private fun debeSaltarPulls(

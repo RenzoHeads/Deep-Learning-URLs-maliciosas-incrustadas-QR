@@ -14,10 +14,10 @@ val CyberFondoSuperficie = Color(0xFF0D1516)
 val CyberFondoDim = Color(0xFF080F11)
 
 /** Superficies glassmorphism — translúcidas con tinte azulado. */
-val CyberGlass = Color(0xFF161B2C)          // rgba(22,27,44,0.6) en Stitch
-val CyberGlassBorde = Color(0x0DFFFFFF)     // rgba(255,255,255,0.05)
-val CyberGlassAlto = Color(0xFF242B2D)     // surface-container-high
-val CyberGlassVariant = Color(0xFF2E3638)   // surface-variant
+val CyberGlass = Color(0xFF161B2C)
+val CyberGlassBorde = Color(0x0DFFFFFF)
+val CyberGlassAlto = Color(0xFF242B2D)
+val CyberGlassVariant = Color(0xFF2E3638)
 
 /** Cyan — acento primario del design system. */
 val CyberCyan = Color(0xFF00E5FF)           // primary-container (acento principal)

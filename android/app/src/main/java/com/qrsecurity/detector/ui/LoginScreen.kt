@@ -223,57 +223,18 @@ fun PantallaLogin(
                 )
             }
 
-            Button(
-                onClick = {
-                    if (procesando) return@Button
-                    val error = validarCredenciales(modoRegistro, nombreUsuario, password)
-                    if (error != null) {
-                        onMensaje(TipoMensaje.ERROR, error)
-                        return@Button
-                    }
-                    ejecutarAuth(
-                        scope = scope,
-                        modoRegistro = modoRegistro,
-                        nombreUsuario = nombreUsuario,
-                        password = password,
-                        correo = correo,
-                        context = context,
-                        onMensaje = onMensaje,
-                        onExito = onExito,
-                        onProcesando = { procesando = it }
-                    )
-                },
-                enabled = !procesando,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(56.dp),
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = CyberCyan,
-                    contentColor = CyberFondo,
-                    disabledContainerColor = CyberCyan.copy(alpha = 0.4f),
-                    disabledContentColor = CyberFondo
-                )
-            ) {
-                if (procesando) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp),
-                            strokeWidth = 2.dp,
-                            color = CyberFondo
-                        )
-                        Text(stringResource(R.string.action_connecting), fontWeight = FontWeight.Bold)
-                    }
-                } else {
-                    Text(
-                        if (modoRegistro) "Registrarse" else stringResource(R.string.action_login),
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
+            BotonAuth(
+                modoRegistro = modoRegistro,
+                procesando = procesando,
+                nombreUsuario = nombreUsuario,
+                password = password,
+                correo = correo,
+                context = context,
+                scope = scope,
+                onMensaje = onMensaje,
+                onExito = onExito,
+                onProcesando = { procesando = it }
+            )
 
             // Toggle entre login y registro
             Row(
@@ -345,17 +306,21 @@ private fun manejarErrorBackend(codigo: Int, cuerpo: String?, message: String?):
     else -> "Error $codigo: ${cuerpo ?: message}"
 }
 
-private fun ejecutarAuth(
-    scope: kotlinx.coroutines.CoroutineScope,
-    modoRegistro: Boolean,
-    nombreUsuario: String,
-    password: String,
-    correo: String,
-    context: android.content.Context,
-    onMensaje: (TipoMensaje, String) -> Unit,
-    onExito: () -> Unit,
-    onProcesando: (Boolean) -> Unit
-) {
+/** Datos Agrupados para ejecutarAuth — evita S107 (>7 params). */
+private data class ParametrosAuth(
+    val scope: kotlinx.coroutines.CoroutineScope,
+    val modoRegistro: Boolean,
+    val nombreUsuario: String,
+    val password: String,
+    val correo: String,
+    val context: android.content.Context,
+    val onMensaje: (TipoMensaje, String) -> Unit,
+    val onExito: () -> Unit,
+    val onProcesando: (Boolean) -> Unit
+)
+
+private fun ejecutarAuth(params: ParametrosAuth) {
+    val (scope, modoRegistro, nombreUsuario, password, correo, context, onMensaje, onExito, onProcesando) = params
     onProcesando(true)
     scope.launch {
         try {
@@ -385,6 +350,78 @@ private fun ejecutarAuth(
             onMensaje(TipoMensaje.ERROR, "No se pudo conectar al backend: ${e.message ?: "error desconocido"}")
         } finally {
             onProcesando(false)
+        }
+    }
+}
+
+/**
+ * Boton de auth con validacion + indicador de carga.
+ * Extraido de PantallaLogin para reducir complejidad cognitiva (S3776).
+ */
+@Composable
+private fun BotonAuth(
+    modoRegistro: Boolean,
+    procesando: Boolean,
+    nombreUsuario: String,
+    password: String,
+    correo: String,
+    context: android.content.Context,
+    scope: kotlinx.coroutines.CoroutineScope,
+    onMensaje: (TipoMensaje, String) -> Unit,
+    onExito: () -> Unit,
+    onProcesando: (Boolean) -> Unit
+) {
+    Button(
+        onClick = {
+            if (procesando) return@Button
+            val error = validarCredenciales(modoRegistro, nombreUsuario, password)
+            if (error != null) {
+                onMensaje(TipoMensaje.ERROR, error)
+                return@Button
+            }
+            ejecutarAuth(
+                ParametrosAuth(
+                    scope = scope,
+                    modoRegistro = modoRegistro,
+                    nombreUsuario = nombreUsuario,
+                    password = password,
+                    correo = correo,
+                    context = context,
+                    onMensaje = onMensaje,
+                    onExito = onExito,
+                    onProcesando = onProcesando
+                )
+            )
+        },
+        enabled = !procesando,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(56.dp),
+        shape = RoundedCornerShape(12.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = CyberCyan,
+            contentColor = CyberFondo,
+            disabledContainerColor = CyberCyan.copy(alpha = 0.4f),
+            disabledContentColor = CyberFondo
+        )
+    ) {
+        if (procesando) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(20.dp),
+                    strokeWidth = 2.dp,
+                    color = CyberFondo
+                )
+                Text(stringResource(R.string.action_connecting), fontWeight = FontWeight.Bold)
+            }
+        } else {
+            Text(
+                if (modoRegistro) "Registrarse" else stringResource(R.string.action_login),
+                fontWeight = FontWeight.Bold
+            )
         }
     }
 }

@@ -307,15 +307,17 @@ fun PantallaDenunciar(
                 }
                 enviando = true
                 enviarDenuncia(
-                    scope = scope,
-                    url = urlSospechosa,
-                    idCategoria = idCategoriaPhishing,
-                    descripcion = descripcion,
-                    repoDenuncias = repoDenuncias,
-                    mediadorSync = mediadorSync,
-                    onMensaje = onMensaje,
-                    onExito = onExito,
-                    onEnviando = { enviando = it }
+                    ParametrosDenuncia(
+                        scope = scope,
+                        url = urlSospechosa,
+                        idCategoria = idCategoriaPhishing,
+                        descripcion = descripcion,
+                        repoDenuncias = repoDenuncias,
+                        mediadorSync = mediadorSync,
+                        onMensaje = onMensaje,
+                        onExito = onExito,
+                        onEnviando = { enviando = it }
+                    )
                 )
             },
             enabled = !enviando,
@@ -346,17 +348,21 @@ fun PantallaDenunciar(
     }
 }
 
-private fun enviarDenuncia(
-    scope: kotlinx.coroutines.CoroutineScope,
-    url: String,
-    idCategoria: Int,
-    descripcion: String,
-    repoDenuncias: RepositorioDenuncias,
-    mediadorSync: MediadorSincronizacion,
-    onMensaje: (TipoMensaje, String) -> Unit,
-    onExito: () -> Unit,
-    onEnviando: (Boolean) -> Unit
-) {
+/** Datos agrupados para enviarDenuncia — evita S107 (>7 params). */
+private data class ParametrosDenuncia(
+    val scope: kotlinx.coroutines.CoroutineScope,
+    val url: String,
+    val idCategoria: Int,
+    val descripcion: String,
+    val repoDenuncias: RepositorioDenuncias,
+    val mediadorSync: MediadorSincronizacion,
+    val onMensaje: (TipoMensaje, String) -> Unit,
+    val onExito: () -> Unit,
+    val onEnviando: (Boolean) -> Unit
+)
+
+private fun enviarDenuncia(params: ParametrosDenuncia) {
+    val (scope, url, idCategoria, descripcion, repoDenuncias, mediadorSync, onMensaje, onExito, onEnviando) = params
     scope.launch {
         try {
             repoDenuncias.crearLocal(

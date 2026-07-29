@@ -190,43 +190,13 @@ fun PantallaResultadoMalicioso(
         Button(
             onClick = {
                 if (bloqueando) return@Button
-                bloqueando = true
-                bloqueadaOk = null
-                scope.launch {
-                    try {
-                        // Bug A5, A6 fix: offline-first. Antes se llamaba
-                        // `cliente.bloquearUrl(token, url, razon)` directamente
-                        // al backend, lo que fallaba silenciosamente sin red
-                        // (A5) y no mostraba el error al usuario (A6). Ahora
-                        // escribimos en Room + encola op CREATE en pending_ops;
-                        // el SyncWorker lo envia al backend cuando haya red.
-                        // Estado local garantizado aunque no haya conexion.
-                        repoUrls.bloquearLocal(
-                            url = resultado.urlLimpia,
-                            razon = "Malicioso (probabilidad ${(resultado.probabilidad * 100).toInt()}%)"
-                        )
-                        // Dispara sync: si hay red, el worker envia el op; si
-                        // no, queda encolado y se reintentara cuando vuelva la
-                        // red. La UI no espera al backend en ningun caso.
-                        mediadorSync.dispararSyncUnica()
-                        bloqueadaOk = true
-                        onMensaje(TipoMensaje.EXITO, "URL bloqueada")
-                    } catch (e: Exception) {
-                        // H3 fix: NO tragar CancellationException en un scope
-                        // cancelado (rotacion, pop, onDispose). Antes el catch
-                        // generico `Exception` capturaba CancellationException y
-                        // continuaba ejecutando side-effects (snackbar, mutating
-                        // state) en un scope ya muerto, lo que producia
-                        // estado zombie / crashes secundarias. Re-thrown para
-                        // que el parent CancelScope lo gestione correctamente.
-                        if (e is CancellationException) throw e
-                        // Bug A6 fix: error visible via Snackbar global.
-                        bloqueadaOk = false
-                        onMensaje(TipoMensaje.ERROR, "No se pudo bloquear la URL: ${e.message ?: "error desconocido"}")
-                    } finally {
-                        bloqueando = false
-                    }
-                }
+                bloquearUrl(
+                    scope, repoUrls, mediadorSync,
+                    resultado.urlLimpia, resultado.probabilidad,
+                    onMensaje,
+                    onBloqueando = { bloqueando = it },
+                    onResultado = { bloqueadaOk = it }
+                )
             },
             enabled = !bloqueando,
             modifier = Modifier.fillMaxWidth().height(52.dp),
@@ -279,5 +249,41 @@ fun PantallaResultadoMalicioso(
         BotonEscanearOtro(onEscanearOtro = onEscanearOtro)
         }
 
+    }
+}
+
+/**
+ * Encola bloqueo offline-first en Room + pending_ops y dispara sync.
+ * Bug A5/A6 fix: escribe local primero, no espera al backend.
+ * H3 fix: re-throw CancellationException para respetar scope cancelado.
+ */
+private fun bloquearUrl(
+    scope: kotlinx.coroutines.CoroutineScope,
+    repoUrls: com.qrsecurity.detector.datos.RepositorioUrls,
+    mediadorSync: com.qrsecurity.detector.datos.sync.MediadorSync,
+    urlLimpia: String,
+    probabilidad: Float,
+    onMensaje: (TipoMensaje, String) -> Unit,
+    onBloqueando: (Boolean) -> Unit,
+    onResultado: (Boolean?) -> Unit
+) {
+    onBloqueando(true)
+    onResultado(null)
+    scope.launch {
+        try {
+            repoUrls.bloquearLocal(
+                url = urlLimpia,
+                razon = "Malicioso (probabilidad ${(probabilidad * 100).toInt()}%)"
+            )
+            mediadorSync.dispararSyncUnica()
+            onResultado(true)
+            onMensaje(TipoMensaje.EXITO, "URL bloqueada")
+        } catch (e: Exception) {
+            if (e is CancellationException) throw e
+            onResultado(false)
+            onMensaje(TipoMensaje.ERROR, "No se pudo bloquear la URL: ${e.message ?: "error desconocido"}")
+        } finally {
+            onBloqueando(false)
+        }
     }
 }

@@ -127,49 +127,7 @@ fun PantallaResultadoSeguro(
 
         // ── Boton Abrir enlace ──
         OutlinedButton(
-            onClick = {
-                // Bug A8 fix: permitir solo schemes http/https. Antes se lanzaba
-                // ACTION_VIEW con cualquier scheme que llegara en el QR
-                // (intent:, content:, file:, market:, mailto:, javascript:,
-                // etc.), lo que convierte a la app en un puente para ejecutar
-                // intents arbitrarios. Un QR malicioso podria abrir apps
-                // sensibles o escapar el sandbox del navegador. Ahora se
-                // rechaza explicitamente cualquier scheme que no sea http/https.
-                val uri = Uri.parse(resultado.urlOriginal)
-                val scheme = uri.scheme?.lowercase()
-                if (scheme != "http" && scheme != "https") {
-                    onMensaje(TipoMensaje.ERROR, "Solo se pueden abrir URLs HTTP/HTTPS en el navegador")
-                    return@OutlinedButton
-                }
-                // F8 (CWE-601): rechazar URLs con userinfo (``https://
-                // apple.com@evil.com``). El navegador mostraria ``apple.com``
-                // como autoridad antes del ``@``, engañando al usuario para
-                // que crea que visita apple.com cuando en realidad va a
-                // evil.com. Aunque el modelo ya evaluo la URL como segura,
-                // abrir una URL con userinfo en el navegador introduce un
-                // vector de phishing visual que bypassa la deteccion.
-                if (uri.userInfo != null) {
-                    onMensaje(TipoMensaje.ERROR, "La URL contiene credenciales embebidas y no se puede abrir")
-                    return@OutlinedButton
-                }
-                // Bug 10 fix: envolver startActivity en try/catch para evitar
-                // crash por ActivityNotFoundException cuando no hay navegador
-                // instalado (MIUI/Kindle hardened) o la URL usa un esquema no
-                // http(s) (intent:, mailto:, etc.) sin app que lo resuelva.
-                val intent = Intent(Intent.ACTION_VIEW, uri)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                try {
-                    context.startActivity(
-                        Intent.createChooser(intent, "Abrir con...")
-                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    )
-                    onMensaje(TipoMensaje.EXITO, "Abriendo enlace…")
-                } catch (e: android.content.ActivityNotFoundException) {
-                    onMensaje(TipoMensaje.ERROR, "No hay app para abrir este enlace")
-                } catch (e: Exception) {
-                    onMensaje(TipoMensaje.ERROR, "No se pudo abrir el enlace")
-                }
-            },
+            onClick = { abrirEnlaceSeguro(context, resultado.urlOriginal, onMensaje) },
             modifier = Modifier.fillMaxWidth().height(52.dp).testTag("btn_abrir_enlace"),
             shape = RoundedCornerShape(12.dp)
         ) {
@@ -189,5 +147,37 @@ fun PantallaResultadoSeguro(
             onEscanearOtro = onEscanearOtro,
             modifier = Modifier.testTag("btn_escanear_otro")
         )
+    }
+}
+
+/**
+ * Valida scheme (http/https) y rechaza userinfo antes de lanzar ACTION_VIEW.
+ * Bug A8/F8 fix: prevenir schemes arbitrarios y phishing con userinfo.
+ */
+private fun abrirEnlaceSeguro(
+    context: android.content.Context,
+    url: String,
+    onMensaje: (TipoMensaje, String) -> Unit
+) {
+    val uri = Uri.parse(url)
+    val scheme = uri.scheme?.lowercase()
+    if (scheme != "http" && scheme != "https") {
+        onMensaje(TipoMensaje.ERROR, "Solo se pueden abrir URLs HTTP/HTTPS en el navegador")
+        return
+    }
+    if (uri.userInfo != null) {
+        onMensaje(TipoMensaje.ERROR, "La URL contiene credenciales embebidas y no se puede abrir")
+        return
+    }
+    val intent = Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    try {
+        context.startActivity(
+            Intent.createChooser(intent, "Abrir con...").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+        onMensaje(TipoMensaje.EXITO, "Abriendo enlace…")
+    } catch (e: android.content.ActivityNotFoundException) {
+        onMensaje(TipoMensaje.ERROR, "No hay app para abrir este enlace")
+    } catch (e: Exception) {
+        onMensaje(TipoMensaje.ERROR, "No se pudo abrir el enlace")
     }
 }

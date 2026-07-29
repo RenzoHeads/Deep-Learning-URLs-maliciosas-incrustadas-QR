@@ -409,94 +409,109 @@ fun PantallaDetalleEscaneo(
         val mostrarAcciones = !requiereConfirmacion || procederConfirmado
 
         if (mostrarAcciones) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Button(
-                    onClick = {
-                        // Bug A8/F8 fix — simetrico con ResultadoSeguroScreen:
-                        // validar scheme (solo http/https) y rechazar userinfo
-                        // antes de lanzar ACTION_VIEW. Sin esto, un QR escaneado
-                        // con scheme intent:/market:/javascript: o con userinfo
-                        // (https://apple.com@evil.com) se abre desde el detalle
-                        // del historial sin ninguna proteccion.
-                        val uri = Uri.parse(escaneo.urlOriginal)
-                        val scheme = uri.scheme?.lowercase()
-                        if (scheme != "http" && scheme != "https") {
-                            onMensaje(TipoMensaje.ERROR, "Solo se pueden abrir URLs HTTP/HTTPS en el navegador")
-                            return@Button
-                        }
-                        if (uri.userInfo != null) {
-                            onMensaje(TipoMensaje.ERROR, "La URL contiene credenciales embebidas y no se puede abrir")
-                            return@Button
-                        }
-                        try {
-                            val intent = Intent(Intent.ACTION_VIEW, uri)
-                            context.startActivity(intent)
-                            onMensaje(TipoMensaje.EXITO, "Abriendo enlace…")
-                        } catch (e: Exception) {
-                            onMensaje(TipoMensaje.ERROR, "No hay app para abrir este enlace")
-                        }
-                    },
-                    modifier = Modifier.weight(1f),
-                    enabled = !urlBloqueada,
-                    colors = ButtonDefaults.buttonColors(containerColor = CyberCyan)
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.OpenInNew,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Abrir", fontWeight = FontWeight.Bold)
-                }
-
-                OutlinedButton(
-                    onClick = {
-                        val clip = context.getSystemService(android.content.ClipboardManager::class.java)
-                        clip?.setPrimaryClip(
-                            android.content.ClipData.newPlainText("URL", escaneo.urlLimpia)
-                        )
-                        onMensaje(TipoMensaje.EXITO, "URL copiada al portapapeles")
-                    },
-                    modifier = Modifier.weight(1f),
-                    enabled = !urlBloqueada
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.ContentCopy,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Copiar")
-                }
-            }
-
-            OutlinedButton(
-                onClick = {
-                    try {
-                        val intent = Intent(Intent.ACTION_SEND).apply {
-                            type = "text/plain"
-                            putExtra(Intent.EXTRA_TEXT, escaneo.urlLimpia)
-                        }
-                        context.startActivity(Intent.createChooser(intent, "Compartir"))
-                        onMensaje(TipoMensaje.EXITO, "Compartiendo enlace…")
-                    } catch (e: Exception) {
-                        onMensaje(TipoMensaje.ERROR, "No hay app para compartir")
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-                enabled = !urlBloqueada
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Share,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Compartir URL")
-            }
+            SeccionAccionesDetalle(
+                urlOriginal = escaneo.urlOriginal,
+                urlLimpia = escaneo.urlLimpia,
+                urlBloqueada = urlBloqueada,
+                context = context,
+                onMensaje = onMensaje
+            )
         }
+    }
+}
+
+/**
+ * Seccion de acciones Abrir / Copiar / Compartir del detalle.
+ * Bug A8/F8 fix: validar scheme (solo http/https) y rechazar userinfo.
+ */
+@Composable
+private fun SeccionAccionesDetalle(
+    urlOriginal: String,
+    urlLimpia: String,
+    urlBloqueada: Boolean,
+    context: android.content.Context,
+    onMensaje: (TipoMensaje, String) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Button(
+            onClick = {
+                val uri = Uri.parse(urlOriginal)
+                val scheme = uri.scheme?.lowercase()
+                if (scheme != "http" && scheme != "https") {
+                    onMensaje(TipoMensaje.ERROR, "Solo se pueden abrir URLs HTTP/HTTPS en el navegador")
+                    return@Button
+                }
+                if (uri.userInfo != null) {
+                    onMensaje(TipoMensaje.ERROR, "La URL contiene credenciales embebidas y no se puede abrir")
+                    return@Button
+                }
+                try {
+                    val intent = Intent(Intent.ACTION_VIEW, uri)
+                    context.startActivity(intent)
+                    onMensaje(TipoMensaje.EXITO, "Abriendo enlace…")
+                } catch (e: Exception) {
+                    onMensaje(TipoMensaje.ERROR, "No hay app para abrir este enlace")
+                }
+            },
+            modifier = Modifier.weight(1f),
+            enabled = !urlBloqueada,
+            colors = ButtonDefaults.buttonColors(containerColor = CyberCyan)
+        ) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Abrir", fontWeight = FontWeight.Bold)
+        }
+
+        OutlinedButton(
+            onClick = {
+                val clip = context.getSystemService(android.content.ClipboardManager::class.java)
+                clip?.setPrimaryClip(
+                    android.content.ClipData.newPlainText("URL", urlLimpia)
+                )
+                onMensaje(TipoMensaje.EXITO, "URL copiada al portapapeles")
+            },
+            modifier = Modifier.weight(1f),
+            enabled = !urlBloqueada
+        ) {
+            Icon(
+                imageVector = Icons.Filled.ContentCopy,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Copiar")
+        }
+    }
+
+    OutlinedButton(
+        onClick = {
+            try {
+                val intent = Intent(Intent.ACTION_SEND).apply {
+                    type = "text/plain"
+                    putExtra(Intent.EXTRA_TEXT, urlLimpia)
+                }
+                context.startActivity(Intent.createChooser(intent, "Compartir"))
+                onMensaje(TipoMensaje.EXITO, "Compartiendo enlace…")
+            } catch (e: Exception) {
+                onMensaje(TipoMensaje.ERROR, "No hay app para compartir")
+            }
+        },
+        modifier = Modifier.fillMaxWidth(),
+        enabled = !urlBloqueada
+    ) {
+        Icon(
+            imageVector = Icons.Filled.Share,
+            contentDescription = null,
+            modifier = Modifier.size(18.dp)
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text("Compartir URL")
     }
 }
