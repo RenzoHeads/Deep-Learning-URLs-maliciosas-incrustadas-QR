@@ -94,56 +94,25 @@ fun PantallaLogin(
     var procesando by remember { mutableStateOf(false) }
 
     val estadoScroll = rememberScrollState()
+    val onToggleModo = {
+        modoRegistro = !modoRegistro
+        password = ""
+        correo = ""
+    }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(CyberFondo)
-            .imePadding()                       // Bug 2 fix: empuja el layout cuando el teclado aparece
-            .navigationBarsPadding()            // Respeta la barra de navegacion del sistema
-            .verticalScroll(estadoScroll)        // Bug 2 fix: permite hacer scroll si el contenido no cabe
+            .imePadding()
+            .navigationBarsPadding()
+            .verticalScroll(estadoScroll)
             .padding(horizontal = 24.dp, vertical = 48.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(32.dp, Alignment.Top)
     ) {
-        // ── Logo + titulo ──
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(120.dp)
-                    .clip(androidx.compose.foundation.shape.CircleShape)
-                    .background(
-                        Brush.radialGradient(
-                            colors = listOf(CyberVerdeAlerta.copy(alpha = 0.2f), CyberFondo)
-                        )
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Security,
-                    contentDescription = null,
-                    tint = CyberCyan,
-                    modifier = Modifier.size(64.dp)
-                )
-            }
-            Text(
-                text = "QR GUARDIAN",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold,
-                color = CyberCyan
-            )
-            Text(
-                text = "Detecta URLs maliciosas\nincrustadas en codigos QR",
-                style = MaterialTheme.typography.bodyMedium,
-                color = CyberTextoSecundario,
-                textAlign = TextAlign.Center
-            )
-        }
+        LogoQRGuardian()
 
-        // ── Tarjeta de auth ──
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -159,119 +128,173 @@ fun PantallaLogin(
                 color = CyberTextoPrincipal
             )
 
-            // Campo: nombre_usuario
-            OutlinedTextField(
-                value = nombreUsuario,
-                onValueChange = { nuevo ->
-                    // Bug 18 fix: antes onValueChange = { nombreUsuario = it.trim() }
-                    // aceptaba cualquier caracter (KeyboardType.Ascii permite
-                    // simbolos, espacios, puntuacion). Ahora filtramos a
-                    // [A-Za-z0-9_.] antes de asignar, igual de estricto que
-                    // el backend (ver registrarUsuario en ClienteBackend.kt).
+            FormularioAuth(
+                modoRegistro = modoRegistro,
+                nombreUsuario = nombreUsuario,
+                password = password,
+                correo = correo,
+                passwordVisible = passwordVisible,
+                onNombreUsuario = { nuevo ->
                     val filtrado = nuevo.trim().filter { c ->
                         c.isLetterOrDigit() || c == '_' || c == '.'
                     }
                     nombreUsuario = filtrado
                 },
-                label = { Text(stringResource(R.string.label_username)) },
-                placeholder = { Text(stringResource(R.string.placeholder_username)) },
-                singleLine = true,
-                // Bug 18 fix: KeyboardType.Ascii permite simbolos. Cambiamos
-                // a KeyboardType.Ascii sigue siendo permissive pero el filtro
-                // del onValueChange hace la validacion real. (KeyboardType.Text
-                // autocapitaliza en algunos IME; Ascii lo evita.)
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
-                modifier = Modifier.fillMaxWidth(),
-                colors = colorsCyber()
+                onPassword = { password = it },
+                onCorreo = { correo = it.trim() },
+                onTogglePassword = { passwordVisible = !passwordVisible }
             )
-
-            // Campo: password (con toggle de visibilidad)
-            OutlinedTextField(
-                value = password,
-                onValueChange = { password = it },
-                label = { Text(stringResource(R.string.label_password)) },
-                singleLine = true,
-                visualTransformation = if (passwordVisible) VisualTransformation.None
-                    else PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                trailingIcon = {
-                    IconButton(onClick = { passwordVisible = !passwordVisible }) {
-                        Icon(
-                            imageVector = if (passwordVisible) Icons.Filled.VisibilityOff
-                                else Icons.Filled.Visibility,
-                            contentDescription = if (passwordVisible) "Ocultar"
-                                else "Mostrar",
-                            tint = CyberTextoSecundario
-                        )
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-                colors = colorsCyber()
-            )
-
-            // Campo: correo (solo en modo registro, opcional)
-            if (modoRegistro) {
-                OutlinedTextField(
-                    value = correo,
-                    onValueChange = { correo = it.trim() },
-                    label = { Text(stringResource(R.string.label_email_optional)) },
-                    placeholder = { Text(stringResource(R.string.placeholder_email)) },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = colorsCyber()
-                )
-            }
 
             BotonAuth(
-                modoRegistro = modoRegistro,
-                procesando = procesando,
-                nombreUsuario = nombreUsuario,
-                password = password,
-                correo = correo,
-                context = context,
-                scope = scope,
-                onMensaje = onMensaje,
-                onExito = onExito,
-                onProcesando = { procesando = it }
+                ParametrosBotonAuth(
+                    modoRegistro = modoRegistro,
+                    procesando = procesando,
+                    nombreUsuario = nombreUsuario,
+                    password = password,
+                    correo = correo,
+                    context = context,
+                    scope = scope,
+                    onMensaje = onMensaje,
+                    onExito = onExito,
+                    onProcesando = { procesando = it }
+                )
             )
 
-            // Toggle entre login y registro
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = if (modoRegistro) "Ya tienes cuenta? "
-                        else "No tienes cuenta? ",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = CyberTextoSecundario
-                )
-                Text(
-                    text = if (modoRegistro) "Inicia sesion" else "Crea una",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = CyberCyan,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(CyberCyan.copy(alpha = 0.1f))
-                        .padding(horizontal = 6.dp, vertical = 2.dp)
-                        .clickable {
-                            modoRegistro = !modoRegistro
-                            password = ""
-                            correo = ""
-                        }
-                )
-            }
+            ToggleLoginRegistro(modoRegistro = modoRegistro, onToggle = onToggleModo)
         }
 
-        // ── Pie ──
         Text(
             text = "El backend debe estar activo para usar la app",
             style = MaterialTheme.typography.bodySmall,
             color = CyberTextoSecundario,
             textAlign = TextAlign.Center
+        )
+    }
+}
+
+@Composable
+private fun LogoQRGuardian() {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(120.dp)
+                .clip(androidx.compose.foundation.shape.CircleShape)
+                .background(
+                    Brush.radialGradient(
+                        colors = listOf(CyberVerdeAlerta.copy(alpha = 0.2f), CyberFondo)
+                    )
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Security,
+                contentDescription = null,
+                tint = CyberCyan,
+                modifier = Modifier.size(64.dp)
+            )
+        }
+        Text(
+            text = "QR GUARDIAN",
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Bold,
+            color = CyberCyan
+        )
+        Text(
+            text = "Detecta URLs maliciosas\nincrustadas en codigos QR",
+            style = MaterialTheme.typography.bodyMedium,
+            color = CyberTextoSecundario,
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
+@Composable
+private fun FormularioAuth(
+    modoRegistro: Boolean,
+    nombreUsuario: String,
+    password: String,
+    correo: String,
+    passwordVisible: Boolean,
+    onNombreUsuario: (String) -> Unit,
+    onPassword: (String) -> Unit,
+    onCorreo: (String) -> Unit,
+    onTogglePassword: () -> Unit
+) {
+    OutlinedTextField(
+        value = nombreUsuario,
+        onValueChange = onNombreUsuario,
+        label = { Text(stringResource(R.string.label_username)) },
+        placeholder = { Text(stringResource(R.string.placeholder_username)) },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
+        modifier = Modifier.fillMaxWidth(),
+        colors = colorsCyber()
+    )
+
+    OutlinedTextField(
+        value = password,
+        onValueChange = onPassword,
+        label = { Text(stringResource(R.string.label_password)) },
+        singleLine = true,
+        visualTransformation = if (passwordVisible) VisualTransformation.None
+            else PasswordVisualTransformation(),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+        trailingIcon = {
+            IconButton(onClick = onTogglePassword) {
+                Icon(
+                    imageVector = if (passwordVisible) Icons.Filled.VisibilityOff
+                        else Icons.Filled.Visibility,
+                    contentDescription = if (passwordVisible) "Ocultar" else "Mostrar",
+                    tint = CyberTextoSecundario
+                )
+            }
+        },
+        modifier = Modifier.fillMaxWidth(),
+        colors = colorsCyber()
+    )
+
+    if (modoRegistro) {
+        OutlinedTextField(
+            value = correo,
+            onValueChange = onCorreo,
+            label = { Text(stringResource(R.string.label_email_optional)) },
+            placeholder = { Text(stringResource(R.string.placeholder_email)) },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+            modifier = Modifier.fillMaxWidth(),
+            colors = colorsCyber()
+        )
+    }
+}
+
+@Composable
+private fun ToggleLoginRegistro(
+    modoRegistro: Boolean,
+    onToggle: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = if (modoRegistro) "Ya tienes cuenta? " else "No tienes cuenta? ",
+            style = MaterialTheme.typography.bodySmall,
+            color = CyberTextoSecundario
+        )
+        Text(
+            text = if (modoRegistro) "Inicia sesion" else "Crea una",
+            style = MaterialTheme.typography.bodySmall,
+            color = CyberCyan,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier
+                .clip(RoundedCornerShape(4.dp))
+                .background(CyberCyan.copy(alpha = 0.1f))
+                .padding(horizontal = 6.dp, vertical = 2.dp)
+                .clickable(onClick = onToggle)
         )
     }
 }
@@ -354,23 +377,27 @@ private fun ejecutarAuth(params: ParametrosAuth) {
     }
 }
 
+/** Datos agrupados para BotonAuth — evita S107 (>7 params). */
+private data class ParametrosBotonAuth(
+    val modoRegistro: Boolean,
+    val procesando: Boolean,
+    val nombreUsuario: String,
+    val password: String,
+    val correo: String,
+    val context: android.content.Context,
+    val scope: kotlinx.coroutines.CoroutineScope,
+    val onMensaje: (TipoMensaje, String) -> Unit,
+    val onExito: () -> Unit,
+    val onProcesando: (Boolean) -> Unit
+)
+
 /**
  * Boton de auth con validacion + indicador de carga.
  * Extraido de PantallaLogin para reducir complejidad cognitiva (S3776).
  */
 @Composable
-private fun BotonAuth(
-    modoRegistro: Boolean,
-    procesando: Boolean,
-    nombreUsuario: String,
-    password: String,
-    correo: String,
-    context: android.content.Context,
-    scope: kotlinx.coroutines.CoroutineScope,
-    onMensaje: (TipoMensaje, String) -> Unit,
-    onExito: () -> Unit,
-    onProcesando: (Boolean) -> Unit
-) {
+private fun BotonAuth(params: ParametrosBotonAuth) {
+    val (modoRegistro, procesando, nombreUsuario, password, correo, context, scope, onMensaje, onExito, onProcesando) = params
     Button(
         onClick = {
             if (procesando) return@Button

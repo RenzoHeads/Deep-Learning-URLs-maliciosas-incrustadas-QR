@@ -191,11 +191,16 @@ fun PantallaResultadoMalicioso(
             onClick = {
                 if (bloqueando) return@Button
                 bloquearUrl(
-                    scope, repoUrls, mediadorSync,
-                    resultado.urlLimpia, resultado.probabilidad,
-                    onMensaje,
-                    onBloqueando = { bloqueando = it },
-                    onResultado = { bloqueadaOk = it }
+                    ParametrosBloqueo(
+                        scope = scope,
+                        repoUrls = repoUrls,
+                        mediadorSync = mediadorSync,
+                        urlLimpia = resultado.urlLimpia,
+                        probabilidad = resultado.probabilidad,
+                        onMensaje = onMensaje,
+                        onBloqueando = { bloqueando = it },
+                        onResultado = { bloqueadaOk = it }
+                    )
                 )
             },
             enabled = !bloqueando,
@@ -257,16 +262,19 @@ fun PantallaResultadoMalicioso(
  * Bug A5/A6 fix: escribe local primero, no espera al backend.
  * H3 fix: re-throw CancellationException para respetar scope cancelado.
  */
-private fun bloquearUrl(
-    scope: kotlinx.coroutines.CoroutineScope,
-    repoUrls: com.qrsecurity.detector.datos.RepositorioUrls,
-    mediadorSync: com.qrsecurity.detector.datos.sync.MediadorSync,
-    urlLimpia: String,
-    probabilidad: Float,
-    onMensaje: (TipoMensaje, String) -> Unit,
-    onBloqueando: (Boolean) -> Unit,
-    onResultado: (Boolean?) -> Unit
-) {
+private data class ParametrosBloqueo(
+    val scope: kotlinx.coroutines.CoroutineScope,
+    val repoUrls: com.qrsecurity.detector.datos.RepositorioUrls,
+    val mediadorSync: com.qrsecurity.detector.datos.sync.MediadorSync,
+    val urlLimpia: String,
+    val probabilidad: Float,
+    val onMensaje: (TipoMensaje, String) -> Unit,
+    val onBloqueando: (Boolean) -> Unit,
+    val onResultado: (Boolean?) -> Unit
+)
+
+private fun bloquearUrl(params: ParametrosBloqueo) {
+    val (scope, repoUrls, mediadorSync, urlLimpia, probabilidad, onMensaje, onBloqueando, onResultado) = params
     onBloqueando(true)
     onResultado(null)
     scope.launch {

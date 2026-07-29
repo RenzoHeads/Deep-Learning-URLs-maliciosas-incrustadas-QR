@@ -91,43 +91,12 @@ fun PantallaDetalleEscaneo(
 ) {
     val context = LocalContext.current
     val estadoScroll = rememberScrollState()
-
-    val esMalicioso = escaneo.esMalicioso
-    val esSospechoso = escaneo.nivelAlerta.uppercase() == "SOSPECHOSO"
-
-    // Para enlaces maliciosos NO bloqueados, el usuario debe confirmar
-    // "Recomendamos bloquearlo, ¿seguro que deseas proceder?" antes de
-    // ver los botones Abrir/Copiar/Compartir.
-    val requiereConfirmacion = esMalicioso && !urlBloqueada
     var procederConfirmado by remember { mutableStateOf(false) }
 
-    val colorIcono = when {
-        esMalicioso -> CyberRojo
-        esSospechoso -> CyberAmbar
-        else -> CyberVerdeAlertaClaro
+    val veredicto = remember(escaneo.esMalicioso, escaneo.nivelAlerta) {
+        calcularVeredicto(escaneo)
     }
-    val icono = when {
-        esMalicioso -> Icons.Filled.Warning
-        esSospechoso -> Icons.Filled.Warning
-        else -> Icons.Filled.CheckCircle
-    }
-    val tituloVeredicto = when {
-        esMalicioso -> "Enlace Malicioso"
-        esSospechoso -> "Enlace Sospechoso"
-        else -> "Enlace Seguro"
-    }
-
-    val fechaStr = remember(escaneo.creadoEnMillis) {
-        Instant.ofEpochMilli(escaneo.creadoEnMillis)
-            .atZone(ZoneId.systemDefault())
-            .toLocalDateTime()
-            .format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
-    }
-
-    val dominio = remember(escaneo.urlLimpia) {
-        val sinProtocolo = escaneo.urlLimpia.substringAfter("://", escaneo.urlLimpia)
-        sinProtocolo.substringBefore("/")
-    }
+    val requiereConfirmacion = veredicto.esMalicioso && !urlBloqueada
 
     Column(
         modifier = Modifier
@@ -139,275 +108,44 @@ fun PantallaDetalleEscaneo(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(20.dp)
     ) {
-        // ── Barra superior (shared component) ──
         BarraSuperiorResultado(
             titulo = "Detalle del escaneo",
             onCerrar = onVolver,
             contentDescriptionBack = "Volver"
         )
 
-        // ── Icono de veredicto con glow (shared component) ──
         IconoGlowCircular(
-            icono = icono,
-            colorGlow = colorIcono,
-            contentDescription = tituloVeredicto,
+            icono = veredicto.icono,
+            colorGlow = veredicto.color,
+            contentDescription = veredicto.titulo,
             alphaGlow = 0.25f
         )
 
-        // ── Titulo de veredicto ──
         Text(
-            text = tituloVeredicto,
+            text = veredicto.titulo,
             style = MaterialTheme.typography.headlineMedium,
             fontWeight = FontWeight.Bold,
-            color = colorIcono
+            color = veredicto.color
         )
 
-        // ── Badge URL bloqueada (Bug BLOQUEO-1) ──
         if (urlBloqueada) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(CyberRojo.copy(alpha = 0.15f))
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Lock,
-                    contentDescription = "Bloqueada",
-                    tint = CyberRojo,
-                    modifier = Modifier.size(20.dp)
-                )
-                Text(
-                    text = "URL bloqueada — no se puede abrir, copiar ni compartir",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium,
-                    color = CyberRojo
-                )
-            }
+            BadgeUrlBloqueada()
         }
 
-        // ── Tarjeta glass con datos del escaneo ──
-        Card(
-            modifier = Modifier
-                .fillMaxWidth()
-                .border(BorderStroke(1.dp, CyberGlassBorde), RoundedCornerShape(20.dp)),
-            shape = RoundedCornerShape(20.dp),
-            colors = CardDefaults.cardColors(containerColor = CyberGlass)
-        ) {
-            Column(
-                modifier = Modifier.padding(20.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                // URL limpia
-                Column {
-                    Text(
-                        text = "URL analizada",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = CyberTextoSecundario
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = escaneo.urlLimpia,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = CyberTextoPrincipal,
-                        fontWeight = FontWeight.Medium
-                    )
-                }
+        TarjetaDatosEscaneo(escaneo = escaneo, veredicto = veredicto)
 
-                // URL original (si difiere de la limpia)
-                if (escaneo.urlOriginal != escaneo.urlLimpia) {
-                    Column {
-                        Text(
-                            text = "URL original",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = CyberTextoSecundario
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = escaneo.urlOriginal,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = CyberTextoSecundario,
-                            maxLines = 3,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-
-                // Dominio
-                Column {
-                    Text(
-                        text = "Dominio",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = CyberTextoSecundario
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = dominio,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = CyberTextoPrincipal
-                    )
-                }
-
-                // Nivel de alerta
-                Column {
-                    Text(
-                        text = "Nivel de alerta",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = CyberTextoSecundario
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = escaneo.nivelAlerta.uppercase(),
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = colorIcono
-                    )
-                }
-
-                // Probabilidad
-                Column {
-                    Text(
-                        text = "Probabilidad de amenaza: ${(escaneo.probabilidad * 100).toInt()}%",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = CyberTextoSecundario
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    LinearProgressIndicator(
-                        progress = escaneo.probabilidad,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(8.dp)
-                            .clip(RoundedCornerShape(4.dp)),
-                        color = colorIcono,
-                        trackColor = CyberGlass
-                    )
-                }
-
-                // Fecha
-                Column {
-                    Text(
-                        text = "Fecha de escaneo",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = CyberTextoSecundario
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = fechaStr,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = CyberTextoPrincipal
-                    )
-                }
-
-                // Delegado
-                if (!escaneo.delegado.isNullOrEmpty()) {
-                    Column {
-                        Text(
-                            text = "Motor de analisis",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = CyberTextoSecundario
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = escaneo.delegado,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = CyberTextoSecundario
-                        )
-                    }
-                }
-            }
-        }
-
-        // ── Acciones para maliciosos NO bloqueados: Bloquear + Denunciar ──
         if (requiereConfirmacion) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Button(
-                    onClick = onBloquear,
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("btn_bloquear_malicioso"),
-                    colors = ButtonDefaults.buttonColors(containerColor = CyberRojo)
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Block,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Bloquear", fontWeight = FontWeight.Bold)
-                }
-
-                OutlinedButton(
-                    onClick = { onDenunciar(escaneo.urlLimpia) },
-                    modifier = Modifier
-                        .weight(1f)
-                        .testTag("btn_denunciar_malicioso")
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Report,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Denunciar")
-                }
-            }
+            SeccionBloquearDenunciar(
+                onBloquear = onBloquear,
+                onDenunciar = { onDenunciar(escaneo.urlLimpia) }
+            )
         }
 
-        // ── Advertencia para maliciosos NO bloqueados ──
         if (requiereConfirmacion && !procederConfirmado) {
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("card_advertencia_malicioso"),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = CyberRojo.copy(alpha = 0.12f))
-            ) {
-                Column(
-                    modifier = Modifier.padding(20.dp),
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.Warning,
-                            contentDescription = "Advertencia",
-                            tint = CyberRojo,
-                            modifier = Modifier.size(28.dp)
-                        )
-                        Text(
-                            text = "Recomendamos bloquearlo, ¿seguro que deseas proceder?",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = CyberRojo
-                        )
-                    }
-
-                    Button(
-                        onClick = { procederConfirmado = true },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("btn_proceder_malicioso"),
-                        colors = ButtonDefaults.buttonColors(containerColor = CyberAmbar)
-                    ) {
-                        Text("Proceder bajo mi responsabilidad", fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
+            CardAdvertenciaMalicioso(onProceder = { procederConfirmado = true })
         }
 
-        // ── Botones Abrir / Copiar / Compartir ──
-        // Para maliciosos NO bloqueados, se muestran solo despues de confirmar.
-        // Para maliciosos bloqueados, estan deshabilitados (badge BLOQUEO-1).
-        // Para seguros/sospechosos, se muestran normalmente.
         val mostrarAcciones = !requiereConfirmacion || procederConfirmado
-
         if (mostrarAcciones) {
             SeccionAccionesDetalle(
                 urlOriginal = escaneo.urlOriginal,
@@ -416,6 +154,202 @@ fun PantallaDetalleEscaneo(
                 context = context,
                 onMensaje = onMensaje
             )
+        }
+    }
+}
+
+/** Datos consolidados del veredicto para reducir complejidad de PantallaDetalleEscaneo. */
+private data class VeredictoDetalle(
+    val esMalicioso: Boolean,
+    val color: androidx.compose.ui.graphics.Color,
+    val icono: androidx.compose.ui.graphics.vector.ImageVector,
+    val titulo: String
+)
+
+private fun calcularVeredicto(escaneo: EscaneoEntity): VeredictoDetalle {
+    val esMalicioso = escaneo.esMalicioso
+    val esSospechoso = escaneo.nivelAlerta.uppercase() == "SOSPECHOSO"
+    val color = when {
+        esMalicioso -> CyberRojo
+        esSospechoso -> CyberAmbar
+        else -> CyberVerdeAlertaClaro
+    }
+    val icono = when {
+        esMalicioso -> Icons.Filled.Warning
+        esSospechoso -> Icons.Filled.Warning
+        else -> Icons.Filled.CheckCircle
+    }
+    val titulo = when {
+        esMalicioso -> "Enlace Malicioso"
+        esSospechoso -> "Enlace Sospechoso"
+        else -> "Enlace Seguro"
+    }
+    return VeredictoDetalle(esMalicioso, color, icono, titulo)
+}
+
+@Composable
+private fun BadgeUrlBloqueada() {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(CyberRojo.copy(alpha = 0.15f))
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Icon(
+            imageVector = Icons.Filled.Lock,
+            contentDescription = "Bloqueada",
+            tint = CyberRojo,
+            modifier = Modifier.size(20.dp)
+        )
+        Text(
+            text = "URL bloqueada — no se puede abrir, copiar ni compartir",
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+            color = CyberRojo
+        )
+    }
+}
+
+@Composable
+private fun TarjetaDatosEscaneo(
+    escaneo: EscaneoEntity,
+    veredicto: VeredictoDetalle
+) {
+    val fechaStr = remember(escaneo.creadoEnMillis) {
+        Instant.ofEpochMilli(escaneo.creadoEnMillis)
+            .atZone(ZoneId.systemDefault())
+            .toLocalDateTime()
+            .format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
+    }
+    val dominio = remember(escaneo.urlLimpia) {
+        val sinProtocolo = escaneo.urlLimpia.substringAfter("://", escaneo.urlLimpia)
+        sinProtocolo.substringBefore("/")
+    }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(BorderStroke(1.dp, CyberGlassBorde), RoundedCornerShape(20.dp)),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = CyberGlass)
+    ) {
+        Column(
+            modifier = Modifier.padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            CampoTexto("URL analizada", escaneo.urlLimpia, MaterialTheme.typography.bodyLarge, CyberTextoPrincipal)
+            if (escaneo.urlOriginal != escaneo.urlLimpia) {
+                CampoTexto("URL original", escaneo.urlOriginal, MaterialTheme.typography.bodyMedium, CyberTextoSecundario, maxLines = 3)
+            }
+            CampoTexto("Dominio", dominio, MaterialTheme.typography.bodyLarge, CyberTextoPrincipal)
+            CampoTexto("Nivel de alerta", escaneo.nivelAlerta.uppercase(), MaterialTheme.typography.titleMedium, veredicto.color, bold = true)
+            Column {
+                Text(
+                    text = "Probabilidad de amenaza: ${(escaneo.probabilidad * 100).toInt()}%",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = CyberTextoSecundario
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                LinearProgressIndicator(
+                    progress = escaneo.probabilidad,
+                    modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)),
+                    color = veredicto.color,
+                    trackColor = CyberGlass
+                )
+            }
+            CampoTexto("Fecha de escaneo", fechaStr, MaterialTheme.typography.bodyLarge, CyberTextoPrincipal)
+            if (!escaneo.delegado.isNullOrEmpty()) {
+                CampoTexto("Motor de analisis", escaneo.delegado, MaterialTheme.typography.bodyMedium, CyberTextoSecundario)
+            }
+        }
+    }
+}
+
+@Composable
+private fun CampoTexto(
+    etiqueta: String,
+    valor: String,
+    estilo: androidx.compose.material3.TextStyle,
+    color: androidx.compose.ui.graphics.Color,
+    bold: Boolean = false,
+    maxLines: Int = Int.MAX_VALUE
+) {
+    Column {
+        Text(text = etiqueta, style = MaterialTheme.typography.labelMedium, color = CyberTextoSecundario)
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = valor,
+            style = estilo,
+            color = color,
+            fontWeight = if (bold) FontWeight.Bold else FontWeight.Medium,
+            maxLines = maxLines,
+            overflow = if (maxLines < Int.MAX_VALUE) TextOverflow.Ellipsis else TextOverflow.Clip
+        )
+    }
+}
+
+@Composable
+private fun SeccionBloquearDenunciar(
+    onBloquear: () -> Unit,
+    onDenunciar: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Button(
+            onClick = onBloquear,
+            modifier = Modifier.weight(1f).testTag("btn_bloquear_malicioso"),
+            colors = ButtonDefaults.buttonColors(containerColor = CyberRojo)
+        ) {
+            Icon(Icons.Filled.Block, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Bloquear", fontWeight = FontWeight.Bold)
+        }
+        OutlinedButton(
+            onClick = onDenunciar,
+            modifier = Modifier.weight(1f).testTag("btn_denunciar_malicioso")
+        ) {
+            Icon(Icons.Filled.Report, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Denunciar")
+        }
+    }
+}
+
+@Composable
+private fun CardAdvertenciaMalicioso(onProceder: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth().testTag("card_advertencia_malicioso"),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = CyberRojo.copy(alpha = 0.12f))
+    ) {
+        Column(
+            modifier = Modifier.padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Icon(Icons.Filled.Warning, contentDescription = "Advertencia", tint = CyberRojo, modifier = Modifier.size(28.dp))
+                Text(
+                    text = "Recomendamos bloquearlo, \u00bfseguro que deseas proceder?",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = CyberRojo
+                )
+            }
+            Button(
+                onClick = onProceder,
+                modifier = Modifier.fillMaxWidth().testTag("btn_proceder_malicioso"),
+                colors = ButtonDefaults.buttonColors(containerColor = CyberAmbar)
+            ) {
+                Text("Proceder bajo mi responsabilidad", fontWeight = FontWeight.Bold)
+            }
         }
     }
 }
