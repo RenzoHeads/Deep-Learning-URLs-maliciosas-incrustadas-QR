@@ -308,16 +308,18 @@ fun decidirResultadoPull(codigo: Int?, retryAfterSegundos: Long?): DecisionPull.
         // IOException pura (codigo == null): fallo de red — transitorio.
         codigo == null -> DecisionPull.Decision.Retry(BACKOFF_MIN_SEGUNDOS_TOTAL)
         // 4xx no-401/403/429: request malformado / conflicto no recuperable — abortar.
-        codigo != null && codigo in 400..499 -> DecisionPull.Decision.Failure
+        // S6619 fix: codigo != null es garantizado aqui (linea de arriba ya
+        // manejo codigo == null con su propia rama).
+        codigo in 400..499 -> DecisionPull.Decision.Failure
         // 2xx no-200 (e.g., 201 Created): respuesta valida — Success, no Retry.
         // Bug G-6 fix: antes el `else` trataba 201/202/204 como transitorio y
         // disparaba `Result.retry()` infinito en backends que responden 201 a
         // POST /escaneos (RFC 7231 lo permite). Ahora mapeamos 2xx explicito
         // a Success y dejamos `else` solo para lo desconocido (= transitorio).
-        codigo != null && codigo in 200..299 -> DecisionPull.Decision.Success
+        codigo in 200..299 -> DecisionPull.Decision.Success
         // 3xx (redirect): no esperados en este API, pero no son error — Failure
         // silencioso para evitar loop infinito de retries en redirects no seguidos.
-        codigo != null && codigo in 300..399 -> DecisionPull.Decision.Failure
+        codigo in 300..399 -> DecisionPull.Decision.Failure
         // Otros codigos no deberian llegar aqui — tratarlos como transitorios.
         else -> DecisionPull.Decision.Retry(BACKOFF_MIN_SEGUNDOS_TOTAL)
     }

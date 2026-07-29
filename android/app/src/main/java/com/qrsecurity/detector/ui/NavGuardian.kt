@@ -547,7 +547,6 @@ fun NavGuardian() {
                             }
                         }
                     },
-                    onMensaje = ::mostrarMensaje
                 )
             }
         }

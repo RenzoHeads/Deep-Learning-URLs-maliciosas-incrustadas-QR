@@ -55,6 +55,9 @@ import com.qrsecurity.detector.ui.theme.CyberGlass
 import com.qrsecurity.detector.ui.theme.CyberTextoPrincipal
 import com.qrsecurity.detector.ui.theme.CyberTextoSecundario
 
+// SonarQube S1192 fix: el literal "Cerrar sesion" se duplicaba 3 veces.
+private const val TEXTO_CERRAR_SESION = "Cerrar sesion"
+
 /**
  * Pantalla Acerca de / Ayuda — cyber-sentinel design.
  *
@@ -84,7 +87,6 @@ import com.qrsecurity.detector.ui.theme.CyberTextoSecundario
 fun PantallaAcerca(
     onVolver: () -> Unit,
     onCerrarSesion: () -> Unit = {},
-    onMensaje: (TipoMensaje, String) -> Unit = { _, _ -> }
 ) {
     val estadoScroll = rememberScrollState()
 
@@ -207,7 +209,7 @@ fun PantallaAcerca(
             )
             Spacer(modifier = Modifier.width(8.dp))
             Text(
-                text = "Cerrar sesion",
+                text = TEXTO_CERRAR_SESION,
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.Medium,
                 color = CyberRojo
@@ -220,7 +222,7 @@ fun PantallaAcerca(
     if (mostrarDialogoLogout) {
         AlertDialog(
             onDismissRequest = { mostrarDialogoLogout = false },
-            title = { Text("Cerrar sesion") },
+            title = { Text(TEXTO_CERRAR_SESION) },
             text = {
                 Text(
                     "Se cerrara tu sesion y se borrara todo el historial de " +
@@ -238,7 +240,7 @@ fun PantallaAcerca(
                     },
                     modifier = Modifier.testTag("btn_confirmar_logout")
                 ) {
-                    Text("Cerrar sesion", color = CyberCyan, fontWeight = FontWeight.Bold)
+                    Text(TEXTO_CERRAR_SESION, color = CyberCyan, fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {

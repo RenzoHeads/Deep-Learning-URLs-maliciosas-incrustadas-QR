@@ -2,10 +2,6 @@ package com.qrsecurity.detector.ml
 
 import android.content.Context
 import android.content.res.AssetManager
-import android.os.Build
-import org.tensorflow.lite.Interpreter
-import org.tensorflow.lite.gpu.GpuDelegate
-import org.tensorflow.lite.nnapi.NnApiDelegate
 import java.util.Random
 import kotlin.math.abs
 
@@ -99,10 +95,6 @@ class MotorInferencia private constructor(
     var nombreDelegado: String = "ALEATORIO"
         private set
 
-    /** Ruta del modelo `.tflite` descubierta bajo `assets/`. `null` si no hay. */
-    @Volatile
-    private var rutaModeloCache: String? = null
-
     /**
      * Ejecuta una "inferencia" aleatoria determinista sobre la URL tokenizada.
      *
@@ -139,121 +131,6 @@ class MotorInferencia private constructor(
      */
     fun cerrar() {
         // Sin recursos nativos que liberar.
-    }
-
-    // ─────────────────────────────────────────────────────────
-    // Infraestructura TFLite (dormant — restauracion Git history)
-    // ─────────────────────────────────────────────────────────
-
-    /**
-     * Construye [Interpreter.Options] seleccionando el primer delegado
-     * disponible, en orden GPU -> NNAPI -> CPU. Cada intento de init
-     * se envuelve en `runCatching`: si el delegado falla (driver buggy,
-     * dispositivo sin soporte, etc.), se loguea y se cae al siguiente.
-     * El numero de hilos se limita a 4.
-     *
-     * NNAPI requiere Android API >= 27 (`O_MR1`); si SDK < 27 se salta
-     * directamente al fallback CPU. Esto evita el crash historico en
-     * dispositivos sin NNAPI o con drivers defectuosos.
-     *
-     * @param assets [AssetManager] — actualmente sin uso por la ruta
-     *  de delegados, pero aceptado para futura expansion (p.ej. cargar
-     *  `libtensorflowlite_gpu_delegate.so` desde assets en algunos
-     *  pipelines de plugin).
-     * @param modeloPath ruta al modelo `.tflite` (resuelta por
-     *  [resolverRutaModelo]); reservada para logging futuro.
-     * @return [Interpreter.Options] configurado con el primer delegado
-     *  que inicializo correctamente; sin delegado si todos fallaron
-     *  (CPU fallback — siempre valido).
-     */
-    @Suppress("UNUSED_PARAMETER")
-    private fun crearOpcionesInterpreter(
-        assets: AssetManager,
-        modeloPath: String
-    ): Interpreter.Options {
-        // 1) GPU delegate — requiere org.tensorflow:tensorflow-lite-gpu.
-        // Cada bloque se construye sobre un [Interpreter.Options] fresco
-        // para que un delegate parcialmente inicializado nunca contamine
-        // al siguiente intento.
-        runCatching {
-            val opciones = Interpreter.Options().setNumThreads(MAX_THREADS)
-            opciones.addDelegate(GpuDelegate())
-            nombreDelegado = "GPU"
-            return opciones
-        }.onFailure { fallo ->
-            android.util.Log.w(TAG, "GPU delegate fallo: ${fallo.message}")
-        }
-
-        // 2) NNAPI delegate — requiere Android API >= 27 (O_MR1) = minimo oficial.
-        // SDK < 27 -> se salta al fallback CPU sin intentar (NNAPI no existe).
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-            runCatching {
-                val opciones = Interpreter.Options().setNumThreads(MAX_THREADS)
-                opciones.addDelegate(NnApiDelegate())
-                nombreDelegado = "NNAPI"
-                return opciones
-            }.onFailure { fallo ->
-                android.util.Log.w(TAG, "NNAPI delegate fallo: ${fallo.message}")
-            }
-        } else {
-            android.util.Log.i(
-                TAG,
-                "NNAPI salteado: SDK ${Build.VERSION.SDK_INT} < ${Build.VERSION_CODES.O_MR1}"
-            )
-        }
-
-        // 3) CPU fallback — sin delegado, hilos limitados a [MAX_THREADS].
-        // Siempre funciona; nunca se cae aqui.
-        nombreDelegado = "CPU"
-        return Interpreter.Options().setNumThreads(MAX_THREADS)
-    }
-
-    /**
-     * Resuelve recursivamente la ruta del primer `*.tflite` bajo `assets/`.
-     * El resultado se cachea en [rutaModeloCache]; llamadas subsiguientes
-     * no re-trabajan el [AssetManager.list]. Si no se encuentra ningun
-     * modelo, devuelve `null` (escenario placeholder actual — no crashea).
-     *
-     * Decision (M-30): en lugar de hard-codar un subfolder como
-     * `assets://modelos/modelo.tflite`, recorremos `assets.list(path)`
-     * recursivamente hasta encontrar el primer `.tflite`. Esto soporta
-     * cualquier layout de assets sin tocar el codigo. Cuando exista un
-     * unico modelo canonico, basta con colocarlo en `assets/` (o
-     * cualquier subfolder) y sera hallado sin configuracion adicional.
-     */
-    private fun resolverRutaModelo(assets: AssetManager): String? {
-        rutaModeloCache?.let { return it }
-        val encontrada = buscarTfliteRecursivo(assets, "")
-        if (encontrada != null) {
-            rutaModeloCache = encontrada
-        }
-        return encontrada
-    }
-
-    /**
-     * DFS sobre [AssetManager.list] — devuelve la primera ruta con
-     * extension `.tflite`, en orden lexicografico del listado. Acepta
-     * `path` vacio para el raiz de `assets/`.
-     */
-    private fun buscarTfliteRecursivo(assets: AssetManager, path: String): String? {
-        val entradas = runCatching { assets.list(path) }
-            .getOrNull()
-            ?: return null
-        for (entrada in entradas.orEmpty()) {
-            val rutaCompleta = if (path.isEmpty()) entrada else "$path/$entrada"
-            // Un subfolder se reconoce porque NO tiene extension `.tflite`.
-            // `AssetManager.list` devuelve nombres sin trailing slash.
-            if (entrada.endsWith(SUFFIX_TFLITE, ignoreCase = true)) {
-                return rutaCompleta
-            }
-            // Heuristica simple: si la entrada no tiene extension,
-            // asumimos que es un subdirectorio y bajamos.
-            if (!entrada.contains('.')) {
-                val enSub = buscarTfliteRecursivo(assets, rutaCompleta)
-                if (enSub != null) return enSub
-            }
-        }
-        return null
     }
 
     // ─────────────────────────────────────────────────────────
@@ -303,9 +180,6 @@ class MotorInferencia private constructor(
         private const val FNV_OFFSET_BASIS_64: Long = -3750763034362895579L // 0xCBF29CE484222325
         private const val FNV_PRIME_64: Long = 1099511628211L
 
-        // Infraestructura TFLite (dormant).
         private const val TAG: String = "MotorInferencia"
-        private const val MAX_THREADS: Int = 4
-        private const val SUFFIX_TFLITE: String = ".tflite"
     }
 }
