@@ -311,7 +311,7 @@ class RepositorioUrlsBloqueadas(
 /** Extension: DTO UrlBloqueada backend → entidad Room. */
 private fun UrlBloqueada.aEntidad(syncedAt: Long): UrlBloqueadaEntity {
     val creadoMillis = try {
-        Instant.parse(creado_en).toEpochMilli()
+        Instant.parse(creadoEn).toEpochMilli()
     } catch (e: Exception) {
         System.currentTimeMillis()
     }

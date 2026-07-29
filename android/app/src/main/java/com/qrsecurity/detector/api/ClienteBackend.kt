@@ -3,6 +3,7 @@ package com.qrsecurity.detector.api
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -115,7 +116,7 @@ class ClienteBackend(
      * pinParsing se completa en Phase 7. Sin pin, OkHttpClient acepta cualquier
      * certificado valido CA-firmado; con pin, restringe al SPKI conocido.
      */
-    // TODO(staging): añadir SPKI pin base64 del backend Vercel antes de producción.
+    // FIXME(staging): añadir SPKI pin base64 del backend Vercel antes de producción.
     // Por ahora sin pin (placeholder); el pinning se completa en Phase 7.
     private val pinner: CertificatePinner = CertificatePinner.Builder().build()
 
@@ -143,23 +144,23 @@ class ClienteBackend(
 
     @Serializable
     data class RespuestaAuth(
-        val id_usuario: String,
-        val token_api: String,
-        val nombre_usuario: String? = null,
+        @SerialName("id_usuario") val idUsuario: String,
+        @SerialName("token_api") val tokenApi: String,
+        @SerialName("nombre_usuario") val nombreUsuario: String? = null,
         val correo: String? = null,
-        val creado_en: String? = null
+        @SerialName("creado_en") val creadoEn: String? = null
     )
 
     @Serializable
     data class Escaneo(
         val id: String,
-        val url_original: String,
-        val url_limpia: String,
+        @SerialName("url_original") val urlOriginal: String,
+        @SerialName("url_limpia") val urlLimpia: String,
         val probabilidad: Float,
-        val nivel_alerta: String,
+        @SerialName("nivel_alerta") val nivelAlerta: String,
         val delegado: String? = null,
-        val es_malicioso: Boolean,
-        val creado_en: String
+        @SerialName("es_malicioso") val esMalicioso: Boolean,
+        @SerialName("creado_en") val creadoEn: String
     )
 
     @Serializable
@@ -167,14 +168,14 @@ class ClienteBackend(
         val id: String,
         val url: String,
         val razon: String? = null,
-        val creado_en: String
+        @SerialName("creado_en") val creadoEn: String
     )
 
     @Serializable
     data class Estadisticas(
-        val total_escaneos: Int,
+        @SerialName("total_escaneos") val totalEscaneos: Int,
         val amenazas: Int,
-        val ultimos_7_dias: Int
+        @SerialName("ultimos_7_dias") val ultimos7Dias: Int
     )
 
     @Serializable
@@ -187,11 +188,11 @@ class ClienteBackend(
     data class Denuncia(
         val id: String,
         val url: String,
-        val id_categoria: Int,
-        val nombre_categoria: String? = null,
+        @SerialName("id_categoria") val idCategoria: Int,
+        @SerialName("nombre_categoria") val nombreCategoria: String? = null,
         val descripcion: String? = null,
         val estado: String,
-        val creado_en: String
+        @SerialName("creado_en") val creadoEn: String
     )
 
     /**
@@ -222,7 +223,7 @@ class ClienteBackend(
     /**
      * Registra un nuevo usuario con [nombreUsuario] y [password] contra el
      * backend (`POST /auth/registrar`). El backend hashea el password con
-     * bcrypt y devuelve un [RespuestaAuth] con el [token_api] a persistir.
+     * bcrypt y devuelve un [RespuestaAuth] con el [RespuestaAuth.tokenApi] a persistir.
      *
      * @throws HttpBackendException 409 si el usuario ya existe.
      */
@@ -243,7 +244,7 @@ class ClienteBackend(
     /**
      * Inicia sesion con [nombreUsuario] y [password] contra el backend
      * (`POST /auth/login`). El backend verifica el hash bcrypt y devuelve
-     * el [RespuestaAuth] con el [token_api] a persistir.
+     * el [RespuestaAuth] con el [RespuestaAuth.tokenApi] a persistir.
      *
      * @throws HttpBackendException 401 si las credenciales son invalidas.
      */

@@ -97,7 +97,7 @@ class PipelineViewModel(application: Application) : AndroidViewModel(application
             // al inicio), nos aseguramos de que este Job sigue activo.
             coroutineContext.ensureActive()
 
-            // El pipeline hace todo el trabajo pesado y ya muta su propio
+            // El pipeline hace el trabajo pesado y ya muta su propio
             // StateFlow internamente. Aqui solo orquestamos la duracion del
             // Job: si nos cancelan, ensureActive() corta en el siguiente
             // punto de suspension y no llegamos a tocar nada mas.

@@ -319,7 +319,7 @@ class RepositorioEscaneos(
             true
         } catch (e: ClienteBackend.HttpBackendException) {
             // Bug D2-P2 (fix Lote H): antes el bare `catch (e: Exception)`
-            // atrapaba TODO, incluido 409 Conflict, y devolvia `false`. El
+            // atrapaba cualquier error, incluido 409 Conflict, y devolvia `false`. El
             // efecto: si el servidor ya tenia el escaneo (CREATE previo
             // exitoso, pero el ack no llego al cliente por un timeout de
             // red, o race con otro dispositivo del mismo usuario), el op
@@ -382,7 +382,7 @@ class RepositorioEscaneos(
             true
         } catch (e: ClienteBackend.HttpBackendException) {
             // Bug D2-P2 (fix Lote H): antes un bare `catch (e: Exception)`
-            // atrapaba TODO IOException — incluido 404/409 — y devolvia
+            // atrapaba cualquier IOException — incluido 404/409 — y devolvia
             // `false`, dejando el DELETE permanentemente en la cola (el
             // `marcarFallida` tras 3 intentos nunca llegaba a purgar el
             // op, y a su vez el PULL no borra el row dirty aunque no
@@ -455,18 +455,18 @@ sealed class ResultadoSync {
 /** Extension: mapea un DTO Escaneo del backend a la entidad Room (LWW, server source). */
 private fun Escaneo.aEntidad(syncedAt: Long): EscaneoEntity {
     val creadoMillis = try {
-        Instant.parse(creado_en).toEpochMilli()
+        Instant.parse(creadoEn).toEpochMilli()
     } catch (e: Exception) {
         System.currentTimeMillis()  // fallback si ISO parse falla
     }
     return EscaneoEntity(
         id = id,
-        urlOriginal = url_original,
-        urlLimpia = url_limpia,
+        urlOriginal = urlOriginal,
+        urlLimpia = urlLimpia,
         probabilidad = probabilidad,
-        nivelAlerta = nivel_alerta.uppercase(),
+        nivelAlerta = nivelAlerta.uppercase(),
         delegado = delegado,
-        esMalicioso = es_malicioso,
+        esMalicioso = esMalicioso,
         creadoEnMillis = creadoMillis,
         dirty = false,
         syncedAtMillis = syncedAt

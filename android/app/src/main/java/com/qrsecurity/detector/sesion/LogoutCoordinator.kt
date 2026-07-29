@@ -7,7 +7,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * Coordinador de cierre de sesion: un punto unico para vaciar todo el estado
+ * Coordinador de cierre de sesion: un punto unico para vaciar el estado
  * persistente del usuario al desloguearse.
  *
  * Bug H7: [SesionUsuario.cerrarSesion] solo eliminaba el token + flag de
@@ -31,7 +31,7 @@ import kotlinx.coroutines.withContext
  * logout se hacia solo llamando `SesionUsuario.cerrarSesion(context)`, que
  * borra el token pero deja toda la Room intacta. Como parte del Lote H se
  * anade un boton "Cerrar sesion" en la pantalla "Acerca de" que llama a
- * [logout] para vaciar todo el estado.
+ * [logout] para vaciar el estado.
  *
  * Bug D4-P2 (Lote H): `RoomDatabase.clearAllTables()` es una operacion
  * suspendida que internamente hace writes SQLite; llamarse desde el hilo
@@ -52,7 +52,7 @@ import kotlinx.coroutines.withContext
  * `Result.success()` (no-op) para no intentar 4xx/5xx logic sobre estado
  * muerto.
  *
- * Orden de operaciones (todo suspend):
+ * Orden de operaciones (cada una suspend):
  *   1. Cancelar el work encolado/periodico (rapido, no bloqueante).
  *   2. Vaciar todas las tablas de Room (suspend — envuelto en
  *      `withContext(Dispatchers.IO)` por D4-P2).
@@ -72,7 +72,7 @@ import kotlinx.coroutines.withContext
 object LogoutCoordinator {
 
     /**
-     * Cierra la sesion del usuario y limpia todo el estado persistido.
+     * Cierra la sesion del usuario y limpia el estado persistido.
      *
      * @param context Contexto de aplicacion o actividad; se usa solo para
      *   obtener la instancia Room y construir el [MediadorSincronizacion].

@@ -35,7 +35,7 @@ class RepositorioCategorias(
      * (upsert por PK) y actualiza el sello de sincronizacion.
      *
      * Estrategia full-table upsert (no LWW — no hay dirty ni updatedAt en
-     * categorias). Todo el bloque se ejecuta dentro de una unica transaccion
+     * categorias). El bloque entero se ejecuta dentro de una unica transaccion
      * Room (`db.withTransaction`) para que el snapshot + sello sean atomicos.
      */
     suspend fun sincronizarDesdeBackend(): ResultadoSync = withContext(ioDispatcher) {

@@ -20,7 +20,7 @@ import java.util.UUID
  * Fuente unica para denuncias de URLs — offline-first.
  *
  * Mismo patron que [RepositorioEscaneos] y [RepositorioUrlsBloqueadas]. El
- * backend no pagina denuncias (volumen bajo) — un solo GET trae todo.
+ * backend no pagina denuncias (volumen bajo) — un solo GET trae las denuncias.
  *
  * Nota: las denuncias nuevas siempre se crean con estado "PENDIENTE" localmente;
  * el servidor puede asignar otro estado al confirmar (LWW: server wins en pull).
@@ -184,12 +184,12 @@ class RepositorioDenuncias(
                 val entidadFinalizada = DenunciaEntity(
                     id = respuesta.id,
                     url = respuesta.url,
-                    idCategoria = respuesta.id_categoria,
-                    nombreCategoria = respuesta.nombre_categoria,
+                    idCategoria = respuesta.idCategoria,
+                    nombreCategoria = respuesta.nombreCategoria,
                     descripcion = respuesta.descripcion,
                     estado = respuesta.estado,
                     creadoEnMillis = try {
-                        Instant.parse(respuesta.creado_en).toEpochMilli()
+                        Instant.parse(respuesta.creadoEn).toEpochMilli()
                     } catch (e: Exception) {
                         entidadLocal.creadoEnMillis
                     },
@@ -233,15 +233,15 @@ class RepositorioDenuncias(
 /** Extension: mapea un DTO Denuncia del backend a la entidad Room (LWW, server source). */
 private fun Denuncia.aEntidad(syncedAt: Long): DenunciaEntity {
     val creadoMillis = try {
-        Instant.parse(creado_en).toEpochMilli()
+        Instant.parse(creadoEn).toEpochMilli()
     } catch (e: Exception) {
         System.currentTimeMillis()  // fallback si ISO parse falla
     }
     return DenunciaEntity(
         id = id,
         url = url,
-        idCategoria = id_categoria,
-        nombreCategoria = nombre_categoria,
+        idCategoria = idCategoria,
+        nombreCategoria = nombreCategoria,
         descripcion = descripcion,
         estado = estado,
         creadoEnMillis = creadoMillis,

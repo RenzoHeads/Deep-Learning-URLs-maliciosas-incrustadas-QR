@@ -134,15 +134,17 @@ fun PantallaLogin(
                 password = password,
                 correo = correo,
                 passwordVisible = passwordVisible,
-                onNombreUsuario = { nuevo ->
-                    val filtrado = nuevo.trim().filter { c ->
-                        c.isLetterOrDigit() || c == '_' || c == '.'
-                    }
-                    nombreUsuario = filtrado
-                },
-                onPassword = { password = it },
-                onCorreo = { correo = it.trim() },
-                onTogglePassword = { passwordVisible = !passwordVisible }
+                handlers = HandlersFormulario(
+                    onNombreUsuario = { nuevo ->
+                        val filtrado = nuevo.trim().filter { c ->
+                            c.isLetterOrDigit() || c == '_' || c == '.'
+                        }
+                        nombreUsuario = filtrado
+                    },
+                    onPassword = { password = it },
+                    onCorreo = { correo = it.trim() },
+                    onTogglePassword = { passwordVisible = !passwordVisible }
+                )
             )
 
             BotonAuth(
@@ -218,14 +220,11 @@ private fun FormularioAuth(
     password: String,
     correo: String,
     passwordVisible: Boolean,
-    onNombreUsuario: (String) -> Unit,
-    onPassword: (String) -> Unit,
-    onCorreo: (String) -> Unit,
-    onTogglePassword: () -> Unit
+    handlers: HandlersFormulario
 ) {
     OutlinedTextField(
         value = nombreUsuario,
-        onValueChange = onNombreUsuario,
+        onValueChange = handlers.onNombreUsuario,
         label = { Text(stringResource(R.string.label_username)) },
         placeholder = { Text(stringResource(R.string.placeholder_username)) },
         singleLine = true,
@@ -236,14 +235,14 @@ private fun FormularioAuth(
 
     OutlinedTextField(
         value = password,
-        onValueChange = onPassword,
+        onValueChange = handlers.onPassword,
         label = { Text(stringResource(R.string.label_password)) },
         singleLine = true,
         visualTransformation = if (passwordVisible) VisualTransformation.None
             else PasswordVisualTransformation(),
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
         trailingIcon = {
-            IconButton(onClick = onTogglePassword) {
+            IconButton(onClick = handlers.onTogglePassword) {
                 Icon(
                     imageVector = if (passwordVisible) Icons.Filled.VisibilityOff
                         else Icons.Filled.Visibility,
@@ -259,7 +258,7 @@ private fun FormularioAuth(
     if (modoRegistro) {
         OutlinedTextField(
             value = correo,
-            onValueChange = onCorreo,
+            onValueChange = handlers.onCorreo,
             label = { Text(stringResource(R.string.label_email_optional)) },
             placeholder = { Text(stringResource(R.string.placeholder_email)) },
             singleLine = true,
@@ -269,6 +268,13 @@ private fun FormularioAuth(
         )
     }
 }
+
+private class HandlersFormulario(
+    val onNombreUsuario: (String) -> Unit,
+    val onPassword: (String) -> Unit,
+    val onCorreo: (String) -> Unit,
+    val onTogglePassword: () -> Unit
+)
 
 @Composable
 private fun ToggleLoginRegistro(
@@ -353,15 +359,15 @@ private fun ejecutarAuth(params: ParametrosAuth) {
             } else {
                 cliente.login(nombreUsuario, password)
             }
-            if (respuesta.token_api.isBlank()) {
+            if (respuesta.tokenApi.isBlank()) {
                 onMensaje(TipoMensaje.ERROR, "El servidor devolvio un token vacio. Intenta de nuevo.")
                 onProcesando(false)
                 return@launch
             }
             SesionUsuario.guardarSesion(
                 context = context,
-                token = respuesta.token_api,
-                usuario = respuesta.nombre_usuario ?: nombreUsuario,
+                token = respuesta.tokenApi,
+                usuario = respuesta.nombreUsuario ?: nombreUsuario,
                 correo = respuesta.correo ?: correo
             )
             onMensaje(TipoMensaje.EXITO, "Sesion iniciada")

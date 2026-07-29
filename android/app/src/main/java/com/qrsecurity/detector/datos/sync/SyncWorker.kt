@@ -31,7 +31,7 @@ import kotlinx.serialization.json.Json
  *     encontrar un op que falle 3 veces (se marca `fallida=true` y se salta).
  *
  * Resultado:
- *  - `Result.success()` — todo procesado o no habia que hacer nada.
+ *  - `Result.success()` — procesado o no habia que hacer nada.
  *  - `Result.retry()` — backend dio error transitorio (HTTP 429/5xx / IOException
  *    de red); WorkManager reintentara con backoff exponencial (10s, 20s, 40s, ...),
  *    respetando el header `Retry-After` cuando el backend lo envie (RFC 7231).
@@ -165,7 +165,7 @@ class SyncWorker(
         r: ResultadoSync.Fallido,
         estado: EstadoPulls
     ): EstadoPulls {
-        val (resultado, transitorio) = manejarFallidoPull(r, estado.huboErrorTransitorio)
+        val (_, transitorio) = manejarFallidoPull(r, estado.huboErrorTransitorio)
         return estado.copy(huboErrorTransitorio = estado.huboErrorTransitorio || transitorio)
     }
 
@@ -249,7 +249,7 @@ class SyncWorker(
  * con resultados reales — confuso y propenso a bugs).
  */
 object DecisionPull {
-    /** Todo bien — continuar. (Caso teorico: 200 nunca llega a decidir.) */
+    /** Exito — continuar. (Caso teorico: 200 nunca llega a decidir.) */
     sealed class Decision {
         object Success : Decision()
         /** No reintenta — error permanente (auth, 4xx request malformado). */

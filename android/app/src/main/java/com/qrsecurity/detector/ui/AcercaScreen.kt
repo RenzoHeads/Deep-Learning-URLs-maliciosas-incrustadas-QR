@@ -65,7 +65,7 @@ private const val TEXTO_CERRAR_SESION = "Cerrar sesion"
  *  - Logo QR Guardian + version
  *  - Tarjeta "Que es QR Guardian?"
  *  - Tarjeta "Modelo CANINE-S" (IA on-device)
- *  - Tarjeta "Privacidad" (todo en el dispositivo)
+ *  - Tarjeta "Privacidad" (procesamiento local en el dispositivo)
  *  - Tarjeta "Creditos"
  *  - Tarjeta "Reportar bug"
  *  - Boton "Cerrar sesion" (Bug D4-P1 fix Lote H): cablea el
@@ -218,7 +218,7 @@ fun PantallaAcerca(
     }
 
     // Bug D4-P1 (fix Lote H): dialogo de confirmacion antes de cerrar sesion.
-    // Cierra sesion = vaciar todo el historial Room + token — irreversible.
+    // Cierra sesion = vaciar el historial Room + token — irreversible.
     if (mostrarDialogoLogout) {
         AlertDialog(
             onDismissRequest = { mostrarDialogoLogout = false },

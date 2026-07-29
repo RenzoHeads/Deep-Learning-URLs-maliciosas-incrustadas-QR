@@ -77,7 +77,7 @@ class ExtractorUrls {
             )
         }
 
-        // ── Ruta rapida: verificar si todo el contenido es una sola URL. ──
+        // ── Ruta rapida: verificar si el contenido entero es una sola URL. ──
         val urlUnica = intentarParsearUrl(recortado)
         if (urlUnica != null) {
             return Extraido.Urls(listOf(urlUnica))

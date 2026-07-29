@@ -93,7 +93,7 @@ fun PantallaDenunciar(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var urlSospechosa by remember { mutableStateOf(urlPrevia) }
-    // Constraint del proyecto: "TODO ES PHISHING NADA MAS, por ahora de categorias".
+    // Constraint del proyecto: por ahora, cada denuncia se clasifica como Phishing.
     // La categoria es fija; no hay dropdown.
     val categoriaFija = "Phishing"
     // Offline-first: el id de la categoria Phishing se resuelve desde Room
