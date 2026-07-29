@@ -1,0 +1,75 @@
+name: SonarQube Cloud Analysis
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  sonarqube:
+    name: SonarQube Cloud
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          sdk-platform: '34'
+
+      - name: Cache SonarQube Cloud packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.sonar/cache
+          key: ${{ runner.os }}-sonar
+          restore-keys: ${{ runner.os }}-sonar
+
+      - name: Cache Gradle packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('android/**/*.gradle*', 'android/**/gradle-wrapper.properties') }}
+          restore-keys: ${{ runner.os }}-gradle
+
+      - name: Build and analyze
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          SCANNER_VERSION=6.2.1.4610
+          SCANNER_DIR="$HOME/.sonar/sonar-scanner-$SCANNER_VERSION-linux-x64"
+          if [ ! -d "$SCANNER_DIR" ]; then
+            mkdir -p "$HOME/.sonar"
+            curl -sSL "https://binaries.sonarsource.com/Distribution/sonar-scanner-cli/sonar-scanner-cli-$SCANNER_VERSION-linux-x64.zip" -o /tmp/scanner.zip
+            unzip -q /tmp/scanner.zip -d "$HOME/.sonar"
+          fi
+          export PATH="$SCANNER_DIR/bin:$PATH"
+
+          sonar-scanner \
+            -Dsonar.organization=renzoheads \
+            -Dsonar.projectKey=RenzoHeads_Deep-Learning-URLs-maliciosas-incrustadas-QR \
+            -Dsonar.sources=android/app/src/main/java,backend/app \
+            -Dsonar.tests=android/app/src/test/java,backend/tests \
+            -Dsonar.exclusions=**/build/**,**/*.json,**/*.xml,**/*.pro,backend/api/**,*.ipynb,**/*.ipynb,master_generico/**,master_regionalizado/**,prueba_generica/**,prueba_latam/** \
+            -Dsonar.sourceEncoding=UTF-8 \
+            -Dsonar.python.version=3.11 \
+            -Dsonar.python.coverage.reportPaths=backend/coverage.xml \
+            -Dsonar.kotlin.coverage.jacoco.xmlReportPaths=android/app/build/reports/jacoco/**/*.xml
