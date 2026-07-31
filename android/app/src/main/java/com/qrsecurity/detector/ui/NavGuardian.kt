@@ -318,9 +318,9 @@ fun NavGuardian() {
                 val resultado = (estadoPipeline as? Pipeline.Estado.ResultadoListo)
                     ?.resultado as? Pipeline.ResultadoAnalisis.ResultadoUrl
                     ?: pipelineViewModel.resultadoCacheado.value
-                if (resultado != null) {
+                resultado?.let { res ->
                     PantallaResultadoSeguro(
-                        resultado = resultado,
+                        resultado = res,
                         onEscanearOtro = {
                             pipeline.reiniciar()
                             navController.navigate(Rutas.ESCANEAR) {
@@ -340,9 +340,9 @@ fun NavGuardian() {
                 val resultado = (estadoPipeline as? Pipeline.Estado.ResultadoListo)
                     ?.resultado as? Pipeline.ResultadoAnalisis.ResultadoUrl
                     ?: pipelineViewModel.resultadoCacheado.value
-                if (resultado != null) {
+                resultado?.let { res ->
                     PantallaResultadoMalicioso(
-                        resultado = resultado,
+                        resultado = res,
                         onEscanearOtro = {
                             pipeline.reiniciar()
                             navController.navigate(Rutas.ESCANEAR) {
@@ -350,13 +350,6 @@ fun NavGuardian() {
                             }
                         },
                         onDenunciar = { url ->
-                            // Bug 11 fix: propagar la URL detectada hacia Denunciar
-                            // para pre-llenar el campo. Codificamos como parametro
-                            // de query para no romper el template de ruta.
-                            //
-                            // Fix nav-bar bug: pop RESULTADO_MALICIOSO del stack
-                            // para evitar que el LaunchedEffect re-navegue al
-                            // resultado al volver desde DENUNCIAR.
                             val urlCodificada = URLEncoder.encode(url, "UTF-8")
                             navController.navigate("denunciar?url=$urlCodificada") {
                                 popUpTo(Rutas.RESULTADO_MALICIOSO) {
@@ -366,16 +359,6 @@ fun NavGuardian() {
                             }
                         },
                         onVerBloqueadas = {
-                            // Fix nav-bar bug: pop RESULTADO_MALICIOSO del back
-                            // stack para que no quede "izierto" detras de
-                            // BLOQUEADAS. Antes usabamos navigate(BLOQUEADAS)
-                            // sin popUpTo, dejando el stack [ESCANEAR,
-                            // RESULTADO_MALICIOSO, BLOQUEADAS]. Cuando el
-                            // usuario tocaba ESCANEAR en la nav bar, el
-                            // popUpTo(ESCANEAR) exponia brevemente
-                            // RESULTADO_MALICIOSO, y el LaunchedEffect del
-                            // NavHost re-navegaba a RESULTADO_MALICIOSO —
-                            // bloqueando la transicion a ESCANEAR.
                             navController.navigate(Rutas.BLOQUEADAS) {
                                 popUpTo(Rutas.RESULTADO_MALICIOSO) {
                                     inclusive = true

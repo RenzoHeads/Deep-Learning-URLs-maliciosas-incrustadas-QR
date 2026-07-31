@@ -91,24 +91,7 @@ fun PantallaResultadoMalicioso(
     val estadoScroll = rememberScrollState()
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
-    // Recoger error del UiState y disparar snackbar (UDF).
-    LaunchedEffect(uiState.error) {
-        uiState.error?.let { msg ->
-            onMensaje(TipoMensaje.ERROR, msg)
-            viewModel.consumirError()
-        }
-    }
-    // Recoger exito del bloqueo y mostrar snackbar.
-    // Bug S6 fix: consumir bloqueadaOk tras mostrar el snackbar para que
-    // no re-dispare en rotacion. Antes bloqueadaOk se seteaba a true pero
-    // nunca se consumia — LaunchedEffect re-disparaba el snackbar en
-    // rotacion.
-    LaunchedEffect(uiState.bloqueadaOk) {
-        if (uiState.bloqueadaOk == true) {
-            onMensaje(TipoMensaje.EXITO, "URL bloqueada")
-            viewModel.consumirBloqueoOk()
-        }
-    }
+    ResultadoMaliciosoEfectos(uiState = uiState, viewModel = viewModel, onMensaje = onMensaje)
 
     Box(modifier = Modifier.fillMaxSize()) {
         Column(
@@ -256,5 +239,29 @@ fun PantallaResultadoMalicioso(
         BotonEscanearOtro(onEscanearOtro = onEscanearOtro)
         }
 
+    }
+}
+
+/**
+ * S3776 fix: LaunchedEffects extraidos a esta funcion para reducir
+ * la Cognitive Complexity de PantallaResultadoMalicioso de 16 a <= 15.
+ */
+@Composable
+private fun ResultadoMaliciosoEfectos(
+    uiState: ResultadoMaliciosoUiState,
+    viewModel: ResultadoMaliciosoViewModel,
+    onMensaje: (TipoMensaje, String) -> Unit
+) {
+    LaunchedEffect(uiState.error) {
+        uiState.error?.let { msg ->
+            onMensaje(TipoMensaje.ERROR, msg)
+            viewModel.consumirError()
+        }
+    }
+    LaunchedEffect(uiState.bloqueadaOk) {
+        if (uiState.bloqueadaOk == true) {
+            onMensaje(TipoMensaje.EXITO, "URL bloqueada")
+            viewModel.consumirBloqueoOk()
+        }
     }
 }

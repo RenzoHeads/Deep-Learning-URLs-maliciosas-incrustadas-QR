@@ -90,46 +90,99 @@ fun PantallaDenunciar(
     onMensaje: (TipoMensaje, String) -> Unit = { _, _ -> },
     viewModel: DenunciarViewModel = hiltViewModel()
 ) {
-    // Bug D3 fix: rememberSaveable para que el formulario sobreviva a
-    // rotacion. Antes, al rotar el dispositivo, el texto que el usuario
-    // habia ingresado en urlSospechosa y descripcion se perdia porque
-    // remember se reinicia en cada cambio de configuracion.
     var urlSospechosa by rememberSaveable { mutableStateOf(urlPrevia) }
-    // Constraint del proyecto: por ahora, cada denuncia se clasifica como Phishing.
     val categoriaFija = "Phishing"
     var descripcion by rememberSaveable { mutableStateOf("") }
     val estadoScroll = rememberScrollState()
 
-    // UiState reactivo via Hilt ViewModel (patron NowInAndroid UDF).
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val categorias by viewModel.categorias.collectAsStateWithLifecycle()
 
-    // M2 fix: dedup flag — sin el, cada emision del Flow de categorias (Room
-    // inserta filas nuevas, el SyncWorker las trae) re-dispara el side-effect
-    // de sync.
-    // Bug D3-P1 (fix Lote H): si la sync fallaba, `syncDisparada` se quedaba en
-    // `true` permanentemente. Observamos el WorkInfo.State del one-shot sync;
-    // cuando pasa a FAILED/CANCELLED, reseteamos para permitir reintentar.
     var syncDisparada by remember { mutableStateOf(false) }
     val estadoSync by viewModel.estadoSync.collectAsStateWithLifecycle(initialValue = emptyList())
+
+    DenunciarEfectos(
+        estadoSync = estadoSync,
+        categorias = categorias,
+        categoriaFija = categoriaFija,
+        syncDisparada = syncDisparada,
+        onSyncDisparadaChanged = { syncDisparada = it },
+        uiState = uiState,
+        viewModel = viewModel,
+        onMensaje = onMensaje,
+        onExito = onExito
+    )
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(CyberFondo)
+            .verticalScroll(estadoScroll)
+            .padding(horizontal = Espaciado.xl, vertical = Espaciado.xxl),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(Espaciado.lg)
+    ) {
+        EncabezadoDenunciar()
+
+        CampoUrlSospechosa(
+            urlSospechosa = urlSospechosa,
+            onUrlChanged = { urlSospechosa = it }
+        )
+
+        TarjetaCategoriaFija(categoriaFija = categoriaFija)
+
+        CampoDescripcion(
+            descripcion = descripcion,
+            onDescripcionChanged = { descripcion = it }
+        )
+
+        Spacer(modifier = Modifier.height(Espaciado.sm))
+
+        BotonEnviarDenuncia(
+            enviando = uiState.enviando,
+            urlSospechosa = urlSospechosa,
+            idCategoria = uiState.idCategoriaPhishing,
+            descripcion = descripcion,
+            onMensaje = onMensaje,
+            onAction = { viewModel.onAction(it) }
+        )
+
+        BotonCancelarDenuncia(onCancelar = onCancelar)
+    }
+}
+
+/**
+ * S3776 fix: todos los LaunchedEffects extraidos a esta funcion para reducir
+ * la Cognitive Complexity de PantallaDenunciar de 21 a <= 15.
+ */
+@Composable
+private fun DenunciarEfectos(
+    estadoSync: List<WorkInfo>,
+    categorias: List<CategoriaDenunciaEntity>,
+    categoriaFija: String,
+    syncDisparada: Boolean,
+    onSyncDisparadaChanged: (Boolean) -> Unit,
+    uiState: DenunciarUiState,
+    viewModel: DenunciarViewModel,
+    onMensaje: (TipoMensaje, String) -> Unit,
+    onExito: () -> Unit
+) {
     LaunchedEffect(estadoSync) {
         val estados = estadoSync.map { it.state }
         if (WorkInfo.State.SUCCEEDED in estados ||
             WorkInfo.State.FAILED in estados ||
             WorkInfo.State.CANCELLED in estados
         ) {
-            syncDisparada = false
+            onSyncDisparadaChanged(false)
         }
     }
     LaunchedEffect(categorias) {
         viewModel.resolverCategoriaPhishing(categoriaFija)
         if (categorias.isEmpty() && !syncDisparada) {
-            syncDisparada = true
+            onSyncDisparadaChanged(true)
             viewModel.dispararSyncCategorias()
         }
     }
-
-    // Recoger exito/error del UiState y disparar callbacks (UDF).
     LaunchedEffect(uiState.exito, uiState.error) {
         if (uiState.exito) {
             onMensaje(TipoMensaje.EXITO, "Denuncia enviada")
@@ -141,185 +194,198 @@ fun PantallaDenunciar(
             viewModel.consumirEvento()
         }
     }
+}
 
-    Column(
+@Composable
+private fun EncabezadoDenunciar() {
+    Box(
         modifier = Modifier
-            .fillMaxSize()
-            .background(CyberFondo)
-            .verticalScroll(estadoScroll)
-            .padding(horizontal = Espaciado.xl, vertical = Espaciado.xxl),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(Espaciado.lg)
+            .size(Espaciado.gigante)
+            .clip(RoundedCornerShape(RadioBorde.xxl))
+            .background(CyberRojo.copy(alpha = 0.2f)),
+        contentAlignment = Alignment.Center
     ) {
-        // ── Icono + Titulo ──
-        Box(
+        Icon(
+            imageVector = Icons.Filled.Report,
+            contentDescription = null,
+            tint = CyberRojo,
+            modifier = Modifier.size(TamanosIcono.mediano)
+        )
+    }
+    Text(
+        text = "Denunciar URL Maliciosa",
+        style = MaterialTheme.typography.headlineMedium,
+        fontWeight = FontWeight.Bold,
+        color = CyberTextoPrincipal
+    )
+    Text(
+        text = "Reporta URLs maliciosas para ayudar a proteger a otros usuarios.",
+        style = MaterialTheme.typography.bodyMedium,
+        color = CyberTextoSecundario,
+        textAlign = TextAlign.Center
+    )
+}
+
+@Composable
+private fun CampoUrlSospechosa(
+    urlSospechosa: String,
+    onUrlChanged: (String) -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = "URL SOSPECHOSA",
+            style = MaterialTheme.typography.labelMedium,
+            color = CyberTextoSecundario
+        )
+        Spacer(modifier = Modifier.height(Espaciado.xs))
+        OutlinedTextField(
+            value = urlSospechosa,
+            onValueChange = onUrlChanged,
+            modifier = Modifier.fillMaxWidth().testTag("campo_url_sospechosa"),
+            placeholder = { Text(stringResource(R.string.placeholder_url_suspicious)) },
+            textStyle = MaterialTheme.typography.bodyLarge,
+            singleLine = true,
+            shape = RoundedCornerShape(RadioBorde.lg),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedTextColor = CyberTextoPrincipal,
+                unfocusedTextColor = CyberTextoPrincipal,
+                focusedBorderColor = CyberCyan,
+                unfocusedBorderColor = CyberTextoSecundario.copy(alpha = 0.3f),
+                cursorColor = CyberCyan
+            )
+        )
+    }
+}
+
+@Composable
+private fun TarjetaCategoriaFija(categoriaFija: String) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            text = "CATEGORIA",
+            style = MaterialTheme.typography.labelMedium,
+            color = CyberTextoSecundario
+        )
+        Spacer(modifier = Modifier.height(Espaciado.xs))
+        Row(
             modifier = Modifier
-                .size(Espaciado.gigante)
-                .clip(RoundedCornerShape(RadioBorde.xxl))
-                .background(CyberRojo.copy(alpha = 0.2f)),
-            contentAlignment = Alignment.Center
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(RadioBorde.lg))
+                .background(CyberCyan.copy(alpha = 0.12f))
+                .padding(horizontal = Espaciado.lg, vertical = Espaciado.md),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Espaciado.sm)
         ) {
             Icon(
                 imageVector = Icons.Filled.Report,
                 contentDescription = null,
-                tint = CyberRojo,
-                modifier = Modifier.size(TamanosIcono.mediano)
+                tint = CyberCyan,
+                modifier = Modifier.size(Espaciado.xl)
+            )
+            Text(
+                text = categoriaFija,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium,
+                color = CyberCyan
             )
         }
+    }
+}
 
+@Composable
+private fun CampoDescripcion(
+    descripcion: String,
+    onDescripcionChanged: (String) -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth()) {
         Text(
-            text = "Denunciar URL Maliciosa",
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold,
-            color = CyberTextoPrincipal
+            text = "DESCRIPCION (OPCIONAL)",
+            style = MaterialTheme.typography.labelMedium,
+            color = CyberTextoSecundario
         )
-
-        Text(
-            text = "Reporta URLs maliciosas para ayudar a proteger a otros usuarios.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = CyberTextoSecundario,
-            textAlign = TextAlign.Center
+        Spacer(modifier = Modifier.height(Espaciado.xs))
+        OutlinedTextField(
+            value = descripcion,
+            onValueChange = onDescripcionChanged,
+            modifier = Modifier.fillMaxWidth().height(Espaciado.hero).testTag("campo_descripcion"),
+            placeholder = { Text(stringResource(R.string.placeholder_description)) },
+            textStyle = MaterialTheme.typography.bodyMedium,
+            shape = RoundedCornerShape(RadioBorde.lg),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedTextColor = CyberTextoPrincipal,
+                unfocusedTextColor = CyberTextoPrincipal,
+                focusedBorderColor = CyberCyan,
+                unfocusedBorderColor = CyberTextoSecundario.copy(alpha = 0.3f),
+                cursorColor = CyberCyan
+            )
         )
+    }
+}
 
-        // ── Campo URL sospechosa ──
-        Column(modifier = Modifier.fillMaxWidth()) {
-            Text(
-                text = "URL SOSPECHOSA",
-                style = MaterialTheme.typography.labelMedium,
-                color = CyberTextoSecundario
-            )
-            Spacer(modifier = Modifier.height(Espaciado.xs))
-            OutlinedTextField(
-                value = urlSospechosa,
-                onValueChange = { urlSospechosa = it },
-                modifier = Modifier.fillMaxWidth().testTag("campo_url_sospechosa"),
-                placeholder = { Text(stringResource(R.string.placeholder_url_suspicious)) },
-                textStyle = MaterialTheme.typography.bodyLarge,
-                singleLine = true,
-                shape = RoundedCornerShape(RadioBorde.lg),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedTextColor = CyberTextoPrincipal,
-                    unfocusedTextColor = CyberTextoPrincipal,
-                    focusedBorderColor = CyberCyan,
-                    unfocusedBorderColor = CyberTextoSecundario.copy(alpha = 0.3f),
-                    cursorColor = CyberCyan
-                )
-            )
-        }
+/**
+ * S1874 fix: java.net.URL esta deprecated en Kotlin/Android.
+ * Reemplazado por java.net.URI que NO esta deprecated.
+ */
+private fun esUrlHttpHttps(url: String): Boolean {
+    return runCatching {
+        val uri = java.net.URI(url.trim())
+        val scheme = uri.scheme
+        scheme == "http" || scheme == "https"
+    }.getOrDefault(false)
+}
 
-        // ── Categoria FIJA (Phishing) — sin dropdown ──
-        Column(modifier = Modifier.fillMaxWidth()) {
-            Text(
-                text = "CATEGORIA",
-                style = MaterialTheme.typography.labelMedium,
-                color = CyberTextoSecundario
-            )
-            Spacer(modifier = Modifier.height(Espaciado.xs))
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(RadioBorde.lg))
-                    .background(CyberCyan.copy(alpha = 0.12f))
-                    .padding(horizontal = Espaciado.lg, vertical = Espaciado.md),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Espaciado.sm)
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Report,
-                    contentDescription = null,
-                    tint = CyberCyan,
-                    modifier = Modifier.size(Espaciado.xl)
-                )
-                Text(
-                    text = categoriaFija,
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.Medium,
-                    color = CyberCyan
-                )
+@Composable
+private fun BotonEnviarDenuncia(
+    enviando: Boolean,
+    urlSospechosa: String,
+    idCategoria: Int,
+    descripcion: String,
+    onMensaje: (TipoMensaje, String) -> Unit,
+    onAction: (DenunciarAction) -> Unit
+) {
+    Button(
+        onClick = {
+            if (enviando) return@Button
+            if (urlSospechosa.isBlank()) {
+                onMensaje(TipoMensaje.ERROR, "Ingresa la URL sospechosa")
+                return@Button
             }
-        }
-
-        // ── Textarea Descripcion ──
-        Column(modifier = Modifier.fillMaxWidth()) {
-            Text(
-                text = "DESCRIPCION (OPCIONAL)",
-                style = MaterialTheme.typography.labelMedium,
-                color = CyberTextoSecundario
-            )
-            Spacer(modifier = Modifier.height(Espaciado.xs))
-            OutlinedTextField(
-                value = descripcion,
-                onValueChange = { descripcion = it },
-                modifier = Modifier.fillMaxWidth().height(Espaciado.hero).testTag("campo_descripcion"),
-                placeholder = { Text(stringResource(R.string.placeholder_description)) },
-                textStyle = MaterialTheme.typography.bodyMedium,
-                shape = RoundedCornerShape(RadioBorde.lg),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedTextColor = CyberTextoPrincipal,
-                    unfocusedTextColor = CyberTextoPrincipal,
-                    focusedBorderColor = CyberCyan,
-                    unfocusedBorderColor = CyberTextoSecundario.copy(alpha = 0.3f),
-                    cursorColor = CyberCyan
+            if (!esUrlHttpHttps(urlSospechosa)) {
+                onMensaje(TipoMensaje.ERROR, "La URL debe comenzar con http:// o https://")
+                return@Button
+            }
+            onAction(
+                DenunciarAction.EnviarDenuncia(
+                    url = urlSospechosa,
+                    idCategoria = idCategoria,
+                    descripcion = descripcion
                 )
             )
-        }
+        },
+        enabled = !enviando,
+        modifier = Modifier.fillMaxWidth().height(TamanosToque.boton).testTag("btn_enviar_denuncia"),
+        shape = RoundedCornerShape(RadioBorde.xl),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = CyberCyan,
+            contentColor = CyberFondo,
+            disabledContainerColor = CyberCyan.copy(alpha = 0.38f),
+            disabledContentColor = CyberFondo
+        )
+    ) {
+        Icon(Icons.Filled.Report, contentDescription = null)
+        Spacer(modifier = Modifier.width(Espaciado.sm))
+        Text(
+            text = if (enviando) stringResource(R.string.action_sending) else stringResource(R.string.action_send_report),
+            fontWeight = FontWeight.Bold
+        )
+    }
+}
 
-        Spacer(modifier = Modifier.height(Espaciado.sm))
-
-        // ── Boton Enviar denuncia ──
-        Button(
-            onClick = {
-                if (uiState.enviando) return@Button
-                if (urlSospechosa.isBlank()) {
-                    onMensaje(TipoMensaje.ERROR, "Ingresa la URL sospechosa")
-                    return@Button
-                }
-                // Bug L2 fix: validar que la URL tenga un scheme HTTP/HTTPS.
-                // Antes solo se verificaba isBlank() — "asdf",
-                // "javascript:alert(1)", "ftp://foo" pasaban y se persistian
-                // a Room como reporte Phishing. DetalleEscaneoScreen.kt
-                // valida scheme==http/https; replicamos aqui para
-                // consistencia.
-                val schemeValida = runCatching {
-                    val u = java.net.URL(urlSospechosa.trim())
-                    u.protocol == "http" || u.protocol == "https"
-                }.getOrDefault(false)
-                if (!schemeValida) {
-                    onMensaje(TipoMensaje.ERROR, "La URL debe comenzar con http:// o https://")
-                    return@Button
-                }
-                viewModel.onAction(
-                    DenunciarAction.EnviarDenuncia(
-                        url = urlSospechosa,
-                        idCategoria = uiState.idCategoriaPhishing,
-                        descripcion = descripcion
-                    )
-                )
-            },
-            enabled = !uiState.enviando,
-            modifier = Modifier.fillMaxWidth().height(TamanosToque.boton).testTag("btn_enviar_denuncia"),
-            shape = RoundedCornerShape(RadioBorde.xl),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = CyberCyan,
-                contentColor = CyberFondo,
-                disabledContainerColor = CyberCyan.copy(alpha = 0.38f),
-                disabledContentColor = CyberFondo
-            )
-        ) {
-            Icon(Icons.Filled.Report, contentDescription = null)
-            Spacer(modifier = Modifier.width(Espaciado.sm))
-            Text(
-                text = if (uiState.enviando) stringResource(R.string.action_sending) else stringResource(R.string.action_send_report),
-                fontWeight = FontWeight.Bold
-            )
-        }
-
-        // ── Boton Cancelar ──
-        TextButton(
-            onClick = onCancelar,
-            modifier = Modifier.fillMaxWidth().testTag("btn_cancelar_denuncia")
-        ) {
-            Text(stringResource(R.string.action_cancel), color = CyberTextoSecundario)
-        }
+@Composable
+private fun BotonCancelarDenuncia(onCancelar: () -> Unit) {
+    TextButton(
+        onClick = onCancelar,
+        modifier = Modifier.fillMaxWidth().testTag("btn_cancelar_denuncia")
+    ) {
+        Text(stringResource(R.string.action_cancel), color = CyberTextoSecundario)
     }
 }
