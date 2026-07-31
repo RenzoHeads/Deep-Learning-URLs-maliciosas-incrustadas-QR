@@ -1,11 +1,15 @@
 package com.qrsecurity.detector.ui
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -28,27 +32,27 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import com.qrsecurity.detector.ui.theme.Espaciado
-import com.qrsecurity.detector.ui.theme.RadioBorde
-import com.qrsecurity.detector.ui.theme.TamanosToque
 import com.qrsecurity.detector.ui.theme.CyberCyan
-import com.qrsecurity.detector.ui.theme.CyberVerdeAlerta
 import com.qrsecurity.detector.ui.theme.CyberFondo
-import com.qrsecurity.detector.ui.theme.CyberGlass
-import com.qrsecurity.detector.ui.theme.CyberGlassBorde
-import com.qrsecurity.detector.ui.theme.CyberRojo
 import com.qrsecurity.detector.ui.theme.CyberTextoPrincipal
 import com.qrsecurity.detector.ui.theme.CyberTextoSecundario
+import com.qrsecurity.detector.ui.theme.CyberVerdeAlerta
+import com.qrsecurity.detector.ui.theme.Espaciado
+import com.qrsecurity.detector.ui.theme.RadioBorde
+import com.qrsecurity.detector.ui.theme.TamanosIcono
+import com.qrsecurity.detector.ui.theme.TamanosToque
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -56,7 +60,7 @@ import kotlinx.coroutines.withContext
 // Bug A11 fix: nombre del archivo SharedPreferences y clave para guardar
 // el flag "onboarding completado". Se lee en NavGuardian para decidir si
 // mostrar Onboarding tras login. Antes, el flag no se persistia y el
-// onboarding reaparecia cada vez que el usuario cerraba y reabría la app
+// onboarding reaparecia cada vez que el usuario cerraba y reabria la app
 // o volvia a hacer login.
 internal const val PREFS_QR_GUARDIAN = "qr_guardian_prefs"
 internal const val CLAVE_ONBOARDING_COMPLETADO = "onboarding_completado"
@@ -82,28 +86,6 @@ fun PantallaOnboarding(
     val estadoPagina = rememberPagerState(pageCount = { 3 })
     val scope = rememberCoroutineScope()
 
-    // Bug A11 fix: marca el onboarding como completado en SharedPreferences
-    // antes de invocar onComenzar(). Asi, la proxima vez que el usuario abra
-    // la app (o vuelva a loguearse), NavGuardian saltara directo a Escanear
-    // sin volver a mostrar este onboarding.
-    // M3 fix: commit() sincrono en vez de apply() async. Si la Activity se
-    // recrea (rotacion) o el proceso muere entre apply() y el siguiente
-    // arranque, el flag podia no haberse persistido al disco y el onboarding
-    // reaparecia. commit() bloquea hasta el fsync — el flag queda escrito
-    // antes de navegar a Escanear.
-    //
-    // Bug D3-P2 (Lote H): commit() hace un fsync sobre el disco, lo cual
-    // puede tardar varios milisegundos (estimacion ~5-50 ms en dispositivos
-    // gama baja con almacenamiento cifrado — prefs esta en
-    // `/data/data/<pkg>/shared_prefs/`). Si la llamada era sincrona en el
-    // main thread (como en el fix M3 original), una sola llamada podia
-    // provocar un frame drop; en casos raros (dispositivo lento + UI
-    // heavy), rozaba el umbral ANR de 5 s. Ahora envolvemos el `commit()`
-    // en una corutina con `Dispatchers.IO`, y solo disparamos `onComenzar()`
-    // cuando la escritura se completa. Benefit: no bloqueamos el main
-    // thread + garantizamos durabilidad (igual que commit() sincrono, pero
-    // fuera del main). Trade-off: el usuario puede percibir un delay de
-    // ~50 ms entre el tap y la navegacion — tolerable para un flag onboarding.
     fun completarOnboarding() {
         scope.launch {
             withContext(Dispatchers.IO) {
@@ -112,7 +94,6 @@ fun PantallaOnboarding(
                     .putBoolean(CLAVE_ONBOARDING_COMPLETADO, true)
                     .commit()
             }
-            // Solo navega tras confirmar que el flag fue persistido.
             onComenzar()
         }
     }
@@ -121,179 +102,274 @@ fun PantallaOnboarding(
         modifier = Modifier
             .fillMaxSize()
             .background(CyberFondo)
-            // Bug U1 fix: insets edge-to-edge. MainActivity llama
-            // enableEdgeToEdge() pero esta pantalla no tenia
-            // statusBarsPadding()/navigationBarsPadding() — el logo y el
-            // boton "Comenzar" se dibujaban bajo la status bar y la nav
-            // bar del sistema.
             .statusBarsPadding()
             .navigationBarsPadding()
-            .padding(horizontal = Espaciado.xxl, vertical = Espaciado.hero),
+            .padding(horizontal = Espaciado.xxl, vertical = Espaciado.lg),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.SpaceBetween
     ) {
-        // ── Logo superior + Saltar (Bug 20 fix) ──
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Espaciado.sm)
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Security,
-                    contentDescription = null,
-                    tint = CyberCyan,
-                    modifier = Modifier.size(Espaciado.xxxs) // 28dp
-                )
-                Text(
-                    text = "QR GUARDIAN",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                    color = CyberCyan
-                )
-            }
-            // Bug 20 fix: boton "Saltar" para usuarios recurrentes que no
-            // quieren paginar las 3 pantallas; llama onComenzar() directo.
-            // Bug A11 fix: llama completarOnboarding() para persistir el flag.
-            androidx.compose.material3.TextButton(onClick = { completarOnboarding() }) {
-                Text(
-                    text = "Saltar",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = CyberTextoSecundario
-                )
-            }
-        }
+        CabeceraOnboarding(onSaltara = { completarOnboarding() })
 
-        // ── Pager de 3 paginas ──
+        Spacer(modifier = Modifier.height(Espaciado.lg))
+
         HorizontalPager(
             state = estadoPagina,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1f),
         ) { pagina ->
             PaginaOnboarding(indice = pagina)
         }
 
-        // ── Indicadores de pagina ──
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(Espaciado.sm),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            repeat(3) { indice ->
-                // Bug 9 fix: antes `Modifier.size(24/8, 8)` aplastaba el dot
-                // activo a 24×8 (barra horizontal 3:1) mientras los inactivos
-                // eran 8×8 (cuadrados). Ahora ambos miden 8dp de alto y solo
-                // el ancho cambia → pill 24×8 vs cuadrado 8×8, aspect ratio
-                // consistente con clip(RoundedCornerShape(RadioBorde.sm)).
-                Box(
-                    modifier = Modifier
-                        .height(Espaciado.sm)
-                        .then(
-                            if (indice == estadoPagina.currentPage) Modifier.width(Espaciado.xxl)
-                            else Modifier.width(Espaciado.sm)
-                        )
-                        .clip(RoundedCornerShape(RadioBorde.sm))
-                        .background(
-                            if (indice == estadoPagina.currentPage) CyberVerdeAlerta
-                            else CyberTextoSecundario.copy(alpha = 0.3f)
-                        )
-                )
-            }
-        }
+        IndicadoresPagina(paginaActual = estadoPagina.currentPage)
 
-        // ── Boton Comenzar / Siguiente ──
-        Button(
-            onClick = {
-                if (estadoPagina.currentPage < 2) {
-                    scope.launch { estadoPagina.animateScrollToPage(estadoPagina.currentPage + 1) }
-                } else {
-                    // Bug A11 fix: persistir onboarding completado antes de
-                    // navegar a Escanear. Reemplaza `onComenzar()` directo.
-                    completarOnboarding()
-                }
+        BotonAccionOnboarding(
+            esUltimaPagina = estadoPagina.currentPage >= 2,
+            onSiguiente = {
+                scope.launch { estadoPagina.animateScrollToPage(estadoPagina.currentPage + 1) }
             },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(TamanosToque.boton),
-            shape = RoundedCornerShape(RadioBorde.xl),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = CyberCyan,
-                contentColor = CyberFondo
-            )
+            onComenzar = { completarOnboarding() }
+        )
+    }
+}
+
+/**
+ * Cabecera del onboarding — logo "QR GUARDIAN" a la izquierda, boton
+ * "Saltar" a la derecha. Extraida para reducir complejidad cognitiva (S3776).
+ */
+@Composable
+private fun CabeceraOnboarding(onSaltara: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Espaciado.sm)
         ) {
+            Icon(
+                imageVector = Icons.Filled.Security,
+                contentDescription = null,
+                tint = CyberCyan,
+                modifier = Modifier.size(TamanosIcono.estandar)
+            )
             Text(
-                text = if (estadoPagina.currentPage < 2) "Siguiente" else "Comenzar",
+                text = "QR GUARDIAN",
                 style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.Bold,
+                color = CyberCyan
+            )
+        }
+        androidx.compose.material3.TextButton(onClick = onSaltara) {
+            Text(
+                text = "Saltar",
+                style = MaterialTheme.typography.labelLarge,
+                color = CyberTextoSecundario
             )
         }
     }
 }
 
+/**
+ * Indicadores de pagina (puntos animados). Extraido para reducir
+ * complejidad cognitiva (S3776).
+ */
+@Composable
+private fun IndicadoresPagina(paginaActual: Int) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = Espaciado.lg),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        repeat(3) { indice ->
+            val activo = indice == paginaActual
+            val anchoIndicador by animateFloatAsState(
+                targetValue = if (activo) 32f else 8f,
+                animationSpec = tween(300),
+                label = "indicador_$indice"
+            )
+            Box(
+                modifier = Modifier
+                    .height(8.dp)
+                    .width(anchoIndicador.dp)
+                    .clip(RoundedCornerShape(RadioBorde.sm))
+                    .background(
+                        if (activo) CyberCyan
+                        else CyberTextoSecundario.copy(alpha = 0.3f)
+                    )
+            )
+            if (indice < 2) {
+                Spacer(modifier = Modifier.width(Espaciado.sm))
+            }
+        }
+    }
+}
+
+/**
+ * Boton de accion del onboarding — "Siguiente" o "Comenzar" segun la
+ * pagina actual. Extraido para reducir complejidad cognitiva (S3776).
+ */
+@Composable
+private fun BotonAccionOnboarding(
+    esUltimaPagina: Boolean,
+    onSiguiente: () -> Unit,
+    onComenzar: () -> Unit
+) {
+    Button(
+        onClick = if (esUltimaPagina) onComenzar else onSiguiente,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(TamanosToque.boton),
+        shape = RoundedCornerShape(RadioBorde.xl),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = CyberCyan,
+            contentColor = CyberFondo
+        )
+    ) {
+        Text(
+            text = if (esUltimaPagina) "Comenzar" else "Siguiente",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold
+        )
+    }
+}
+
+/**
+ * Pagina individual del onboarding — card glassmorphism con icono grande,
+ * titulo y descripcion. El icono tiene un glow cyan radial y animacion de
+ * entrada escalado.
+ */
 @Composable
 private fun PaginaOnboarding(indice: Int) {
-    val (icono, titulo, descripcion) = when (indice) {
-        0 -> Triple(
-            Icons.Filled.Security,
-            "Proteccion en tu bolsillo",
-            "Escanea cualquier codigo QR y detecta URLs maliciosas antes de abrir el enlace."
-        )
-        1 -> Triple(
-            Icons.Filled.QrCodeScanner,
-            "Analisis on-device con IA",
-            "El modelo CANINE-S Transformer (~500M) corre en tu telefono. Sin nube, sin latencia."
-        )
-        2 -> Triple(
-            Icons.Filled.VerifiedUser,
-            "Tu privacidad primero",
-            "Todo el analisis ocurre en el dispositivo. Tus datos nunca salen de tu telefono."
-        )
-        else -> Triple(Icons.Filled.Security, "", "")
-    }
+    val datos = datosPagina(indice)
 
     Column(
         modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = Espaciado.lg),
+            .fillMaxSize()
+            .padding(horizontal = Espaciado.xxl),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(Espaciado.xl)
+        verticalArrangement = Arrangement.Center
     ) {
-        // ── Icono en circulo con glow cyan ──
+        // ── Icono en circulo glow ──
+        // Circulo grande (120dp) con gradiente radial para presencia visual.
+        // El icono interior mide 56dp — 46% del contenedor, centrado.
         Box(
             modifier = Modifier
-                .size(Espaciado.gigante)
+                .size(TamanosIcono.heroContenedor) // 120dp
+                .aspectRatio(1f)
                 .clip(CircleShape)
                 .background(
                     Brush.radialGradient(
-                        colors = listOf(CyberCyan.copy(alpha = 0.2f), CyberFondo)
+                        colors = listOf(
+                            datos.colorAcento.copy(alpha = 0.25f),
+                            CyberFondo.copy(alpha = 0.0f)
+                        )
                     )
                 ),
             contentAlignment = Alignment.Center
         ) {
+            // Anillo de borde
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .clip(CircleShape)
+                    .background(
+                        Brush.radialGradient(
+                            colors = listOf(
+                                Color.Transparent,
+                                datos.colorAcento.copy(alpha = 0.08f)
+                            ),
+                            radius = 120f
+                        )
+                    )
+                    .border(
+                        width = 1.dp,
+                        color = datos.colorAcento.copy(alpha = 0.3f),
+                        shape = CircleShape
+                    )
+            )
             Icon(
-                imageVector = icono,
+                imageVector = datos.icono,
                 contentDescription = null,
-                tint = CyberCyan,
-                modifier = Modifier.size(Espaciado.gigante) // 64dp
+                tint = datos.colorAcento,
+                modifier = Modifier.size(56.dp)
             )
         }
 
+        Spacer(modifier = Modifier.height(Espaciado.xxxl))
+
         // ── Titulo ──
         Text(
-            text = titulo,
+            text = datos.titulo,
             style = MaterialTheme.typography.headlineMedium,
             fontWeight = FontWeight.Bold,
             color = CyberTextoPrincipal,
             textAlign = TextAlign.Center
         )
 
+        Spacer(modifier = Modifier.height(Espaciado.md))
+
         // ── Descripcion ──
         Text(
-            text = descripcion,
+            text = datos.descripcion,
             style = MaterialTheme.typography.bodyLarge,
             color = CyberTextoSecundario,
-            textAlign = TextAlign.Center
+            textAlign = TextAlign.Center,
+            modifier = Modifier.padding(horizontal = Espaciado.lg)
+        )
+
+        Spacer(modifier = Modifier.height(Espaciado.xxxl))
+
+        // ── Step indicator ──
+        Text(
+            text = "${indice + 1} / 3",
+            style = MaterialTheme.typography.labelMedium,
+            color = datos.colorAcento.copy(alpha = 0.7f),
+            fontWeight = FontWeight.SemiBold
         )
     }
 }
+
+/**
+ * Devuelve los datos (icono, titulo, descripcion, color de acento) de la
+ * pagina del onboarding en el indice dado. Funcion pura extraida del
+ * Composable para reducir complejidad cognitiva (S3776).
+ */
+private fun datosPagina(indice: Int): PaginaOnboarding = when (indice) {
+    0 -> PaginaOnboarding(
+        icono = Icons.Filled.Security,
+        titulo = "Proteccion en tu bolsillo",
+        descripcion = "Escanea cualquier codigo QR y detecta URLs maliciosas antes de abrir el enlace.",
+        colorAcento = CyberCyan
+    )
+    1 -> PaginaOnboarding(
+        icono = Icons.Filled.QrCodeScanner,
+        titulo = "Analisis on-device con IA",
+        descripcion = "El modelo CANINE-S Transformer corre en tu telefono. Sin nube, sin latencia.",
+        colorAcento = CyberCyan
+    )
+    2 -> PaginaOnboarding(
+        icono = Icons.Filled.VerifiedUser,
+        titulo = "Tu privacidad primero",
+        descripcion = "Todo el analisis ocurre en el dispositivo. Tus datos nunca salen de tu telefono.",
+        colorAcento = CyberVerdeAlerta
+    )
+    else -> PaginaOnboarding(
+        icono = Icons.Filled.Security,
+        titulo = "",
+        descripcion = "",
+        colorAcento = CyberCyan
+    )
+}
+
+/**
+ * Datos de una pagina del onboarding — data class para tipado seguro.
+ */
+private data class PaginaOnboarding(
+    val icono: ImageVector,
+    val titulo: String,
+    val descripcion: String,
+    val colorAcento: Color
+)

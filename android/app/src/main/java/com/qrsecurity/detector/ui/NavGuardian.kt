@@ -266,10 +266,20 @@ fun NavGuardian() {
             popExitTransition = { ExitTransition.None }
         ) {
             // ── Login (pantalla inicial si no hay sesion) ──
+            // Bug A11 fix: tras login exitoso, verificar si el onboarding ya
+            // fue completado (flag persistido en SharedPreferences). Antes,
+            // onExito siempre navegaba a ONBOARDING sin importar si el usuario
+            // ya lo habia visto — el onboarding reaparecia en cada login.
+            // Ahora: si el flag es true, navega directo a ESCANEAR; si no,
+            // navega a ONBOARDING como antes.
             composable(Rutas.LOGIN) {
                 PantallaLogin(
                     onExito = {
-                        navController.navigate(Rutas.ONBOARDING) {
+                        val onboardingDone = context
+                            .getSharedPreferences(PREFS_QR_GUARDIAN, android.content.Context.MODE_PRIVATE)
+                            .getBoolean(CLAVE_ONBOARDING_COMPLETADO, false)
+                        val destino = if (onboardingDone) Rutas.ESCANEAR else Rutas.ONBOARDING
+                        navController.navigate(destino) {
                             popUpTo(Rutas.LOGIN) { inclusive = true }
                         }
                     },
