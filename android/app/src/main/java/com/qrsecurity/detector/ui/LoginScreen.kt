@@ -32,16 +32,15 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -49,9 +48,9 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.qrsecurity.detector.R
-import com.qrsecurity.detector.api.ClienteBackend
-import com.qrsecurity.detector.sesion.SesionUsuario
 import com.qrsecurity.detector.ui.TipoMensaje
 import com.qrsecurity.detector.ui.theme.CyberCyan
 import com.qrsecurity.detector.ui.theme.CyberVerdeAlerta
@@ -60,8 +59,11 @@ import com.qrsecurity.detector.ui.theme.CyberGlass
 import com.qrsecurity.detector.ui.theme.CyberRojo
 import com.qrsecurity.detector.ui.theme.CyberTextoPrincipal
 import com.qrsecurity.detector.ui.theme.CyberTextoSecundario
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.launch
+import com.qrsecurity.detector.ui.theme.Elevacion
+import com.qrsecurity.detector.ui.theme.Espaciado
+import com.qrsecurity.detector.ui.theme.RadioBorde
+import com.qrsecurity.detector.ui.theme.TamanosIcono
+import com.qrsecurity.detector.ui.theme.TamanosToque
 
 /**
  * Pantalla de Login / Registro con usuario y password.
@@ -81,17 +83,34 @@ import kotlinx.coroutines.launch
 @Composable
 fun PantallaLogin(
     onExito: () -> Unit,
-    onMensaje: (TipoMensaje, String) -> Unit = { _, _ -> }
+    onMensaje: (TipoMensaje, String) -> Unit = { _, _ -> },
+    viewModel: LoginViewModel = hiltViewModel()
 ) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-
     var modoRegistro by remember { mutableStateOf(false) }
     var nombreUsuario by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var correo by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
-    var procesando by remember { mutableStateOf(false) }
+
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+
+    // Bug L1 fix: consumir eventos one-shot via Channel (receiveAsFlow)
+    // en lugar de LaunchedEffect(uiState.exito, uiState.error) que
+    // re-disparaba en rotacion. El Channel entrega cada evento una sola
+    // vez — no hay re-fire al recomponer tras config change.
+    LaunchedEffect(Unit) {
+        viewModel.eventos.collect { evento ->
+            when (evento) {
+                is LoginEvento.Exito -> {
+                    onMensaje(TipoMensaje.EXITO, "Sesion iniciada")
+                    onExito()
+                }
+                is LoginEvento.Error -> {
+                    onMensaje(TipoMensaje.ERROR, evento.mensaje)
+                }
+            }
+        }
+    }
 
     val estadoScroll = rememberScrollState()
     val onToggleModo = {
@@ -107,19 +126,19 @@ fun PantallaLogin(
             .imePadding()
             .navigationBarsPadding()
             .verticalScroll(estadoScroll)
-            .padding(horizontal = 24.dp, vertical = 48.dp),
+            .padding(horizontal = Espaciado.xxl, vertical = Espaciado.hero),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(32.dp, Alignment.Top)
+        verticalArrangement = Arrangement.spacedBy(Espaciado.xxxl, Alignment.Top)
     ) {
         LogoQRGuardian()
 
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(16.dp))
+                .clip(RoundedCornerShape(RadioBorde.xl))
                 .background(CyberGlass.copy(alpha = 0.85f))
-                .padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+                .padding(Espaciado.xl),
+            verticalArrangement = Arrangement.spacedBy(Espaciado.lg)
         ) {
             Text(
                 text = if (modoRegistro) "Crear cuenta" else "Iniciar sesion",
@@ -150,15 +169,14 @@ fun PantallaLogin(
             BotonAuth(
                 ParametrosBotonAuth(
                     modoRegistro = modoRegistro,
-                    procesando = procesando,
+                    procesando = uiState.procesando,
                     nombreUsuario = nombreUsuario,
                     password = password,
                     correo = correo,
-                    context = context,
-                    scope = scope,
                     onMensaje = onMensaje,
-                    onExito = onExito,
-                    onProcesando = { procesando = it }
+                    onAction = { vmAction ->
+                        viewModel.onAction(vmAction)
+                    }
                 )
             )
 
@@ -178,11 +196,11 @@ fun PantallaLogin(
 private fun LogoQRGuardian() {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+        verticalArrangement = Arrangement.spacedBy(Espaciado.md)
     ) {
         Box(
             modifier = Modifier
-                .size(120.dp)
+                .size(TamanosIcono.heroContenedor)
                 .clip(androidx.compose.foundation.shape.CircleShape)
                 .background(
                     Brush.radialGradient(
@@ -195,7 +213,7 @@ private fun LogoQRGuardian() {
                 imageVector = Icons.Filled.Security,
                 contentDescription = null,
                 tint = CyberCyan,
-                modifier = Modifier.size(64.dp)
+                modifier = Modifier.size(TamanosIcono.grande)
             )
         }
         Text(
@@ -297,9 +315,9 @@ private fun ToggleLoginRegistro(
             color = CyberCyan,
             fontWeight = FontWeight.Bold,
             modifier = Modifier
-                .clip(RoundedCornerShape(4.dp))
+                .clip(RoundedCornerShape(RadioBorde.sm))
                 .background(CyberCyan.copy(alpha = 0.1f))
-                .padding(horizontal = 6.dp, vertical = 2.dp)
+                .padding(horizontal = Espaciado.sm, vertical = Espaciado.xs)
                 .clickable(onClick = onToggle)
         )
     }
@@ -335,54 +353,6 @@ private fun manejarErrorBackend(codigo: Int, cuerpo: String?, message: String?):
     else -> "Error $codigo: ${cuerpo ?: message}"
 }
 
-/** Datos Agrupados para ejecutarAuth — evita S107 (>7 params). */
-private data class ParametrosAuth(
-    val scope: kotlinx.coroutines.CoroutineScope,
-    val modoRegistro: Boolean,
-    val nombreUsuario: String,
-    val password: String,
-    val correo: String,
-    val context: android.content.Context,
-    val onMensaje: (TipoMensaje, String) -> Unit,
-    val onExito: () -> Unit,
-    val onProcesando: (Boolean) -> Unit
-)
-
-private fun ejecutarAuth(params: ParametrosAuth) {
-    val (scope, modoRegistro, nombreUsuario, password, correo, context, onMensaje, onExito, onProcesando) = params
-    onProcesando(true)
-    scope.launch {
-        try {
-            val cliente = ClienteBackend()
-            val respuesta = if (modoRegistro) {
-                cliente.registrarUsuario(nombreUsuario, password, correo)
-            } else {
-                cliente.login(nombreUsuario, password)
-            }
-            if (respuesta.tokenApi.isBlank()) {
-                onMensaje(TipoMensaje.ERROR, "El servidor devolvio un token vacio. Intenta de nuevo.")
-                onProcesando(false)
-                return@launch
-            }
-            SesionUsuario.guardarSesion(
-                context = context,
-                token = respuesta.tokenApi,
-                usuario = respuesta.nombreUsuario ?: nombreUsuario,
-                correo = respuesta.correo ?: correo
-            )
-            onMensaje(TipoMensaje.EXITO, "Sesion iniciada")
-            onExito()
-        } catch (e: ClienteBackend.HttpBackendException) {
-            onMensaje(TipoMensaje.ERROR, manejarErrorBackend(e.codigo, e.cuerpo, e.message))
-        } catch (e: Exception) {
-            if (e is CancellationException) throw e
-            onMensaje(TipoMensaje.ERROR, "No se pudo conectar al backend: ${e.message ?: "error desconocido"}")
-        } finally {
-            onProcesando(false)
-        }
-    }
-}
-
 /** Datos agrupados para BotonAuth — evita S107 (>7 params). */
 private data class ParametrosBotonAuth(
     val modoRegistro: Boolean,
@@ -390,20 +360,21 @@ private data class ParametrosBotonAuth(
     val nombreUsuario: String,
     val password: String,
     val correo: String,
-    val context: android.content.Context,
-    val scope: kotlinx.coroutines.CoroutineScope,
     val onMensaje: (TipoMensaje, String) -> Unit,
-    val onExito: () -> Unit,
-    val onProcesando: (Boolean) -> Unit
+    val onAction: (LoginAction) -> Unit
 )
 
 /**
  * Boton de auth con validacion + indicador de carga.
  * Extraido de PantallaLogin para reducir complejidad cognitiva (S3776).
+ *
+ * Hilt: la logica de auth se delega al [LoginViewModel] via onAction
+ * (UDF). Ya no construye `ClienteBackend()` ni lanza corutinas — el
+ * VM lo hace via viewModelScope.
  */
 @Composable
 private fun BotonAuth(params: ParametrosBotonAuth) {
-    val (modoRegistro, procesando, nombreUsuario, password, correo, context, scope, onMensaje, onExito, onProcesando) = params
+    val (modoRegistro, procesando, nombreUsuario, password, correo, onMensaje, onAction) = params
     Button(
         onClick = {
             if (procesando) return@Button
@@ -412,40 +383,35 @@ private fun BotonAuth(params: ParametrosBotonAuth) {
                 onMensaje(TipoMensaje.ERROR, error)
                 return@Button
             }
-            ejecutarAuth(
-                ParametrosAuth(
-                    scope = scope,
+            onAction(
+                LoginAction.Autenticar(
                     modoRegistro = modoRegistro,
                     nombreUsuario = nombreUsuario,
                     password = password,
-                    correo = correo,
-                    context = context,
-                    onMensaje = onMensaje,
-                    onExito = onExito,
-                    onProcesando = onProcesando
+                    correo = correo
                 )
             )
         },
         enabled = !procesando,
         modifier = Modifier
             .fillMaxWidth()
-            .height(56.dp),
-        shape = RoundedCornerShape(12.dp),
+            .height(TamanosToque.boton),
+        shape = RoundedCornerShape(RadioBorde.lg),
         colors = ButtonDefaults.buttonColors(
             containerColor = CyberCyan,
             contentColor = CyberFondo,
-            disabledContainerColor = CyberCyan.copy(alpha = 0.4f),
+            disabledContainerColor = CyberCyan.copy(alpha = 0.38f),
             disabledContentColor = CyberFondo
         )
     ) {
         if (procesando) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                horizontalArrangement = Arrangement.spacedBy(Espaciado.md)
             ) {
                 CircularProgressIndicator(
-                    modifier = Modifier.size(20.dp),
-                    strokeWidth = 2.dp,
+                    modifier = Modifier.size(Espaciado.xl),
+                    strokeWidth = Elevacion.flotante,
                     color = CyberFondo
                 )
                 Text(stringResource(R.string.action_connecting), fontWeight = FontWeight.Bold)

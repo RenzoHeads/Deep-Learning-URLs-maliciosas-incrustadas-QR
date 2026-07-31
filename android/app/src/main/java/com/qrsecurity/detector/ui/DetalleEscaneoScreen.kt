@@ -59,6 +59,10 @@ import com.qrsecurity.detector.ui.theme.CyberRojo
 import com.qrsecurity.detector.ui.theme.CyberTextoPrincipal
 import com.qrsecurity.detector.ui.theme.CyberTextoSecundario
 import com.qrsecurity.detector.ui.theme.CyberVerdeAlertaClaro
+import com.qrsecurity.detector.ui.theme.Elevacion
+import com.qrsecurity.detector.ui.theme.Espaciado
+import com.qrsecurity.detector.ui.theme.RadioBorde
+import com.qrsecurity.detector.ui.theme.TamanosIcono
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -103,10 +107,10 @@ fun PantallaDetalleEscaneo(
             .fillMaxSize()
             .verticalScroll(estadoScroll)
             .background(CyberFondo)
-            .padding(horizontal = 20.dp, vertical = 24.dp)
+            .padding(horizontal = Espaciado.xl, vertical = Espaciado.xxl)
             .testTag("detalle_escaneo_root"),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(20.dp)
+        verticalArrangement = Arrangement.spacedBy(Espaciado.xl)
     ) {
         BarraSuperiorResultado(
             titulo = "Detalle del escaneo",
@@ -192,17 +196,17 @@ private fun BadgeUrlBloqueada() {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(RadioBorde.lg))
             .background(CyberRojo.copy(alpha = 0.15f))
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .padding(horizontal = Espaciado.lg, vertical = Espaciado.md),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
+        horizontalArrangement = Arrangement.spacedBy(Espaciado.sm)
     ) {
         Icon(
             imageVector = Icons.Filled.Lock,
             contentDescription = "Bloqueada",
             tint = CyberRojo,
-            modifier = Modifier.size(20.dp)
+            modifier = Modifier.size(Espaciado.xl)
         )
         Text(
             text = "URL bloqueada — no se puede abrir, copiar ni compartir",
@@ -232,13 +236,13 @@ private fun TarjetaDatosEscaneo(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .border(BorderStroke(1.dp, CyberGlassBorde), RoundedCornerShape(20.dp)),
-        shape = RoundedCornerShape(20.dp),
+            .border(BorderStroke(Elevacion.sutil, CyberGlassBorde), RoundedCornerShape(RadioBorde.xxl)),
+        shape = RoundedCornerShape(RadioBorde.xxl),
         colors = CardDefaults.cardColors(containerColor = CyberGlass)
     ) {
         Column(
-            modifier = Modifier.padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            modifier = Modifier.padding(Espaciado.xl),
+            verticalArrangement = Arrangement.spacedBy(Espaciado.lg)
         ) {
             CampoTexto("URL analizada", escaneo.urlLimpia, MaterialTheme.typography.bodyLarge, CyberTextoPrincipal)
             if (escaneo.urlOriginal != escaneo.urlLimpia) {
@@ -252,10 +256,10 @@ private fun TarjetaDatosEscaneo(
                     style = MaterialTheme.typography.labelMedium,
                     color = CyberTextoSecundario
                 )
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(Espaciado.sm))
                 LinearProgressIndicator(
                     progress = escaneo.probabilidad,
-                    modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)),
+                    modifier = Modifier.fillMaxWidth().height(Espaciado.sm).clip(RoundedCornerShape(RadioBorde.sm)),
                     color = veredicto.color,
                     trackColor = CyberGlass
                 )
@@ -272,14 +276,14 @@ private fun TarjetaDatosEscaneo(
 private fun CampoTexto(
     etiqueta: String,
     valor: String,
-    estilo: androidx.compose.material3.TextStyle,
+    estilo: androidx.compose.ui.text.TextStyle,
     color: androidx.compose.ui.graphics.Color,
     bold: Boolean = false,
     maxLines: Int = Int.MAX_VALUE
 ) {
     Column {
         Text(text = etiqueta, style = MaterialTheme.typography.labelMedium, color = CyberTextoSecundario)
-        Spacer(modifier = Modifier.height(4.dp))
+        Spacer(modifier = Modifier.height(Espaciado.xs))
         Text(
             text = valor,
             style = estilo,
@@ -298,23 +302,23 @@ private fun SeccionBloquearDenunciar(
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+        horizontalArrangement = Arrangement.spacedBy(Espaciado.md)
     ) {
         Button(
             onClick = onBloquear,
             modifier = Modifier.weight(1f).testTag("btn_bloquear_malicioso"),
             colors = ButtonDefaults.buttonColors(containerColor = CyberRojo)
         ) {
-            Icon(Icons.Filled.Block, contentDescription = null, modifier = Modifier.size(18.dp))
-            Spacer(modifier = Modifier.width(8.dp))
+            Icon(Icons.Filled.Block, contentDescription = null, modifier = Modifier.size(TamanosIcono.estandar))
+            Spacer(modifier = Modifier.width(Espaciado.sm))
             Text("Bloquear", fontWeight = FontWeight.Bold)
         }
         OutlinedButton(
             onClick = onDenunciar,
             modifier = Modifier.weight(1f).testTag("btn_denunciar_malicioso")
         ) {
-            Icon(Icons.Filled.Report, contentDescription = null, modifier = Modifier.size(18.dp))
-            Spacer(modifier = Modifier.width(8.dp))
+            Icon(Icons.Filled.Report, contentDescription = null, modifier = Modifier.size(TamanosIcono.estandar))
+            Spacer(modifier = Modifier.width(Espaciado.sm))
             Text("Denunciar")
         }
     }
@@ -324,18 +328,18 @@ private fun SeccionBloquearDenunciar(
 private fun CardAdvertenciaMalicioso(onProceder: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth().testTag("card_advertencia_malicioso"),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(RadioBorde.xl),
         colors = CardDefaults.cardColors(containerColor = CyberRojo.copy(alpha = 0.12f))
     ) {
         Column(
-            modifier = Modifier.padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            modifier = Modifier.padding(Espaciado.xl),
+            verticalArrangement = Arrangement.spacedBy(Espaciado.lg)
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                horizontalArrangement = Arrangement.spacedBy(Espaciado.md)
             ) {
-                Icon(Icons.Filled.Warning, contentDescription = "Advertencia", tint = CyberRojo, modifier = Modifier.size(28.dp))
+                Icon(Icons.Filled.Warning, contentDescription = "Advertencia", tint = CyberRojo, modifier = Modifier.size(Espaciado.xxxs))
                 Text(
                     text = "Recomendamos bloquearlo, \u00bfseguro que deseas proceder?",
                     style = MaterialTheme.typography.titleMedium,
@@ -368,7 +372,7 @@ private fun SeccionAccionesDetalle(
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+        horizontalArrangement = Arrangement.spacedBy(Espaciado.md)
     ) {
         Button(
             onClick = {
@@ -384,7 +388,9 @@ private fun SeccionAccionesDetalle(
                 }
                 try {
                     val intent = Intent(Intent.ACTION_VIEW, uri)
-                    context.startActivity(intent)
+                    val chooser = Intent.createChooser(intent, "Abrir con...")
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    context.startActivity(chooser)
                     onMensaje(TipoMensaje.EXITO, "Abriendo enlace…")
                 } catch (e: Exception) {
                     onMensaje(TipoMensaje.ERROR, "No hay app para abrir este enlace")
@@ -397,9 +403,9 @@ private fun SeccionAccionesDetalle(
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.OpenInNew,
                 contentDescription = null,
-                modifier = Modifier.size(18.dp)
+                modifier = Modifier.size(TamanosIcono.estandar)
             )
-            Spacer(modifier = Modifier.width(8.dp))
+            Spacer(modifier = Modifier.width(Espaciado.sm))
             Text("Abrir", fontWeight = FontWeight.Bold)
         }
 
@@ -417,9 +423,9 @@ private fun SeccionAccionesDetalle(
             Icon(
                 imageVector = Icons.Filled.ContentCopy,
                 contentDescription = null,
-                modifier = Modifier.size(18.dp)
+                modifier = Modifier.size(TamanosIcono.estandar)
             )
-            Spacer(modifier = Modifier.width(8.dp))
+            Spacer(modifier = Modifier.width(Espaciado.sm))
             Text("Copiar")
         }
     }
@@ -443,9 +449,9 @@ private fun SeccionAccionesDetalle(
         Icon(
             imageVector = Icons.Filled.Share,
             contentDescription = null,
-            modifier = Modifier.size(18.dp)
+            modifier = Modifier.size(TamanosIcono.estandar)
         )
-        Spacer(modifier = Modifier.width(8.dp))
+        Spacer(modifier = Modifier.width(Espaciado.sm))
         Text("Compartir URL")
     }
 }

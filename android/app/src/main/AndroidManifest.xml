@@ -27,10 +27,29 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:hardwareAccelerated="true"
+        android:enableOnBackInvokedCallback="true"
         android:networkSecurityConfig="@xml/network_security_config"
         android:dataExtractionRules="@xml/data_extraction_rules"
         tools:ignore="DataExtractionRules"
         tools:targetApi="35">
+
+        <!--
+            Deshabilita el auto-inicializador de WorkManager.
+            La app usa HiltWorkerFactory via Configuration.Provider en
+            AppSeguridadQR. Sin esto, WorkManager se inicializa on-demand
+            con DefaultWorkerFactory (sin DI), y los @HiltWorker crashean
+            silenciosamente al no poder resolver dependencias.
+        -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                android:value="androidx.startup"
+                tools:node="remove" />
+        </provider>
 
         <!-- MainActivity hosts all Compose screens (camera, result, history). -->
         <activity

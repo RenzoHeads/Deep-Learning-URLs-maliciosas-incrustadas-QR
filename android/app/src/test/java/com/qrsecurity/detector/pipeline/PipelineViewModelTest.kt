@@ -57,16 +57,34 @@ class PipelineViewModelTest {
     private lateinit var viewModel: PipelineViewModel
     private val testDispatcher = StandardTestDispatcher()
 
+    private lateinit var db: com.qrsecurity.detector.datos.local.BaseDatosSeguridad
+
     @Before
     fun setUp() {
         Dispatchers.setMain(testDispatcher)
         val app = org.robolectric.RuntimeEnvironment.getApplication()
-        viewModel = PipelineViewModel(app)
+        androidx.work.testing.WorkManagerTestInitHelper.initializeTestWorkManager(
+            app,
+            androidx.work.Configuration.Builder()
+                .setMinimumLoggingLevel(android.util.Log.DEBUG)
+                .build()
+        )
+        db = androidx.room.Room.inMemoryDatabaseBuilder(
+            app,
+            com.qrsecurity.detector.datos.local.BaseDatosSeguridad::class.java
+        ).allowMainThreadQueries().build()
+        val backend = com.qrsecurity.detector.api.ClienteBackend()
+        val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true; encodeDefaults = true }
+        val repoEscaneos = com.qrsecurity.detector.datos.repositorios.RepositorioEscaneos(db, backend, json, testDispatcher)
+        val mediadorSync = com.qrsecurity.detector.datos.sync.MediadorSincronizacion(app)
+        val pipeline = com.qrsecurity.detector.pipeline.Pipeline(app, db, backend, json, repoEscaneos, mediadorSync)
+        viewModel = PipelineViewModel(pipeline)
     }
 
     @After
     fun tearDown() {
         Dispatchers.resetMain()
+        db.close()
     }
 
     // ──────────────────────────────────────────────────────────────

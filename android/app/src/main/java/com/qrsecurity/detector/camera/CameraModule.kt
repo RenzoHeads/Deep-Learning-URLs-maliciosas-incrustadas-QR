@@ -223,15 +223,48 @@ class ModuloCamara(
     }
 
     /**
-     * Libera el escaner ML Kit. El executor del analizador se gestiona via
-     * [releaseCameraResources]; [detener] se mantiene por compatibilidad con
-     * quien ya llamaba a este metodo y delega en [releaseCameraResources]
-     * para no duplicar la logica de shutdown.
-     * Llamar desde [androidx.lifecycle.LifecycleObserver.onDestroy].
+     * Pausa la camara: detiene el executor del analizador y desvincula los
+     * casos de uso de CameraX, pero NO cierra el BarcodeScanner de ML Kit.
+     *
+     * Bug C1 fix: antes `detener()` llamaba `escanerCodigosBarras.close()`,
+     * destruyendo permanentemente el scanner ML Kit. Como el scanner es un
+     * campo creado una sola vez (linea 74) y nunca se recrea, al volver de
+     * ON_PAUSE → ON_RESUME la llamada `iniciar()` → `analizarFrame` →
+     * `escanerCodigosBarras.process()` lanzaba
+     * `IllegalStateException: Attempting to use a closed client.` en cada
+     * background→foreground.
+     *
+     * Ahora `detener()` solo pausa (shutdown del executor + unbind de
+     * CameraX). El scanner se cierra una sola vez en [liberarEscaner],
+     * invocado desde `onDispose` cuando ScanScreen sale de composicion.
+     *
+     * Llamar desde `Lifecycle.Event.ON_PAUSE`.
      */
     fun detener() {
         releaseCameraResources()
-        escanerCodigosBarras.close()
+        // Desvincular casos de uso de CameraX para que la camara se detenga,
+        // pero sin cerrar el scanner ML Kit.
+        runCatching {
+            val futuroProveedor = ProcessCameraProvider.getInstance(context)
+            futuroProveedor.addListener({
+                runCatching { futuroProveedor.get().unbindAll() }
+            }, ContextCompat.getMainExecutor(context))
+        }
+    }
+
+    /**
+     * Cierra permanentemente el BarcodeScanner de ML Kit.
+     *
+     * Bug C1 fix: separar la pausa (`detener`) del cierre del scanner.
+     * Este metodo debe llamarse una sola vez, cuando la pantalla sale de
+     * composicion permanentemente (onDispose del DisposableEffect en
+     * ScanScreen), NO en cada ON_PAUSE.
+     *
+     * Idempotente: seguro llamarlo multiples veces (close en un scanner ya
+     * cerrado es no-op en ML Kit).
+     */
+    fun liberarEscaner() {
+        runCatching { escanerCodigosBarras.close() }
     }
 
     /**

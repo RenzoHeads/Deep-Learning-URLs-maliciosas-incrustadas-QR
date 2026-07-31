@@ -38,6 +38,14 @@ class RepositorioUrlsBloqueadas(
     fun observarTodos(): Flow<List<UrlBloqueadaEntity>> = db.urlBloqueadaDao().observarTodos()
 
     /**
+     * Consulta puntual (no reactiva) para verificar si una URL esta
+     * bloqueada. Usado por DetalleEscaneoViewModel para mostrar el
+     * estado de bloqueo de la URL asociada al escaneo.
+     */
+    suspend fun obtenerPorUrl(url: String): UrlBloqueadaEntity? =
+        withContext(ioDispatcher) { db.urlBloqueadaDao().obtenerPorUrl(url) }
+
+    /**
      * Bloquea una URL localmente. NO llama al backend.
      * Genera UUID client, inserta con dirty=true, encola op CREATE.
      *

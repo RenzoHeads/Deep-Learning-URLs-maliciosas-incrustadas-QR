@@ -39,6 +39,9 @@ import com.qrsecurity.detector.ui.theme.CyberVerdeAlerta
 import com.qrsecurity.detector.ui.theme.CyberFondo
 import com.qrsecurity.detector.ui.theme.CyberTextoPrincipal
 import com.qrsecurity.detector.ui.theme.CyberTextoSecundario
+import com.qrsecurity.detector.ui.theme.Espaciado
+import com.qrsecurity.detector.ui.theme.RadioBorde
+import com.qrsecurity.detector.ui.theme.TamanosToque
 
 /**
  * Pantalla de Resultado Seguro — cyber-sentinel design.
@@ -64,10 +67,10 @@ fun PantallaResultadoSeguro(
             .fillMaxSize()
             .verticalScroll(estadoScroll)
             .background(CyberFondo)
-            .padding(horizontal = 20.dp, vertical = 24.dp)
+            .padding(horizontal = Espaciado.xl, vertical = Espaciado.xxl)
             .testTag("resultado_seguro_root"),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(20.dp)
+        verticalArrangement = Arrangement.spacedBy(Espaciado.xl)
     ) {
         // ── Barra superior (shared component) ──
         BarraSuperiorResultado(
@@ -109,7 +112,7 @@ fun PantallaResultadoSeguro(
             // Contenido extra: URL normalizada si difiere
             if (resultado.urlLimpia != resultado.urlOriginal.removePrefix("https://")
                     .removePrefix("http://").removePrefix("www.")) {
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(Espaciado.xs))
                 Text(
                     text = "URL NORMALIZADA",
                     style = MaterialTheme.typography.labelMedium,
@@ -128,11 +131,11 @@ fun PantallaResultadoSeguro(
         // ── Boton Abrir enlace ──
         OutlinedButton(
             onClick = { abrirEnlaceSeguro(context, resultado.urlOriginal, onMensaje) },
-            modifier = Modifier.fillMaxWidth().height(52.dp).testTag("btn_abrir_enlace"),
-            shape = RoundedCornerShape(12.dp)
+            modifier = Modifier.fillMaxWidth().height(TamanosToque.boton).testTag("btn_abrir_enlace"),
+            shape = RoundedCornerShape(RadioBorde.lg)
         ) {
             Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = "Abrir enlace", tint = CyberCyan)
-            Spacer(modifier = Modifier.width(8.dp))
+            Spacer(modifier = Modifier.width(Espaciado.sm))
             Text(stringResource(R.string.action_open_url), color = CyberCyan)
         }
 

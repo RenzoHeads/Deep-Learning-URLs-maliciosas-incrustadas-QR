@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -28,23 +29,16 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.qrsecurity.detector.R
-import com.qrsecurity.detector.api.ClienteBackend
-import com.qrsecurity.detector.datos.local.BaseDatosSeguridad
-import com.qrsecurity.detector.datos.repositorios.RepositorioUrlsBloqueadas
-import com.qrsecurity.detector.datos.sync.MediadorSincronizacion
 import com.qrsecurity.detector.pipeline.Pipeline
 import com.qrsecurity.detector.ui.theme.CyberCyan
 import com.qrsecurity.detector.ui.theme.CyberFondo
@@ -52,9 +46,11 @@ import com.qrsecurity.detector.ui.theme.CyberRojo
 import com.qrsecurity.detector.ui.theme.CyberRojoFondo
 import com.qrsecurity.detector.ui.theme.CyberTextoPrincipal
 import com.qrsecurity.detector.ui.theme.CyberTextoSecundario
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.launch
-import kotlinx.serialization.json.Json
+import com.qrsecurity.detector.ui.theme.Espaciado
+import com.qrsecurity.detector.ui.theme.RadioBorde
+import com.qrsecurity.detector.ui.theme.TamanosIcono
+import com.qrsecurity.detector.ui.theme.Elevacion
+import com.qrsecurity.detector.ui.theme.TamanosToque
 
 /**
  * Pantalla de Resultado Malicioso — cyber-sentinel design.
@@ -74,6 +70,11 @@ import kotlinx.serialization.json.Json
  * Ahora el bloqueo siempre se registra localmente y los errores del Room
  * se muestran via Snackbar.
  *
+ * Inyeccion: [ResultadoMaliciosoViewModel] recibe el repositorio y el
+ * mediador de sync via Hilt (@HiltViewModel). La Screen recoge el UiState
+ * reactivamente (collectAsStateWithLifecycle) y despacha acciones via
+ * onAction (UDF).
+ *
  * @param onDenunciar Recibe la URL detectada (`resultado.urlOriginal`) para que
  *  NavGuardian la inyecte como `urlPrevia` en la pantalla Denunciar. Antes era
  *  `() -> Unit` y la URL se perdia al navegar (Bug 11).
@@ -84,19 +85,30 @@ fun PantallaResultadoMalicioso(
     onEscanearOtro: () -> Unit,
     onDenunciar: (String) -> Unit,
     onVerBloqueadas: () -> Unit,
-    onMensaje: (TipoMensaje, String) -> Unit = { _, _ -> }
+    onMensaje: (TipoMensaje, String) -> Unit = { _, _ -> },
+    viewModel: ResultadoMaliciosoViewModel = hiltViewModel()
 ) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     val estadoScroll = rememberScrollState()
-    // Bug A5/A6 fix: repositorio offline-first en vez de cliente directo.
-    val db = remember { BaseDatosSeguridad.get(context) }
-    val backend = remember { ClienteBackend(ClienteBackend.BASE_POR_DEFECTO) }
-    val json = remember { Json { ignoreUnknownKeys = true; encodeDefaults = true } }
-    val repoUrls = remember { RepositorioUrlsBloqueadas(db, backend, json) }
-    val mediadorSync = remember { MediadorSincronizacion(context) }
-    var bloqueando by rememberSaveable { mutableStateOf(false) }
-    var bloqueadaOk by rememberSaveable { mutableStateOf<Boolean?>(null) }
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+
+    // Recoger error del UiState y disparar snackbar (UDF).
+    LaunchedEffect(uiState.error) {
+        uiState.error?.let { msg ->
+            onMensaje(TipoMensaje.ERROR, msg)
+            viewModel.consumirError()
+        }
+    }
+    // Recoger exito del bloqueo y mostrar snackbar.
+    // Bug S6 fix: consumir bloqueadaOk tras mostrar el snackbar para que
+    // no re-dispare en rotacion. Antes bloqueadaOk se seteaba a true pero
+    // nunca se consumia — LaunchedEffect re-disparaba el snackbar en
+    // rotacion.
+    LaunchedEffect(uiState.bloqueadaOk) {
+        if (uiState.bloqueadaOk == true) {
+            onMensaje(TipoMensaje.EXITO, "URL bloqueada")
+            viewModel.consumirBloqueoOk()
+        }
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         Column(
@@ -104,9 +116,9 @@ fun PantallaResultadoMalicioso(
                 .fillMaxSize()
                 .verticalScroll(estadoScroll)
                 .background(CyberFondo)
-                .padding(horizontal = 20.dp, vertical = 24.dp),
+                .padding(horizontal = Espaciado.xl, vertical = Espaciado.xxl),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(20.dp)
+            verticalArrangement = Arrangement.spacedBy(Espaciado.xl)
         ) {
         // ── Barra superior (shared component) ──
         BarraSuperiorResultado(
@@ -138,15 +150,13 @@ fun PantallaResultadoMalicioso(
         // ── Tarjeta glass roja con advertencia ──
         Card(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(16.dp),
+            shape = RoundedCornerShape(RadioBorde.xl),
             colors = CardDefaults.cardColors(containerColor = CyberRojoFondo.copy(alpha = 0.5f))
         ) {
-            Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(modifier = Modifier.padding(Espaciado.xl), verticalArrangement = Arrangement.spacedBy(Espaciado.sm)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    // Bug 15 fix: el hero icon ya es Warning; usar Report en la
-                    // card para diferenciar visualmente y evitar redundancia.
-                    Icon(Icons.Filled.Report, contentDescription = null, tint = CyberRojo, modifier = Modifier.size(20.dp))
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Icon(Icons.Filled.Report, contentDescription = null, tint = CyberRojo, modifier = Modifier.size(Espaciado.xl))
+                    Spacer(modifier = Modifier.width(Espaciado.sm))
                     Text(
                         text = "NO RECOMENDAMOS ABRIR ESTE ENLACE",
                         style = MaterialTheme.typography.labelMedium,
@@ -155,8 +165,6 @@ fun PantallaResultadoMalicioso(
                     )
                 }
                 Text(
-                    // Bug 15B fix: el motor actual es aleatorio determinista (no
-                    // CANINE-S). Texto generico coincide con la realidad.
                     text = "El sistema de deteccion identifico indicadores de phishing en esta URL.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = CyberTextoPrincipal
@@ -174,57 +182,51 @@ fun PantallaResultadoMalicioso(
         // ── Boton Denunciar URL ──
         Button(
             onClick = { onDenunciar(resultado.urlOriginal) },
-            modifier = Modifier.fillMaxWidth().height(52.dp),
-            shape = RoundedCornerShape(12.dp),
+            modifier = Modifier.fillMaxWidth().height(TamanosToque.boton),
+            shape = RoundedCornerShape(RadioBorde.lg),
             colors = ButtonDefaults.buttonColors(
                 containerColor = CyberRojo,
                 contentColor = CyberFondo
             )
         ) {
             Icon(Icons.Filled.Report, contentDescription = "Reportar")
-            Spacer(modifier = Modifier.width(8.dp))
+            Spacer(modifier = Modifier.width(Espaciado.sm))
             Text(stringResource(R.string.action_report_url), fontWeight = FontWeight.Bold)
         }
 
         // ── Boton Bloquear URL (offline-first Room + pending_ops) ──
         Button(
             onClick = {
-                if (bloqueando) return@Button
-                bloquearUrl(
-                    ParametrosBloqueo(
-                        scope = scope,
-                        repoUrls = repoUrls,
-                        mediadorSync = mediadorSync,
+                if (uiState.bloqueando) return@Button
+                viewModel.onAction(
+                    ResultadoMaliciosoAction.BloquearUrl(
                         urlLimpia = resultado.urlLimpia,
-                        probabilidad = resultado.probabilidad,
-                        onMensaje = onMensaje,
-                        onBloqueando = { bloqueando = it },
-                        onResultado = { bloqueadaOk = it }
+                        probabilidad = resultado.probabilidad
                     )
                 )
             },
-            enabled = !bloqueando,
-            modifier = Modifier.fillMaxWidth().height(52.dp),
-            shape = RoundedCornerShape(12.dp),
+            enabled = !uiState.bloqueando,
+            modifier = Modifier.fillMaxWidth().height(TamanosToque.boton),
+            shape = RoundedCornerShape(RadioBorde.lg),
             colors = ButtonDefaults.buttonColors(
                 containerColor = CyberRojo,
                 contentColor = CyberFondo,
-                disabledContainerColor = CyberRojo.copy(alpha = 0.4f)
+                disabledContainerColor = CyberRojo.copy(alpha = 0.38f)
             )
         ) {
-            if (bloqueando) {
+            if (uiState.bloqueando) {
                 CircularProgressIndicator(
-                    modifier = Modifier.size(20.dp),
-                    strokeWidth = 2.dp,
+                    modifier = Modifier.size(Espaciado.xl),
+                    strokeWidth = Elevacion.flotante,
                     color = CyberFondo
                 )
-                Spacer(modifier = Modifier.width(12.dp))
+                Spacer(modifier = Modifier.width(Espaciado.md))
                 Text(stringResource(R.string.action_block_in_progress), fontWeight = FontWeight.Bold)
             } else {
                 Icon(Icons.Filled.Block, contentDescription = "Bloquear")
-                Spacer(modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.width(Espaciado.sm))
                 Text(
-                    text = when (bloqueadaOk) {
+                    text = when (uiState.bloqueadaOk) {
                         true -> "URL bloqueada"
                         else -> "Bloquear URL"
                     },
@@ -236,11 +238,11 @@ fun PantallaResultadoMalicioso(
         // ── Boton Ver URLs bloqueadas ──
         OutlinedButton(
             onClick = onVerBloqueadas,
-            modifier = Modifier.fillMaxWidth().height(52.dp),
-            shape = RoundedCornerShape(12.dp)
+            modifier = Modifier.fillMaxWidth().height(TamanosToque.boton),
+            shape = RoundedCornerShape(RadioBorde.lg)
         ) {
             Icon(Icons.Filled.Block, contentDescription = null, tint = CyberCyan)
-            Spacer(modifier = Modifier.width(8.dp))
+            Spacer(modifier = Modifier.width(Espaciado.sm))
             Text(stringResource(R.string.action_view_blocked), color = CyberCyan)
         }
 
@@ -254,44 +256,5 @@ fun PantallaResultadoMalicioso(
         BotonEscanearOtro(onEscanearOtro = onEscanearOtro)
         }
 
-    }
-}
-
-/**
- * Encola bloqueo offline-first en Room + pending_ops y dispara sync.
- * Bug A5/A6 fix: escribe local primero, no espera al backend.
- * H3 fix: re-throw CancellationException para respetar scope cancelado.
- */
-private data class ParametrosBloqueo(
-    val scope: kotlinx.coroutines.CoroutineScope,
-    val repoUrls: com.qrsecurity.detector.datos.RepositorioUrls,
-    val mediadorSync: com.qrsecurity.detector.datos.sync.MediadorSync,
-    val urlLimpia: String,
-    val probabilidad: Float,
-    val onMensaje: (TipoMensaje, String) -> Unit,
-    val onBloqueando: (Boolean) -> Unit,
-    val onResultado: (Boolean?) -> Unit
-)
-
-private fun bloquearUrl(params: ParametrosBloqueo) {
-    val (scope, repoUrls, mediadorSync, urlLimpia, probabilidad, onMensaje, onBloqueando, onResultado) = params
-    onBloqueando(true)
-    onResultado(null)
-    scope.launch {
-        try {
-            repoUrls.bloquearLocal(
-                url = urlLimpia,
-                razon = "Malicioso (probabilidad ${(probabilidad * 100).toInt()}%)"
-            )
-            mediadorSync.dispararSyncUnica()
-            onResultado(true)
-            onMensaje(TipoMensaje.EXITO, "URL bloqueada")
-        } catch (e: Exception) {
-            if (e is CancellationException) throw e
-            onResultado(false)
-            onMensaje(TipoMensaje.ERROR, "No se pudo bloquear la URL: ${e.message ?: "error desconocido"}")
-        } finally {
-            onBloqueando(false)
-        }
     }
 }

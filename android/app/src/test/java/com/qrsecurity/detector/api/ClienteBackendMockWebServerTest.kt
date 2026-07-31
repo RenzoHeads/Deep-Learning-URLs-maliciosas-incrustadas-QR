@@ -130,10 +130,10 @@ class ClienteBackendMockWebServerTest {
 
         // Then: el DTO se deserializo correctamente.
         assertEquals("esc-001", resultado.id)
-        assertEquals("malware.example.com", resultado.url_limpia)
+        assertEquals("malware.example.com", resultado.urlLimpia)
         assertEquals(0.92f, resultado.probabilidad, 0.001f)
-        assertTrue("es_malicioso debe ser true", resultado.es_malicioso)
-        assertEquals("MALICIOSO", resultado.nivel_alerta)
+        assertTrue("es_malicioso debe ser true", resultado.esMalicioso)
+        assertEquals("MALICIOSO", resultado.nivelAlerta)
     }
 
     @Test
@@ -172,9 +172,9 @@ class ClienteBackendMockWebServerTest {
         )
 
         // DTO deserializado.
-        assertEquals("usr-001", resultado.id_usuario)
-        assertEquals("tok-abc-123", resultado.token_api)
-        assertEquals("tester", resultado.nombre_usuario)
+        assertEquals("usr-001", resultado.idUsuario)
+        assertEquals("tok-abc-123", resultado.tokenApi)
+        assertEquals("tester", resultado.nombreUsuario)
     }
 
     // ──────────────────────────────────────────────────────────────

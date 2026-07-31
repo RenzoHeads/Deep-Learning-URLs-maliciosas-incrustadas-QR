@@ -42,6 +42,10 @@ import com.qrsecurity.detector.ui.theme.AlertaSeguroFondo
 import com.qrsecurity.detector.ui.theme.AlertaSospechoso
 import com.qrsecurity.detector.ui.theme.AlertaSospechosoFondo
 import com.qrsecurity.detector.ui.theme.CyberGlass
+import com.qrsecurity.detector.ui.theme.Elevacion
+import com.qrsecurity.detector.ui.theme.Espaciado
+import com.qrsecurity.detector.ui.theme.RadioBorde
+import com.qrsecurity.detector.ui.theme.TamanosIcono
 
 /**
  * Componente Compose de tarjeta de alerta con design system Cyber-Sentinel.
@@ -81,19 +85,19 @@ fun TarjetaAlerta(
 
     Card(
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(RadioBorde.xl),
         colors = CardDefaults.cardColors(containerColor = fondoAnimado),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+        elevation = CardDefaults.cardElevation(defaultElevation = Elevacion.ninguna)
     ) {
         Column(
-            modifier = Modifier.padding(20.dp),
+            modifier = Modifier.padding(Espaciado.xl),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(Espaciado.md)
         ) {
             // ── Icono de estado en insignia circular con glow ──
             Box(
                 modifier = Modifier
-                    .size(72.dp)
+                    .size(Espaciado.gigante)
                     .clip(CircleShape)
                     .background(
                         Brush.radialGradient(
@@ -105,12 +109,12 @@ fun TarjetaAlerta(
                 Icon(
                     imageVector = icono,
                     contentDescription = titulo,
-                    modifier = Modifier.size(40.dp),
+                    modifier = Modifier.size(TamanosIcono.mediano),
                     tint = colorIconoAnimado
                 )
             }
 
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(Espaciado.xs))
 
             // ── Titulo ──
             Text(
@@ -153,20 +157,20 @@ private fun BarraProbabilidad(
     Row(
         modifier = modifier,
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
+        horizontalArrangement = Arrangement.spacedBy(Espaciado.sm)
     ) {
         Box(
             modifier = Modifier
                 .weight(1f)
-                .height(8.dp)
-                .clip(RoundedCornerShape(4.dp))
+                .height(Espaciado.sm)
+                .clip(RoundedCornerShape(RadioBorde.sm))
                 .background(CyberGlass)
         ) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth(probabilidad.coerceIn(0f, 1f))
-                    .height(8.dp)
-                    .clip(RoundedCornerShape(4.dp))
+                    .height(Espaciado.sm)
+                    .clip(RoundedCornerShape(RadioBorde.sm))
                     .background(
                         Brush.horizontalGradient(
                             listOf(colorBarra.copy(alpha = 0.6f), colorBarra)

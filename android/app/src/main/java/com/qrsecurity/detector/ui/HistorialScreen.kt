@@ -45,14 +45,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.qrsecurity.detector.datos.local.entidades.EscaneoEntity
-import com.qrsecurity.detector.datos.sync.MediadorSincronizacion
 import com.qrsecurity.detector.ui.TipoMensaje
 import com.qrsecurity.detector.ui.theme.CyberCyan
 import com.qrsecurity.detector.ui.theme.CyberVerdeAlerta
@@ -62,6 +60,10 @@ import com.qrsecurity.detector.ui.theme.CyberGlass
 import com.qrsecurity.detector.ui.theme.CyberRojo
 import com.qrsecurity.detector.ui.theme.CyberTextoPrincipal
 import com.qrsecurity.detector.ui.theme.CyberTextoSecundario
+import com.qrsecurity.detector.ui.theme.Elevacion
+import com.qrsecurity.detector.ui.theme.Espaciado
+import com.qrsecurity.detector.ui.theme.RadioBorde
+import com.qrsecurity.detector.ui.theme.TamanosIcono
 import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.ZoneId
@@ -114,15 +116,15 @@ fun PantallaHistorial(
     onVerDetalle: (String) -> Unit = {},
     onMensaje: (TipoMensaje, String) -> Unit = { _, _ -> }
 ) {
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
     // Performance fix: los Flows de Room se hospedan en DatosTabsViewModel
     // (scoped al NavGuardian, fuera del NavHost) para que no se cancelen al
     // cambiar de tab. El VM se pasa como parametro desde NavGuardian para
     // garantizar que Historial y Bloqueadas compartan la misma instancia.
+    // Hilt: repoEscaneos y mediadorSync se inyectan via DatosTabsViewModel.
     val repoEscaneos = datosViewModel.repoEscaneos
-    val mediadorSync = remember { MediadorSincronizacion(context) }
+    val mediadorSync = datosViewModel.mediadorSync
 
     var filtroActual by remember { mutableStateOf(FiltroHistorial.TODOS) }
 
@@ -147,11 +149,11 @@ fun PantallaHistorial(
 
     Box(modifier = Modifier.fillMaxSize().background(CyberFondo)) {
         Column(
-            modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)
+            modifier = Modifier.fillMaxSize().padding(horizontal = Espaciado.lg)
         ) {
             // ── Top AppBar ──
             Row(
-                modifier = Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 8.dp),
+                modifier = Modifier.fillMaxWidth().padding(top = Espaciado.lg, bottom = Espaciado.sm),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
@@ -160,9 +162,9 @@ fun PantallaHistorial(
                         imageVector = Icons.Filled.CheckCircle,
                         contentDescription = null,
                         tint = CyberCyan,
-                        modifier = Modifier.size(24.dp)
+                        modifier = Modifier.size(TamanosIcono.estandar)
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.width(Espaciado.sm))
                     Text(
                         text = "QR GUARDIAN",
                         style = MaterialTheme.typography.titleMedium,
@@ -192,12 +194,12 @@ fun PantallaHistorial(
                 color = CyberTextoSecundario
             )
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(Espaciado.lg))
 
             // ── Stats row (3 tarjetas glass) ──
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(Espaciado.sm)
             ) {
                 TarjetaEstadistica(
                     etiqueta = "Total",
@@ -219,12 +221,12 @@ fun PantallaHistorial(
                 )
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(Espaciado.lg))
 
             // ── Filter chips ──
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(Espaciado.sm)
             ) {
                 FiltroHistorial.entries.forEach { filtro ->
                     ChipFiltro(
@@ -235,7 +237,7 @@ fun PantallaHistorial(
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(Espaciado.lg))
 
             // ── Estado: vacio / lista ──
             // Performance fix: historial nunca es null ahora (el StateFlow
@@ -258,7 +260,7 @@ fun PantallaHistorial(
             onClick = onEscanear,
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(24.dp),
+                .padding(Espaciado.xxl),
             containerColor = CyberCyan,
             contentColor = CyberFondo
         ) {
@@ -274,16 +276,23 @@ fun PantallaHistorial(
                 colorConfirmar = CyberRojo,
                 onConfirmar = {
                     val aEliminar = escaneo
-                    escaneoEliminar = null
+                    // Bug D6 fix: NO cerrar el dialogo antes de que Room
+                    // confirme. Antes se seteaba escaneoEliminar = null aqui
+                    // y si eliminarLocal fallaba, el usuario veia el
+                    // snackbar de error pero el dialogo ya estaba cerrado
+                    // — no podia reintentar. Ahora se cierra solo tras
+                    // exito (dentro del try).
                     scope.launch {
                         // Offline-first: borra local + encola DELETE en outbox.
                         // El SyncWorker lo envia al backend cuando haya red.
                         try {
                             repoEscaneos.eliminarLocal(aEliminar.id)
                             mediadorSync.dispararSyncUnica()
+                            escaneoEliminar = null
                             onMensaje(TipoMensaje.EXITO, "Escaneo eliminado")
                         } catch (e: Exception) {
                             onMensaje(TipoMensaje.ERROR, "No se pudo eliminar: ${e.message ?: "error"}")
+                            // Dialogo queda abierto para reintentar.
                         }
                     }
                 },
@@ -304,9 +313,9 @@ private fun EstadoVacio(totalEscaneos: Int) {
             imageVector = Icons.Filled.CheckCircle,
             contentDescription = null,
             tint = CyberCyan.copy(alpha = 0.3f),
-            modifier = Modifier.size(80.dp)
+            modifier = Modifier.size(TamanosIcono.grande)
         )
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(Espaciado.lg))
         Text(
             text = if (totalEscaneos == 0) "Aun no hay escaneos"
                    else "No hay entradas para este filtro",
@@ -314,7 +323,7 @@ private fun EstadoVacio(totalEscaneos: Int) {
             fontWeight = FontWeight.Bold,
             color = CyberTextoPrincipal
         )
-        Spacer(modifier = Modifier.height(4.dp))
+        Spacer(modifier = Modifier.height(Espaciado.xs))
         Text(
             text = if (totalEscaneos == 0) "Escanea un codigo QR para comenzar"
                    else "Prueba con otro filtro",
@@ -333,8 +342,8 @@ private fun ListaHistorial(
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 96.dp)
+        verticalArrangement = Arrangement.spacedBy(Espaciado.sm),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = Espaciado.gigante)
     ) {
         items(lista, key = { it.id }) { escaneo ->
             TarjetaHistorial(
@@ -355,11 +364,11 @@ private fun TarjetaEstadistica(
 ) {
     Card(
         modifier = modifier,
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(RadioBorde.xxl),
         colors = CardDefaults.cardColors(containerColor = CyberGlass)
     ) {
         Column(
-            modifier = Modifier.padding(12.dp),
+            modifier = Modifier.padding(Espaciado.md),
             horizontalAlignment = Alignment.Start
         ) {
             Text(
@@ -388,10 +397,10 @@ private fun ChipFiltro(
 
     Box(
         modifier = Modifier
-            .clip(RoundedCornerShape(50))
+            .clip(RadioBorde.full)
             .background(colorFondo)
             .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .padding(horizontal = Espaciado.lg, vertical = Espaciado.sm)
     ) {
         Text(
             text = etiqueta,
@@ -436,12 +445,12 @@ private fun TarjetaHistorial(
             .fillMaxWidth()
             // Bug DETAIL-1 fix: tarjeta clicable para abrir el detalle del escaneo.
             .clickable(onClick = onVerDetalle),
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(RadioBorde.xxl),
         colors = CardDefaults.cardColors(containerColor = CyberGlass),
-        border = androidx.compose.foundation.BorderStroke(1.dp, CyberGlassBorde)
+        border = androidx.compose.foundation.BorderStroke(Elevacion.sutil, CyberGlassBorde)
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            modifier = Modifier.fillMaxWidth().padding(Espaciado.lg),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
@@ -451,14 +460,14 @@ private fun TarjetaHistorial(
             ) {
                 Box(
                     modifier = Modifier
-                        .size(40.dp)
-                        .clip(RoundedCornerShape(8.dp))
+                        .size(TamanosIcono.mediano)
+                        .clip(RoundedCornerShape(RadioBorde.md))
                         .background(colorIcono.copy(alpha = 0.1f)),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(icono, contentDescription = null, tint = colorIcono, modifier = Modifier.size(24.dp))
+                    Icon(icono, contentDescription = null, tint = colorIcono, modifier = Modifier.size(TamanosIcono.estandar))
                 }
-                Spacer(modifier = Modifier.width(12.dp))
+                Spacer(modifier = Modifier.width(Espaciado.md))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = escaneo.urlLimpia,

@@ -1,6 +1,7 @@
 package com.qrsecurity.detector.datos.sync
 
 import android.content.Context
+import android.util.Log
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
@@ -10,6 +11,8 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import java.util.concurrent.TimeUnit
+import javax.inject.Inject
+import javax.inject.Singleton
 
 /**
  * Mediador que despacha el [SyncWorker] de WorkManager.
@@ -33,9 +36,17 @@ import java.util.concurrent.TimeUnit
  * Inicializacion: llamar a [programarSyncPeriodica] una sola vez por proceso
  * (idealmente en [com.qrsecurity.detector.AppSeguridadQR.onCreate]).
  */
-class MediadorSincronizacion(private val context: Context) {
+@Singleton
+open class MediadorSincronizacion @Inject constructor(
+    private val context: Context
+) {
 
-    private val workManager: WorkManager = WorkManager.getInstance(context)
+    private val workManager: WorkManager? = try {
+        WorkManager.getInstance(context)
+    } catch (e: Exception) {
+        android.util.Log.e("MediadorSync", "WorkManager.getInstance() fallo", e)
+        null
+    }
 
     /**
      * Dispara un sync **una sola vez** ahora. Respeta cualquier sync one-shot
@@ -58,7 +69,12 @@ class MediadorSincronizacion(private val context: Context) {
      *  - Tras bloquear una URL / crear denuncia.
      *  - Cuando [MonitorRed] emite `true` despues de offline.
      */
-    fun dispararSyncUnica() {
+    open fun dispararSyncUnica() {
+        val wm = workManager ?: run {
+            Log.w("MediadorSync", "dispararSyncUnica() — WorkManager no inicializado, skip")
+            return
+        }
+        Log.d("MediadorSync", "dispararSyncUnica() — encolando SyncWorker")
         val constraints = Constraints.Builder()
             .setRequiredNetworkType(NetworkType.CONNECTED)
             .build()
@@ -87,7 +103,7 @@ class MediadorSincronizacion(private val context: Context) {
         // APPEND garantiza que cada nuevo disparo encole un worker fresh
         // detras del anterior. El worker es idempotente: si la cola esta vacia,
         // el segundo worker no hace nada (minPendingId() devuelve null → break).
-        workManager.enqueueUniqueWork(
+        wm.enqueueUniqueWork(
             SyncWorker.NOMBRE_TRABAJO,
             ExistingWorkPolicy.APPEND,
             request
@@ -115,7 +131,11 @@ class MediadorSincronizacion(private val context: Context) {
      * para optimizar bateria. Es un safety-net; los sync reales ocurren via
      * [dispararSyncUnica] tras cada write y al volver la red.
      */
-    fun programarSyncPeriodica() {
+    open fun programarSyncPeriodica() {
+        val wm = workManager ?: run {
+            Log.w("MediadorSync", "programarSyncPeriodica() — WorkManager no inicializado, skip")
+            return
+        }
         // M11 fix — UNMETERED: el sync periodico no debe consumir datos medidos.
         val constraints = Constraints.Builder()
             .setRequiredNetworkType(NetworkType.UNMETERED)
@@ -128,7 +148,7 @@ class MediadorSincronizacion(private val context: Context) {
             .build()
 
         // M12 fix — UPDATE: aplica nuevos constraints/interval tras upgrades.
-        workManager.enqueueUniquePeriodicWork(
+        wm.enqueueUniquePeriodicWork(
             SyncWorker.NOMBRE_TRABAJO + "_periodica",
             ExistingPeriodicWorkPolicy.UPDATE,
             request
@@ -138,8 +158,12 @@ class MediadorSincronizacion(private val context: Context) {
     /**
      * Cancela cualquier sync en curso o programado (uso: cerrar sesion).
      */
-    fun cancelarTodo() {
-        workManager.cancelUniqueWork(SyncWorker.NOMBRE_TRABAJO)
-        workManager.cancelUniqueWork(SyncWorker.NOMBRE_TRABAJO + "_periodica")
+    open fun cancelarTodo() {
+        val wm = workManager ?: run {
+            Log.w("MediadorSync", "cancelarTodo() — WorkManager no inicializado, skip")
+            return
+        }
+        wm.cancelUniqueWork(SyncWorker.NOMBRE_TRABAJO)
+        wm.cancelUniqueWork(SyncWorker.NOMBRE_TRABAJO + "_periodica")
     }
 }

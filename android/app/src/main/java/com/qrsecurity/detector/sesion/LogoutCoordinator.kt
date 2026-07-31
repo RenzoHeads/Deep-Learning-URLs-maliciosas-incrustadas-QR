@@ -1,10 +1,11 @@
 package com.qrsecurity.detector.sesion
 
-import android.content.Context
 import com.qrsecurity.detector.datos.local.BaseDatosSeguridad
 import com.qrsecurity.detector.datos.sync.MediadorSincronizacion
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import javax.inject.Inject
+import javax.inject.Singleton
 
 /**
  * Coordinador de cierre de sesion: un punto unico para vaciar el estado
@@ -65,39 +66,37 @@ import kotlinx.coroutines.withContext
  *
  * Uso desde Compose:
  * ```
- * val scope = rememberCoroutineScope()
- * scope.launch { LogoutCoordinator.logout(context) }
+ * val sessionViewModel: SessionViewModel = hiltViewModel()
+ * scope.launch { sessionViewModel.logout() }
  * ```
  */
-object LogoutCoordinator {
+@Singleton
+class LogoutCoordinator @Inject constructor(
+    private val mediadorSincronizacion: MediadorSincronizacion,
+    private val db: BaseDatosSeguridad,
+    private val sesionUsuario: SesionUsuario
+) {
 
     /**
      * Cierra la sesion del usuario y limpia el estado persistido.
      *
-     * @param context Contexto de aplicacion o actividad; se usa solo para
-     *   obtener la instancia Room y construir el [MediadorSincronizacion].
+     * Orden de operaciones (cada una suspend):
+     *   1. Cancelar el work encolado/periodico (rapido, no bloqueante).
+     *   2. Vaciar todas las tablas de Room (suspend — envuelto en
+     *      `withContext(Dispatchers.IO)` por D4-P2).
+     *   3. Cerrar sesion en [SesionUsuario] (borra token/correo/logueado;
+     *      preserva `id_dispositivo` para re-registro del mismo fisico).
      */
-    suspend fun logout(context: Context) {
-        // 1) Cancelar WorkManager: no dejamos que un sync pendiente o
-        //    periodico se dispare con datos del usuario anterior despues
-        //    del re-login. NON-BLOCKING — el worker en curso se detiene
-        //    en su siguiente checkpoint `isStopped` (D4-P3 fix en SyncWorker).
-        MediadorSincronizacion(context).cancelarTodo()
+    suspend fun logout() {
+        // 1) Cancelar WorkManager.
+        mediadorSincronizacion.cancelarTodo()
 
-        // 2) Vaciar todas las tablas Room. Bug D4-P2 (Lote H): envolver en
-        //    `withContext(Dispatchers.IO)` — aunque `logout` sea `suspend`
-        //    y por convencion el caller deba lanzarlo en una corutina IO,
-        //    `RoomDatabase.clearAllTables()` hace writes SQLite
-        //    pesadas (miles de filas en el historial) y la unica
-        //    garantia real de que no bloqueamos el main thread es forzar
-        //    el dispatcher aqui. Ademas, previene una
-        //    `IllegalStateException` si alguien llama este metodo desde
-        //    `runBlocking` en el main thread (ej., un test).
+        // 2) Vaciar todas las tablas Room (D4-P2 fix: withContext IO).
         withContext(Dispatchers.IO) {
-            BaseDatosSeguridad.get(context).clearAllTables()
+            db.clearAllTables()
         }
 
         // 3) Eliminar token + flag de sesion (preserva id_dispositivo).
-        SesionUsuario.cerrarSesion(context)
+        sesionUsuario.cerrarSesion()
     }
 }

@@ -1,21 +1,21 @@
 package com.qrsecurity.detector.pipeline
 
-import android.app.Application
-import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
-import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import androidx.lifecycle.viewmodel.initializer
-import androidx.lifecycle.viewmodel.viewModelFactory
+import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlin.coroutines.coroutineContext
+import javax.inject.Inject
 
 /**
- * Bug A1/A2 fix: hospeda el [Pipeline] en un [AndroidViewModel] para que:
+ * Bug A1/A2 fix: hospeda el [Pipeline] en un [ViewModel] para que:
  *  - Sobreviva a cambios de configuracion (rotacion, cambio de idioma) sin
  *    reinicializar el motor de inferencia TFLite ni perder el StateFlow.
  *  - No sea recreado en cada recomposicion de NavGuardian (antes
@@ -23,21 +23,31 @@ import kotlin.coroutines.coroutineContext
  *    salia de composicion y volvia a entrar, perdiendo el estado y filtrando
  *    el motor nativo).
  *
- * Uso desde Compose:
- * ```kotlin
- * val vm: PipelineViewModel = viewModel()
- * val estado by vm.estado.collectAsState()
- * ```
- *
- * El [Pipeline] se crea perezosamente en [Application] (via AndroidViewModel)
- * para no bloquear el arranque con I/O de disco (carga del modelo TFLite es
- * lazy por diseno del Pipeline).
+ * Hilt: migrado de AndroidViewModel con viewModelFactory a @HiltViewModel
+ * con @Inject constructor — Hilt inyecta el [Pipeline] singleton
+ * (proveido por [com.qrsecurity.detector.di.PipelineModule]).
  */
-class PipelineViewModel(application: Application) : AndroidViewModel(application) {
-
-    val pipeline: Pipeline = Pipeline(application)
+@HiltViewModel
+class PipelineViewModel @Inject constructor(
+    val pipeline: Pipeline,
+    // Bug D2 fix: SavedStateHandle para cachear el ultimo ResultadoUrl y
+    // que las pantallas de resultado sobrevivan a process death. Hilt
+    // inyecta SavedStateHandle automaticamente en @HiltViewModel.
+    private val savedState: SavedStateHandle
+) : ViewModel() {
 
     val estado: StateFlow<Pipeline.Estado> = pipeline.estado
+
+    // ── Bug D2 fix: cache del ultimo resultado para sobrevivir process death ──
+    //
+    // Las pantallas RESULTADO_SEGURO y RESULTADO_MALICIOSO leen `resultado`
+    // casteando `estadoPipeline as? ResultadoListo`. Si el proceso muere
+    // y se restaura, PipelineViewModel se recrea y `pipeline.estado` vuelve
+    // a `Inicializando` — la pantalla queda en blanco. Guardamos el ultimo
+    // ResultadoUrl serializado en SavedStateHandle (sobrevive process death)
+    // y lo exponemos como StateFlow para que las pantallas hagan fallback.
+    private val _resultadoCacheado = MutableStateFlow<Pipeline.ResultadoAnalisis.ResultadoUrl?>(null)
+    val resultadoCacheado: StateFlow<Pipeline.ResultadoAnalisis.ResultadoUrl?> = _resultadoCacheado.asStateFlow()
 
     // ── Bug C-09 fix: concurrencia estructurada para el escaneo en vuelo ──
     //
@@ -103,6 +113,18 @@ class PipelineViewModel(application: Application) : AndroidViewModel(application
             // punto de suspension y no llegamos a tocar nada mas.
             try {
                 pipeline.analizar(payloadCrudo)
+                // Bug D2 fix: cachear el ultimo ResultadoUrl en
+                // SavedStateHandle cuando el pipeline produce un resultado.
+                // Si el proceso muere y se restaura, las pantallas de
+                // resultado pueden hacer fallback a este cache.
+                val estadoFinal = pipeline.estado.value
+                if (estadoFinal is Pipeline.Estado.ResultadoListo) {
+                    val res = estadoFinal.resultado as? Pipeline.ResultadoAnalisis.ResultadoUrl
+                    if (res != null) {
+                        _resultadoCacheado.value = res
+                        savedState[CLAVE_RESULTADO_CACHE] = serializarResultado(res)
+                    }
+                }
             } finally {
                 // Al terminar (exito o fallo), si este Job sigue siendo el
                 // "vigente", lo limpiamos. Si fue reemplazado por otro nuevo,
@@ -126,34 +148,66 @@ class PipelineViewModel(application: Application) : AndroidViewModel(application
         scanJob?.cancel()
         scanJob = null
         pipeline.reiniciar()
+        // Bug D2 fix: limpiar el cache del ultimo resultado al reiniciar
+        // — el usuario escanea otro QR, el resultado anterior ya no aplica.
+        _resultadoCacheado.value = null
+        savedState.remove<String>(CLAVE_RESULTADO_CACHE)
+    }
+
+    init {
+        // Bug D2 fix: restaurar el ultimo resultado cacheado si el proceso
+        // murio y se restauro. SavedStateHandle sobrevive process death.
+        savedState.get<String>(CLAVE_RESULTADO_CACHE)?.let { json ->
+            deserializarResultado(json)?.let { _resultadoCacheado.value = it }
+        }
     }
 
     override fun onCleared() {
         // Bug A2 fix: liberar recursos nativos del motor TFLite cuando el
         // ViewModel es cleared (Activity destroyed definitivamente, no
-        // rotacion). Antes el DisposableEffect de NavGuardian liberaba el
-        // pipeline al salir de composicion — pero eso pasaba tambien en
-        // rotacion, matando el motor y recargandolo innecesariamente.
-        //
+        // rotacion).
         // Bug C-09 fix: cancela el escaneo en vuelo por defensa.
-        // viewModelScope ya se cancela solo al morir el VM, pero cancelar
-        // explicitamente el Job deja claro que no queremos que ninguna
-        // mutacion de estado se cuele entre onCleared() y la muerte del
-        // scope.
         scanJob?.cancel()
         scanJob = null
         pipeline.destruir()
     }
 
     companion object {
-        /**
-         * Factory para crear [PipelineViewModel] sin argumentos especiales.
-         * ViewModelProvider ya sabe inyectar Application via AndroidViewModel.
-         */
-        val Factory: ViewModelProvider.Factory = viewModelFactory {
-            initializer {
-                val app = (this[ViewModelProvider.AndroidViewModelFactory.APPLICATION_KEY] as Application)
-                PipelineViewModel(app)
+        private const val CLAVE_RESULTADO_CACHE = "resultado_url_cacheado"
+
+        // Serializacion simple pipe-delimited de los campos primarios de
+        // ResultadoUrl. No persiste urlsAdicionales (derivables re-analizando).
+        // Formato: urlOriginal|urlLimpia|probabilidad|nivelAlerta|delegado
+        private fun serializarResultado(
+            r: Pipeline.ResultadoAnalisis.ResultadoUrl
+        ): String = buildString {
+            append(r.urlOriginal.replace("|", "%7C"))
+            append('|')
+            append(r.urlLimpia.replace("|", "%7C"))
+            append('|')
+            append(r.probabilidad.toString())
+            append('|')
+            append(r.nivelAlerta.name)
+            append('|')
+            append(r.delegado.replace("|", "%7C"))
+        }
+
+        private fun deserializarResultado(
+            json: String
+        ): Pipeline.ResultadoAnalisis.ResultadoUrl? {
+            val parts = json.split('|')
+            if (parts.size != 5) return null
+            return try {
+                Pipeline.ResultadoAnalisis.ResultadoUrl(
+                    urlOriginal = parts[0].replace("%7C", "|"),
+                    urlLimpia = parts[1].replace("%7C", "|"),
+                    probabilidad = parts[2].toFloat(),
+                    nivelAlerta = com.qrsecurity.detector.ml.ControladorAlerta.NivelAlerta
+                        .valueOf(parts[3]),
+                    delegado = parts[4].replace("%7C", "|")
+                )
+            } catch (_: Exception) {
+                null
             }
         }
     }

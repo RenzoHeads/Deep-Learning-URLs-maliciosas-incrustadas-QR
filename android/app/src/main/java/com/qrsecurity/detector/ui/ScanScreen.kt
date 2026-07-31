@@ -62,6 +62,10 @@ import com.qrsecurity.detector.ui.theme.CyberGlass
 import com.qrsecurity.detector.ui.theme.CyberGlassBorde
 import com.qrsecurity.detector.ui.theme.CyberTextoPrincipal
 import com.qrsecurity.detector.ui.theme.CyberTextoSecundario
+import com.qrsecurity.detector.ui.theme.Espaciado
+import com.qrsecurity.detector.ui.theme.RadioBorde
+import com.qrsecurity.detector.ui.theme.TamanosIcono
+import com.qrsecurity.detector.ui.theme.TamanosToque
 
 /**
  * Pantalla Home & Scan — cyber-sentinel design.
@@ -276,7 +280,13 @@ private fun VistaPreviaCamaraCyberSentinel(
         lifecycleOwner.lifecycle.addObserver(observador)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observador)
+            // Bug C1 fix: detener() ya no cierra el scanner ML Kit (solo
+            // pausa el executor + unbind de CameraX). El scanner se cierra
+            // una sola vez aqui, cuando ScanScreen sale de composicion
+            // permanentemente — previene el crash "Attempting to use a
+            // closed client" al volver de ON_PAUSE.
             moduloCamara.detener()
+            moduloCamara.liberarEscaner()
         }
     }
 
@@ -293,7 +303,7 @@ private fun VistaPreviaCamaraCyberSentinel(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+                .padding(horizontal = Espaciado.lg, vertical = Espaciado.md),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
@@ -302,9 +312,9 @@ private fun VistaPreviaCamaraCyberSentinel(
                     imageVector = Icons.Filled.Security,
                     contentDescription = null,
                     tint = CyberCyan,
-                    modifier = Modifier.size(24.dp)
+                    modifier = Modifier.size(TamanosIcono.estandar)
                 )
-                Spacer(modifier = Modifier.size(8.dp))
+                Spacer(modifier = Modifier.size(Espaciado.sm))
                 Text(
                     text = "QR GUARDIAN",
                     style = MaterialTheme.typography.titleMedium,
@@ -319,10 +329,10 @@ private fun VistaPreviaCamaraCyberSentinel(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .padding(16.dp)
-                .clip(RoundedCornerShape(16.dp))
+                .padding(Espaciado.lg)
+                .clip(RoundedCornerShape(RadioBorde.xl))
                 .background(CyberGlass.copy(alpha = 0.85f))
-                .padding(20.dp),
+                .padding(Espaciado.xl),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
@@ -331,7 +341,7 @@ private fun VistaPreviaCamaraCyberSentinel(
                 fontWeight = FontWeight.SemiBold,
                 color = CyberTextoPrincipal
             )
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(Espaciado.xs))
             Text(
                 text = "El analisis comienza automaticamente",
                 style = MaterialTheme.typography.bodyMedium,
@@ -385,7 +395,7 @@ private fun PantallaSolicitudPermisoCyberSentinel(
     modifier: Modifier = Modifier
 ) {
     Column(
-        modifier = modifier.padding(32.dp),
+        modifier = modifier.padding(Espaciado.xxxl),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
@@ -393,9 +403,9 @@ private fun PantallaSolicitudPermisoCyberSentinel(
             imageVector = Icons.Filled.Security,
             contentDescription = null,
             tint = CyberCyan,
-            modifier = Modifier.size(64.dp)
+            modifier = Modifier.size(TamanosIcono.grande)
         )
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(Espaciado.xxl))
         Text(
             text = "Se requiere permiso de camara",
             style = MaterialTheme.typography.headlineSmall,
@@ -403,17 +413,17 @@ private fun PantallaSolicitudPermisoCyberSentinel(
             color = CyberTextoPrincipal,
             modifier = Modifier.testTag("titulo_permiso_camara")
         )
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(Espaciado.sm))
         Text(
             text = "Necesitamos acceso a la camara para escanear codigos QR",
             style = MaterialTheme.typography.bodyMedium,
             color = CyberTextoSecundario,
             modifier = Modifier.testTag("subtitulo_permiso_camara")
         )
-        Spacer(modifier = Modifier.height(32.dp))
+        Spacer(modifier = Modifier.height(Espaciado.xxxl))
         Button(
             onClick = onConcederClick,
-            shape = RoundedCornerShape(12.dp),
+            shape = RoundedCornerShape(RadioBorde.lg),
             colors = ButtonDefaults.buttonColors(
                 containerColor = CyberCyan,
                 contentColor = CyberFondo

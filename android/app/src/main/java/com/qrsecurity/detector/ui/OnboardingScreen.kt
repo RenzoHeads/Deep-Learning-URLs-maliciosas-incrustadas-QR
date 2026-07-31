@@ -9,8 +9,10 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -36,6 +38,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.qrsecurity.detector.ui.theme.Espaciado
+import com.qrsecurity.detector.ui.theme.RadioBorde
+import com.qrsecurity.detector.ui.theme.TamanosToque
 import com.qrsecurity.detector.ui.theme.CyberCyan
 import com.qrsecurity.detector.ui.theme.CyberVerdeAlerta
 import com.qrsecurity.detector.ui.theme.CyberFondo
@@ -116,7 +121,14 @@ fun PantallaOnboarding(
         modifier = Modifier
             .fillMaxSize()
             .background(CyberFondo)
-            .padding(horizontal = 24.dp, vertical = 48.dp),
+            // Bug U1 fix: insets edge-to-edge. MainActivity llama
+            // enableEdgeToEdge() pero esta pantalla no tenia
+            // statusBarsPadding()/navigationBarsPadding() — el logo y el
+            // boton "Comenzar" se dibujaban bajo la status bar y la nav
+            // bar del sistema.
+            .statusBarsPadding()
+            .navigationBarsPadding()
+            .padding(horizontal = Espaciado.xxl, vertical = Espaciado.hero),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.SpaceBetween
     ) {
@@ -128,13 +140,13 @@ fun PantallaOnboarding(
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(Espaciado.sm)
             ) {
                 Icon(
                     imageVector = Icons.Filled.Security,
                     contentDescription = null,
                     tint = CyberCyan,
-                    modifier = Modifier.size(28.dp)
+                    modifier = Modifier.size(Espaciado.xxxs) // 28dp
                 )
                 Text(
                     text = "QR GUARDIAN",
@@ -165,7 +177,7 @@ fun PantallaOnboarding(
 
         // ── Indicadores de pagina ──
         Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(Espaciado.sm),
             verticalAlignment = Alignment.CenterVertically
         ) {
             repeat(3) { indice ->
@@ -173,15 +185,15 @@ fun PantallaOnboarding(
                 // activo a 24×8 (barra horizontal 3:1) mientras los inactivos
                 // eran 8×8 (cuadrados). Ahora ambos miden 8dp de alto y solo
                 // el ancho cambia → pill 24×8 vs cuadrado 8×8, aspect ratio
-                // consistente con clip(RoundedCornerShape(4.dp)).
+                // consistente con clip(RoundedCornerShape(RadioBorde.sm)).
                 Box(
                     modifier = Modifier
-                        .height(8.dp)
+                        .height(Espaciado.sm)
                         .then(
-                            if (indice == estadoPagina.currentPage) Modifier.width(24.dp)
-                            else Modifier.width(8.dp)
+                            if (indice == estadoPagina.currentPage) Modifier.width(Espaciado.xxl)
+                            else Modifier.width(Espaciado.sm)
                         )
-                        .clip(RoundedCornerShape(4.dp))
+                        .clip(RoundedCornerShape(RadioBorde.sm))
                         .background(
                             if (indice == estadoPagina.currentPage) CyberVerdeAlerta
                             else CyberTextoSecundario.copy(alpha = 0.3f)
@@ -203,8 +215,8 @@ fun PantallaOnboarding(
             },
             modifier = Modifier
                 .fillMaxWidth()
-                .height(56.dp),
-            shape = RoundedCornerShape(16.dp),
+                .height(TamanosToque.boton),
+            shape = RoundedCornerShape(RadioBorde.xl),
             colors = ButtonDefaults.buttonColors(
                 containerColor = CyberCyan,
                 contentColor = CyberFondo
@@ -243,14 +255,14 @@ private fun PaginaOnboarding(indice: Int) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp),
+            .padding(horizontal = Espaciado.lg),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(20.dp)
+        verticalArrangement = Arrangement.spacedBy(Espaciado.xl)
     ) {
         // ── Icono en circulo con glow cyan ──
         Box(
             modifier = Modifier
-                .size(120.dp)
+                .size(Espaciado.gigante)
                 .clip(CircleShape)
                 .background(
                     Brush.radialGradient(
@@ -263,7 +275,7 @@ private fun PaginaOnboarding(indice: Int) {
                 imageVector = icono,
                 contentDescription = null,
                 tint = CyberCyan,
-                modifier = Modifier.size(64.dp)
+                modifier = Modifier.size(Espaciado.gigante) // 64dp
             )
         }
 

@@ -16,6 +16,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import javax.inject.Inject
+import javax.inject.Singleton
 
 /**
  * Orquesta el pipeline completo de analisis de seguridad QR:
@@ -41,8 +43,14 @@ import kotlinx.serialization.json.Json
  * de UI; las llamadas de red al backend se ejecutan en [Dispatchers.IO] (via
  * [ClienteBackend] que internamente usa `withContext(Dispatchers.IO)`).
  */
-class Pipeline(
-    private val context: Context
+@Singleton
+class Pipeline @Inject constructor(
+    private val context: Context,
+    private val db: BaseDatosSeguridad,
+    private val backend: ClienteBackend,
+    private val json: Json,
+    private val repoEscaneos: RepositorioEscaneos,
+    private val mediadorSync: MediadorSincronizacion
 ) {
 
     // ── Componentes ──
@@ -50,18 +58,7 @@ class Pipeline(
     private val motorInferencia: MotorInferencia by lazy { MotorInferencia(context) }
     private val cache = CacheResultados()
 
-    // Offline-first: el pipeline escribe a Room via el repositorio y encola
-    // un op CREATE en pending_ops. El SyncWorker lo envia al backend cuando
-    // haya red. Nunca llamamos a ClienteBackend directamente desde aqui.
-    private val db: BaseDatosSeguridad by lazy { BaseDatosSeguridad.get(context) }
-    private val backend: ClienteBackend by lazy { ClienteBackend(ClienteBackend.BASE_POR_DEFECTO) }
-    private val json: Json by lazy { Json { ignoreUnknownKeys = true; encodeDefaults = true } }
-    private val repoEscaneos: RepositorioEscaneos by lazy {
-        RepositorioEscaneos(db, backend, json)
-    }
-    private val mediadorSync: MediadorSincronizacion by lazy {
-        MediadorSincronizacion(context)
-    }
+    // db, backend, json, repoEscaneos, mediadorSync ya vienen inyectados.
 
     // ── Estado expuesto a la UI ──
     private val _estado = MutableStateFlow<Estado>(Estado.Inicializando)

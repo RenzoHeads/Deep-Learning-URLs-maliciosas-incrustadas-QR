@@ -20,6 +20,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 
 import androidx.compose.ui.unit.dp
+import com.qrsecurity.detector.ui.theme.Elevacion
+import com.qrsecurity.detector.ui.theme.Espaciado
+import com.qrsecurity.detector.ui.theme.RadioBorde
 import com.qrsecurity.detector.ui.theme.CyberCyan
 import com.qrsecurity.detector.ui.theme.CyberGlassAlto
 import com.qrsecurity.detector.ui.theme.CyberGlassBorde
@@ -55,22 +58,22 @@ fun SnackbarHostCyber(
         Snackbar(
             containerColor = bgColor,
             contentColor = CyberTextoPrincipal,
-            shape = RoundedCornerShape(14.dp),
+            shape = RoundedCornerShape(RadioBorde.lg),
             modifier = Modifier.border(
-                width = 1.dp,
+                width = Elevacion.sutil,
                 color = CyberGlassBorde,
-                shape = RoundedCornerShape(14.dp)
+                shape = RoundedCornerShape(RadioBorde.lg)
             )
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(vertical = 2.dp)
+                modifier = Modifier.padding(vertical = Espaciado.xs)
             ) {
                 Icon(
                     imageVector = icon,
                     contentDescription = null,
                     tint = iconColor,
-                    modifier = Modifier.padding(end = 8.dp)
+                    modifier = Modifier.padding(end = Espaciado.sm)
                 )
                 Text(text = data.visuals.message)
             }

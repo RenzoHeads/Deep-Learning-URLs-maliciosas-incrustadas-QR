@@ -1,13 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!--
-        Base theme for the app. Compose handles all styling, so this XML theme
-        is only used for the activity window before Compose content is set.
-        It uses Material3 DayNight to match the Compose [QRSecurityDetectorTheme].
+        Base theme — always-dark cyber-sentinel palette.
+        Edge-to-edge enforced at theme level per android-skills/edge-to-edge:
+        windowDrawsSystemBarBackgrounds + transparent status bar so Compose
+        can draw under the system bars without a letterboxed flash on cold start.
     -->
-    <style name="Theme.QRSecurityDetector" parent="Theme.Material3.DayNight.NoActionBar">
-        <item name="android:windowBackground">@color/gray_light</item>
-        <item name="android:statusBarColor">@color/white</item>
-        <item name="android:windowLightStatusBar">true</item>
+    <style name="Theme.QRSecurityDetector" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="android:windowBackground">@color/ic_launcher_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+        <item name="android:windowLightStatusBar">false</item>
     </style>
 </resources>

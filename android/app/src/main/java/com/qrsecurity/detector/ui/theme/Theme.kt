@@ -118,13 +118,12 @@ fun TemaDetectorSeguridadQR(
     if (!view.isInEditMode) {
         SideEffect {
             val window = (view.context as Activity).window
-            // Status bar siempre oscuro, texto blanco.
-            window.statusBarColor = CyberFondo.toArgb()
+            // Status bar usa el background del esquema activo (no hardcoded).
+            window.statusBarColor = esquemaColor.background.toArgb()
             WindowCompat.getInsetsController(window, view)
-                .isAppearanceLightStatusBars = false
-            // Navigation bar oscura tambien.
-            // minSdk = 26 (O) — la verificacion SDK_INT >= O es siempre true.
-            window.navigationBarColor = CyberFondo.toArgb()
+                .isAppearanceLightStatusBars = !temaOscuro
+            // Navigation bar usa el mismo background del esquema.
+            window.navigationBarColor = esquemaColor.background.toArgb()
         }
     }
 

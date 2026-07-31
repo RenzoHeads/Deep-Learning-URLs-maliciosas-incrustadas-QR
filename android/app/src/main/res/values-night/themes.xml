@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.QRSecurityDetector" parent="Theme.Material3.DayNight.NoActionBar">
-        <item name="android:windowBackground">@color/gray_dark</item>
-        <item name="android:statusBarColor">@color/black</item>
+    <style name="Theme.QRSecurityDetector" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="android:windowBackground">@color/ic_launcher_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
         <item name="android:windowLightStatusBar">false</item>
     </style>
 </resources>

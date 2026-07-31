@@ -39,6 +39,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -48,7 +49,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavType
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
@@ -56,26 +61,21 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
-import com.qrsecurity.detector.api.ClienteBackend
-import com.qrsecurity.detector.datos.local.BaseDatosSeguridad
 import com.qrsecurity.detector.datos.local.entidades.EscaneoEntity
-import com.qrsecurity.detector.datos.repositorios.RepositorioUrlsBloqueadas
-import com.qrsecurity.detector.datos.sync.MediadorSincronizacion
 import com.qrsecurity.detector.pipeline.Pipeline
 import com.qrsecurity.detector.pipeline.PipelineViewModel
-import com.qrsecurity.detector.sesion.SesionUsuario
+import com.qrsecurity.detector.sesion.SessionViewModel
 import com.qrsecurity.detector.ui.theme.CyberCyan
 import com.qrsecurity.detector.ui.theme.CyberCyanClaro
+import com.qrsecurity.detector.ui.theme.Elevacion
 import com.qrsecurity.detector.ui.theme.CyberCyanOn
 import com.qrsecurity.detector.ui.theme.CyberFondo
 import com.qrsecurity.detector.ui.theme.CyberGlass
 import com.qrsecurity.detector.ui.theme.CyberGlassAlto
 import com.qrsecurity.detector.ui.theme.CyberGlassBorde
-import com.qrsecurity.detector.ui.theme.CyberTextoDesactivado
 import com.qrsecurity.detector.ui.theme.CyberTextoSecundario
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.serialization.json.Json
+import kotlinx.coroutines.withContext
 import java.net.URLEncoder
 import java.net.URLDecoder
 
@@ -124,23 +124,25 @@ fun NavGuardian() {
             )
         }
     }
-    // Bug A1/A2 fix: hospedar el Pipeline en un AndroidViewModel para que
-    // sobreviva a rotacion y no se reinicialice en cada recomposicion de
-    // NavGuardian. Antes ``remember { Pipeline(context) }`` lo reconstrucia
-    // cada vez que NavGuardian salia y re-entraba en composicion, perdiendo
-    // el estado del motor TFLite y filtrando recursos nativos.
-    val pipelineViewModel: PipelineViewModel = viewModel(factory = PipelineViewModel.Factory)
+    // PipelineViewModel hospedado via Hilt (@HiltViewModel) — sobrevive a
+    // rotacion y no se reinicializa en cada recomposicion. Hilt inyecta el
+    // Pipeline @Singleton automaticamente.
+    val pipelineViewModel: PipelineViewModel = hiltViewModel()
     val pipeline = pipelineViewModel.pipeline
     val estadoPipeline by pipelineViewModel.estado.collectAsState()
 
-    // Performance fix: DatosTabsViewModel compartido entre Historial y
-    // Bloqueadas. Debe vivir a nivel de NavGuardian (NO dentro de
-    // composable() del NavHost) para que ambas pantallas obtengan la
-    // misma instancia via parametros. Si se llama viewModel() dentro de
-    // cada composable(route), cada destino obtiene su propio
+    // Performance: DatosTabsViewModel compartido entre Historial y
+    // Bloqueadas. Vive a nivel de NavGuardian para que ambas pantallas
+    // obtengan la misma instancia via parametros. Hilt inyecta los
+    // repositorios @Singleton automaticamente. Si se llama hiltViewModel()
+    // dentro de cada composable(route), cada destino obtiene su propio
     // ViewModelStoreOwner y por ende su propia instancia del VM — los
     // Flows se re-inician al cambiar de tab y el spinner vuelve.
-    val datosViewModel: DatosTabsViewModel = viewModel(factory = DatosTabsViewModel.Factory)
+    val datosViewModel: DatosTabsViewModel = hiltViewModel()
+
+    // SessionViewModel — reemplaza el companion bridge estatico de
+    // SesionUsuario/LogoutCoordinator. Hilt inyecta las deps @Singleton.
+    val sessionViewModel: SessionViewModel = hiltViewModel()
 
     // Bug A1/A2 fix: el ciclo de vida del Pipeline ahora lo gestiona el
     // ViewModel via onCleared() — no hace falta DisposableEffect aqui.
@@ -160,15 +162,22 @@ fun NavGuardian() {
     // y arrancamos en Escanear. Antes, el onboarding reaparecia tras cada
     // login porque no se persistia la finalizacion.
     //
-    // La decision esta extraida a [calcularDestinoInicial] (funcion pura)
-    // para permitir testear las 3 ramas sin instanciar Context ni
-    // SharedPreferences bajo Robolectric.
-    val destinoInicial = remember {
-        val onboardingDone = context
-            .getSharedPreferences(PREFS_QR_GUARDIAN, android.content.Context.MODE_PRIVATE)
-            .getBoolean(CLAVE_ONBOARDING_COMPLETADO, false)
-        calcularDestinoInicial(
-            logueado = SesionUsuario.estaLogueado(context),
+    // Bug S1 fix: la lectura de SharedPreferences (`getBoolean`) se hace
+    // en un hilo IO (produceState + withContext(Dispatchers.IO)) en lugar
+    // del hilo main. Antes el `remember { getSharedPreferences(...).getBoolean(...) }`
+    // hacia una lectura sincrona de disco en el hilo main durante la
+    // composicion inicial — podia causar jank en arranque y ANR en
+    // dispositivos lentos. Mientras se carga, se usa LOGIN como destino
+    // provisional (se actualiza cuando el IO termina).
+    val logueado = remember { sessionViewModel.estaLogueado() }
+    val destinoInicial by produceState(initialValue = Rutas.LOGIN) {
+        val onboardingDone = withContext(kotlinx.coroutines.Dispatchers.IO) {
+            context
+                .getSharedPreferences(PREFS_QR_GUARDIAN, android.content.Context.MODE_PRIVATE)
+                .getBoolean(CLAVE_ONBOARDING_COMPLETADO, false)
+        }
+        value = calcularDestinoInicial(
+            logueado = logueado,
             onboardingDone = onboardingDone
         )
     }
@@ -303,9 +312,14 @@ fun NavGuardian() {
             }
 
             // ── Resultado Seguro ──
+            // Bug D2 fix: fallback a resultadoCacheado cuando estadoPipeline
+            // no tiene ResultadoListo (e.g. tras process death, el
+            // PipelineViewModel se recrea y pipeline.estado vuelve a
+            // Inicializando). Sin este fallback, la pantalla queda en blanco.
             composable(Rutas.RESULTADO_SEGURO) {
                 val resultado = (estadoPipeline as? Pipeline.Estado.ResultadoListo)
                     ?.resultado as? Pipeline.ResultadoAnalisis.ResultadoUrl
+                    ?: pipelineViewModel.resultadoCacheado.value
                 if (resultado != null) {
                     PantallaResultadoSeguro(
                         resultado = resultado,
@@ -321,9 +335,13 @@ fun NavGuardian() {
             }
 
             // ── Resultado Malicioso ──
+            // Bug D2 fix: mismo fallback a resultadoCacheado que en
+            // RESULTADO_SEGURO. Si process death mato el StateFlow, la
+            // pantalla se reconstruye desde el cache de SavedStateHandle.
             composable(Rutas.RESULTADO_MALICIOSO) {
                 val resultado = (estadoPipeline as? Pipeline.Estado.ResultadoListo)
                     ?.resultado as? Pipeline.ResultadoAnalisis.ResultadoUrl
+                    ?: pipelineViewModel.resultadoCacheado.value
                 if (resultado != null) {
                     PantallaResultadoMalicioso(
                         resultado = resultado,
@@ -403,8 +421,7 @@ fun NavGuardian() {
                 val id = backStackEntry.arguments?.getString("id") ?: ""
                 DetalleEscaneoContainer(
                     id = id,
-                    context = context,
-                    scope = scope,
+                    viewModel = hiltViewModel(),
                     onVolver = { navController.popBackStack() },
                     onDenunciar = { url ->
                         val urlCodificada = URLEncoder.encode(url, "UTF-8")
@@ -475,7 +492,14 @@ fun NavGuardian() {
                     },
                     onCerrarSesion = {
                         scope.launch {
-                            com.qrsecurity.detector.sesion.LogoutCoordinator.logout(context)
+                            sessionViewModel.logout()
+                            // Bug S2 fix: resetear el estado del Pipeline tras
+                            // logout. Si no se hace, `estadoPipeline` retiene el
+                            // ultimo resultado (e.g. ResultadoListo) y, al
+                            // reloguearse, el NavHost podria auto-navegar a una
+                            // pantalla de resultado zombie. reiniciar() pone el
+                            // Pipeline en Estado.Idle.
+                            pipeline.reiniciar()
                             mostrarMensaje(TipoMensaje.INFO, "Sesión cerrada")
                             // Tras logout (Room vacio + token borrado),
                             // navega a Login y limpia el back stack para
@@ -554,8 +578,8 @@ private fun BarraNavegacionInferior(
     NavigationBar(
         containerColor = CyberGlass.copy(alpha = 0.92f),
         contentColor = CyberTextoSecundario,
-        tonalElevation = 2.dp,
-        modifier = Modifier.border(BorderStroke(1.dp, CyberGlassBorde))
+        tonalElevation = Elevacion.flotante,
+        modifier = Modifier.border(BorderStroke(Elevacion.sutil, CyberGlassBorde))
     ) {
         val rutas = listOf(
             Triple(Rutas.ESCANEAR, "Escanear", Icons.Filled.QrCodeScanner),
@@ -597,7 +621,7 @@ private fun BarraNavegacionInferior(
                     selectedIconColor = CyberCyanClaro,
                     selectedTextColor = CyberCyanClaro,
                     unselectedIconColor = CyberTextoSecundario,
-                    unselectedTextColor = CyberTextoDesactivado,
+                    unselectedTextColor = CyberTextoSecundario,
                     indicatorColor = CyberCyan.copy(alpha = 0.15f)
                 )
             )
@@ -608,58 +632,70 @@ private fun BarraNavegacionInferior(
 @Composable
 private fun DetalleEscaneoContainer(
     id: String,
-    context: android.content.Context,
-    scope: kotlinx.coroutines.CoroutineScope,
+    viewModel: DetalleEscaneoViewModel,
     onVolver: () -> Unit,
     onDenunciar: (String) -> Unit,
     onMensaje: (TipoMensaje, String) -> Unit
 ) {
-    var escaneo by remember { mutableStateOf<EscaneoEntity?>(null) }
-    var urlBloqueada by remember { mutableStateOf(false) }
-
+    // Cargar escaneo al entrar, una sola vez por id (patron NowInAndroid UDF).
     LaunchedEffect(id) {
-        scope.launch(Dispatchers.IO) {
-            val db = BaseDatosSeguridad.get(context)
-            escaneo = db.escaneoDao().obtenerPorId(id)
-            val escaneoCargado = escaneo
-            if (escaneoCargado != null) {
-                urlBloqueada = db.urlBloqueadaDao()
-                    .obtenerPorUrl(escaneoCargado.urlLimpia) != null
+        viewModel.cargarEscaneo(id)
+    }
+
+    // Bug S4 fix: recoger mensaje de UI con repeatOnLifecycle(STARTED) en
+    // lugar de LaunchedEffect(Unit) que corria por toda la composicion.
+    // Antes el collect seguia vivo cuando la pantalla estaba STOPPED
+    // (atrasada en el back stack o backgrounded), disparando snackbars
+    // mientras la activity estaba en pausa.
+    // Bug D4 fix: mensaje ahora es Channel (receiveAsFlow), no StateFlow —
+    // no hay null check ni consumirMensaje(). Cada evento se entrega una
+    // sola vez.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    LaunchedEffect(Unit) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            viewModel.mensaje.collect { mensaje ->
+                onMensaje(mensaje.tipo, mensaje.texto)
             }
         }
     }
 
-    val escaneoActual = escaneo
-    if (escaneoActual != null) {
-        PantallaDetalleEscaneo(
-            escaneo = escaneoActual,
-            urlBloqueada = urlBloqueada,
-            onVolver = onVolver,
-            onBloquear = {
-                scope.launch(Dispatchers.IO) {
-                    val db = BaseDatosSeguridad.get(context)
-                    val backend = ClienteBackend(ClienteBackend.BASE_POR_DEFECTO)
-                    val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
-                    val repoUrls = RepositorioUrlsBloqueadas(db, backend, json)
-                    val mediadorSync = MediadorSincronizacion(context)
-                    repoUrls.bloquearLocal(
-                        url = escaneoActual.urlLimpia,
-                        razon = "Bloqueado desde detalle de escaneo"
+    // Bug S3 fix: collectAsStateWithLifecycle en vez de collectAsState —
+    // deja de colectar cuando la pantalla esta STOPPED, alineado con el
+    // resto de la app (DenunciarScreen, HistorialScreen, BloqueadasScreen).
+    when (val estado = viewModel.uiState.collectAsStateWithLifecycle().value) {
+        is DetalleEscaneoUiState.Cargando -> {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(text = "Cargando...", color = CyberTextoSecundario)
+            }
+        }
+        is DetalleEscaneoUiState.NoEncontrado -> {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(text = "Escaneo no encontrado", color = CyberTextoSecundario)
+            }
+        }
+        is DetalleEscaneoUiState.Cargado -> {
+            val escaneo = estado.escaneo
+            PantallaDetalleEscaneo(
+                escaneo = escaneo,
+                urlBloqueada = estado.urlBloqueada,
+                onVolver = onVolver,
+                onBloquear = {
+                    viewModel.onAction(
+                        DetalleEscaneoAction.BloquearUrl(
+                            url = escaneo.urlLimpia,
+                            razon = "Bloqueado desde detalle de escaneo"
+                        )
                     )
-                    mediadorSync.dispararSyncUnica()
-                    urlBloqueada = true
-                    onMensaje(TipoMensaje.EXITO, "URL bloqueada")
-                }
-            },
-            onDenunciar = onDenunciar,
-            onMensaje = onMensaje
-        )
-    } else {
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(text = "Cargando...", color = CyberTextoSecundario)
+                },
+                onDenunciar = onDenunciar,
+                onMensaje = onMensaje
+            )
         }
     }
 }

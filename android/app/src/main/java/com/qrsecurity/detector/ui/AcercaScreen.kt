@@ -9,8 +9,10 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -39,6 +41,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -54,6 +57,10 @@ import com.qrsecurity.detector.ui.theme.CyberFondo
 import com.qrsecurity.detector.ui.theme.CyberGlass
 import com.qrsecurity.detector.ui.theme.CyberTextoPrincipal
 import com.qrsecurity.detector.ui.theme.CyberTextoSecundario
+import com.qrsecurity.detector.ui.theme.Elevacion
+import com.qrsecurity.detector.ui.theme.Espaciado
+import com.qrsecurity.detector.ui.theme.RadioBorde
+import com.qrsecurity.detector.ui.theme.TamanosIcono
 
 // SonarQube S1192 fix: el literal "Cerrar sesion" se duplicaba 3 veces.
 private const val TEXTO_CERRAR_SESION = "Cerrar sesion"
@@ -93,16 +100,27 @@ fun PantallaAcerca(
     // Bug D4-P1 (fix Lote H): AlertDialog de confirmacion antes de cerrar
     // sesion. Cerrar sesion es irreversible (vacia el historial Room) —
     // pedir confirmacion evita perder datos por un tap accidental.
-    var mostrarDialogoLogout by remember { mutableStateOf(false) }
+    // Bug S5 fix: rememberSaveable en vez de remember. Antes, al rotar el
+    // dispositivo entre "Cerrar sesion" (linea 199) y confirmar el
+    // AlertDialog (linea 241), el flag se reseteaba a false, el dialogo
+    // desaparecia y el logout destructivo nunca se ejecutaba.
+    var mostrarDialogoLogout by rememberSaveable { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(CyberFondo)
+            // Bug U2 fix: insets edge-to-edge. MainActivity llama
+            // enableEdgeToEdge() pero esta pantalla no tenia
+            // statusBarsPadding()/navigationBarsPadding() — el boton back
+            // se dibujaba bajo la status bar y el boton "Cerrar sesion"
+            // quedaba cortado por la nav bar del sistema.
+            .statusBarsPadding()
+            .navigationBarsPadding()
             .verticalScroll(estadoScroll)
-            .padding(horizontal = 20.dp, vertical = 24.dp),
+            .padding(horizontal = Espaciado.xl, vertical = Espaciado.xxl),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(Espaciado.lg)
     ) {
         // ── Top bar con boton volver ──
         Row(
@@ -121,7 +139,7 @@ fun PantallaAcerca(
         // ── Logo con glow cyan ──
         Box(
             modifier = Modifier
-                .size(100.dp)
+                .size(TamanosIcono.heroContenedor)
                 .clip(CircleShape)
                 .background(
                     androidx.compose.ui.graphics.Brush.radialGradient(
@@ -134,7 +152,7 @@ fun PantallaAcerca(
                 imageVector = Icons.Filled.Security,
                 contentDescription = null,
                 tint = CyberCyan,
-                modifier = Modifier.size(56.dp)
+                modifier = Modifier.size(Espaciado.heroL)
             )
         }
 
@@ -151,7 +169,7 @@ fun PantallaAcerca(
             color = CyberTextoSecundario
         )
 
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(Espaciado.sm))
 
         // ── Tarjeta: Que es? ──
         TarjetaAcerca(
@@ -196,18 +214,18 @@ fun PantallaAcerca(
             onClick = { mostrarDialogoLogout = true },
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 16.dp)
+                .padding(top = Espaciado.lg)
                 .testTag("btn_logout_pantalla"),
-            shape = RoundedCornerShape(12.dp),
-            border = BorderStroke(1.dp, CyberRojo)
+            shape = RoundedCornerShape(RadioBorde.lg),
+            border = BorderStroke(Elevacion.sutil, CyberRojo)
         ) {
             Icon(
                 imageVector = Icons.Filled.Logout,
                 contentDescription = null,
                 tint = CyberRojo,
-                modifier = Modifier.size(20.dp)
+                modifier = Modifier.size(Espaciado.xl)
             )
-            Spacer(modifier = Modifier.width(8.dp))
+            Spacer(modifier = Modifier.width(Espaciado.sm))
             Text(
                 text = TEXTO_CERRAR_SESION,
                 style = MaterialTheme.typography.labelLarge,
@@ -263,23 +281,23 @@ private fun TarjetaAcerca(
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(RadioBorde.xl),
         colors = CardDefaults.cardColors(containerColor = CyberGlass)
     ) {
         Row(
-            modifier = Modifier.padding(20.dp),
+            modifier = Modifier.padding(Espaciado.xl),
             verticalAlignment = Alignment.Top
         ) {
             Box(
                 modifier = Modifier
-                    .size(40.dp)
-                    .clip(RoundedCornerShape(10.dp))
+                    .size(TamanosIcono.mediano)
+                    .clip(RoundedCornerShape(RadioBorde.md))
                     .background(CyberCyan.copy(alpha = 0.1f)),
                 contentAlignment = Alignment.Center
             ) {
-                Icon(icono, contentDescription = null, tint = CyberCyan, modifier = Modifier.size(24.dp))
+                Icon(icono, contentDescription = null, tint = CyberCyan, modifier = Modifier.size(TamanosIcono.estandar))
             }
-            Spacer(modifier = Modifier.width(16.dp))
+            Spacer(modifier = Modifier.width(Espaciado.lg))
             Column {
                 Text(
                     text = titulo,
@@ -287,7 +305,7 @@ private fun TarjetaAcerca(
                     fontWeight = FontWeight.Bold,
                     color = CyberTextoPrincipal
                 )
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(Espaciado.xs))
                 Text(
                     text = descripcion,
                     style = MaterialTheme.typography.bodyMedium,

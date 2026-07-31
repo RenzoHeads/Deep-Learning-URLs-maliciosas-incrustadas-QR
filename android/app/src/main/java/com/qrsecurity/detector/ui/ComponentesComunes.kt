@@ -52,6 +52,11 @@ import com.qrsecurity.detector.ui.theme.CyberGlass
 import com.qrsecurity.detector.ui.theme.CyberGlassBorde
 import com.qrsecurity.detector.ui.theme.CyberTextoPrincipal
 import com.qrsecurity.detector.ui.theme.CyberTextoSecundario
+import com.qrsecurity.detector.ui.theme.Elevacion
+import com.qrsecurity.detector.ui.theme.Espaciado
+import com.qrsecurity.detector.ui.theme.RadioBorde
+import com.qrsecurity.detector.ui.theme.TamanosIcono
+import com.qrsecurity.detector.ui.theme.TamanosToque
 
 /**
  * Componentes Composables compartidos entre las pantallas de resultado
@@ -116,11 +121,11 @@ fun IconoGlowCircular(
     colorGlow: Color,
     contentDescription: String?,
     alphaGlow: Float = 0.3f,
-    tamanoIcono: androidx.compose.ui.unit.Dp = 64.dp
+    tamanoIcono: androidx.compose.ui.unit.Dp = TamanosIcono.grande
 ) {
     Box(
         modifier = Modifier
-            .size(120.dp)
+            .size(TamanosIcono.heroContenedor)
             .clip(CircleShape)
             .background(
                 Brush.radialGradient(
@@ -161,16 +166,16 @@ fun TarjetaUrlDetectada(
     val modificador = if (mostrarBorde) {
         modifier
             .fillMaxWidth()
-            .border(BorderStroke(1.dp, CyberGlassBorde), RoundedCornerShape(20.dp))
+            .border(BorderStroke(Elevacion.sutil, CyberGlassBorde), RoundedCornerShape(RadioBorde.xxl))
     } else {
         modifier.fillMaxWidth()
     }
     Card(
         modifier = modificador,
-        shape = RoundedCornerShape(if (mostrarBorde) 20.dp else 16.dp),
+        shape = RoundedCornerShape(if (mostrarBorde) RadioBorde.xxl else RadioBorde.xl),
         colors = CardDefaults.cardColors(containerColor = CyberGlass)
     ) {
-        Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(modifier = Modifier.padding(Espaciado.xl), verticalArrangement = Arrangement.spacedBy(Espaciado.sm)) {
             Text(
                 text = "URL DETECTADA",
                 style = MaterialTheme.typography.labelMedium,
@@ -186,7 +191,7 @@ fun TarjetaUrlDetectada(
             )
 
             if (delegado != null && delegado != "cache" && delegado.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(Espaciado.xs))
                 Text(
                     text = "Inferencia: $delegado",
                     style = MaterialTheme.typography.labelSmall,
@@ -217,7 +222,7 @@ fun FilaCopiarCompartir(
 
     Row(
         modifier = modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+        horizontalArrangement = Arrangement.spacedBy(Espaciado.md)
     ) {
         TextButton(
             onClick = {
@@ -227,7 +232,7 @@ fun FilaCopiarCompartir(
             modifier = Modifier.weight(1f)
         ) {
             Icon(Icons.Filled.ContentCopy, contentDescription = null, tint = CyberTextoSecundario)
-            Spacer(modifier = Modifier.width(6.dp))
+            Spacer(modifier = Modifier.width(Espaciado.sm))
             Text(stringResource(R.string.action_copy), color = CyberTextoSecundario)
         }
         TextButton(
@@ -238,7 +243,7 @@ fun FilaCopiarCompartir(
             modifier = Modifier.weight(1f)
         ) {
             Icon(Icons.Filled.Share, contentDescription = null, tint = CyberTextoSecundario)
-            Spacer(modifier = Modifier.width(6.dp))
+            Spacer(modifier = Modifier.width(Espaciado.sm))
             Text(stringResource(R.string.action_share), color = CyberTextoSecundario)
         }
     }
@@ -258,8 +263,8 @@ fun BotonEscanearOtro(
 ) {
     Button(
         onClick = onEscanearOtro,
-        modifier = modifier.fillMaxWidth().height(56.dp),
-        shape = RoundedCornerShape(16.dp),
+        modifier = modifier.fillMaxWidth().height(TamanosToque.boton),
+        shape = RoundedCornerShape(RadioBorde.xl),
         colors = ButtonDefaults.buttonColors(
             containerColor = CyberCyan,
             contentColor = CyberFondo

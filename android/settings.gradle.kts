@@ -1,4 +1,8 @@
+// settings.gradle.kts
+// QRSecurityDetector — multi-module Gradle settings
+
 pluginManagement {
+    includeBuild("build-logic")
     repositories {
         google {
             content {
@@ -21,4 +25,5 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "QRSecurityDetector"
+
 include(":app")
