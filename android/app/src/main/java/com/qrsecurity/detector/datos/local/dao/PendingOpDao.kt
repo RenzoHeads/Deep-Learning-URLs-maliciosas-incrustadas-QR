@@ -35,7 +35,7 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface PendingOpDao {
 
-    /** Todos los ops pendientes ordenados oldest-first (debug/UI). */
+    /** Ops pendientes no fallidos ordenados oldest-first (helper de observacion para tests). */
     @Query("SELECT * FROM pending_ops WHERE fallida = 0 ORDER BY creadoEnMillis ASC")
     fun observarPendientes(): Flow<List<PendingOpEntity>>
 
@@ -96,34 +96,11 @@ interface PendingOpDao {
 
     /**
      * Elimina por id. Variante legacy con retorno `Unit`: conservada para
-     * no romper callers existentes que ignoran el conteo. Para codigo nuevo
-     * que necesite el contract de filas-afectadas, usar [eliminarPorId].
+     * no romper callers existentes que ignoran el conteo.
      */
     @Query("DELETE FROM pending_ops WHERE id = :id")
     suspend fun borrarPorId(id: Long)
 
-    /**
-     * A-08 — elimina el op `id` y devuelve filas-afectadas (0 si el op ya
-     * no existia, 1 si fue borrado). Los callers DEBEN revisar el valor de
-     * retorno: un `0` significa "el op ya no estaba — no reintente, no lo
-     * considere como replay exitoso, no vuelva a encolar". Un `1` es el
-     * acuse formal de borrado post-replay exitoso.
-     *
-     * La implementacion SQL es la misma que [borrarPorId]; la diferencia
-     * es el contract de retorno que obliga al caller a manejar el caso
-     * "ya-no-esta" en lugar de asumirlo. La atomicidad post-replay (DELETE
-     * del op + UPDATE del estado global) la entrega el Repo via
-     * `db.withTransaction { ... }`.
-     */
-    @Query("DELETE FROM pending_ops WHERE id = :id")
-    suspend fun eliminarPorId(id: Long): Int
-
-    @Query("UPDATE pending_ops SET intentos = intentos + 1 WHERE id = :id")
-    suspend fun incrementarIntentos(id: Long)
-
     @Query("UPDATE pending_ops SET fallida = 1 WHERE id = :id")
     suspend fun marcarFallida(id: Long)
-
-    @Query("SELECT COUNT(*) FROM pending_ops WHERE fallida = 0")
-    fun observarPendientesCount(): Flow<Int>
 }

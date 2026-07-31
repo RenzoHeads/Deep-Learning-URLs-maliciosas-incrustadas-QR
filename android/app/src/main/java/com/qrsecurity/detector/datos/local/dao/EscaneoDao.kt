@@ -135,7 +135,7 @@ interface EscaneoDao {
     @Query("SELECT * FROM escaneos WHERE id = :id")
     suspend fun obtenerPorId(id: String): EscaneoEntity?
 
-    /** Lista todos los ids locales (para diff con servidor en pull). */
+    /** Lista todos los ids locales (helper de verificacion para tests de integracion). */
     @Query("SELECT id FROM escaneos")
     suspend fun todosLosIds(): List<String>
 

@@ -12,11 +12,8 @@ import javax.inject.Singleton
  * Gestiona la sesion del usuario con EncryptedSharedPreferences.
  *
  * Persiste por separado:
- *  - **id_dispositivo** — UUID generado en el primer arranque; sobrevive a
- *    [cerrarSesion] para que el mismo dispositivo pueda volver a registrarse
- *    contra el backend sin generar un nuevo identificador.
- *  - **token**, **correo**, **logueado** — credenciales de sesion activa;
- *    se borran al cerrar sesion.
+ *  - **token**, **correo**, **usuario**, **logueado** — credenciales de
+ *    sesion activa; se borran al cerrar sesion.
  *
  * Tanto las claves como los valores se cifran en reposo:
  *  - Claves: AES256-SIV-CMAC (determinista, permite buscar por clave).
@@ -24,8 +21,6 @@ import javax.inject.Singleton
  *
  * La master key se genera via [MasterKey.Builder] con esquema AES256_GCM
  * y se almacena en el Android Keystore (no en el archivo de prefs).
- *
- * La app no puede funcionar sin una sesion activa (token + id_dispositivo).
  *
  * Hilt: construido como [Singleton] via constructor injection. Todas las
  * instancias (repositorios, ViewModels, SyncWorker, SessionViewModel)
@@ -55,22 +50,6 @@ class SesionUsuario @Inject constructor(
     }
 
     // ──────────────────────────────────────────────────────────────
-    // id_dispositivo — persistente (no se borra al cerrar sesion)
-    // ──────────────────────────────────────────────────────────────
-
-    fun obtenerOGenerarIdDispositivo(): String {
-        val actual = prefs().getString(KEY_DISPOSITIVO, null)
-        if (!actual.isNullOrBlank()) return actual
-
-        val nuevo = UUID.randomUUID().toString()
-        prefs().edit().putString(KEY_DISPOSITIVO, nuevo).apply()
-        return nuevo
-    }
-
-    fun tieneIdDispositivo(): Boolean =
-        !prefs().getString(KEY_DISPOSITIVO, null).isNullOrBlank()
-
-    // ──────────────────────────────────────────────────────────────
     // Sesion activa — token + correo + flag logueado
     // ──────────────────────────────────────────────────────────────
 
@@ -80,15 +59,6 @@ class SesionUsuario @Inject constructor(
 
     fun obtenerToken(): String? =
         prefs().getString(KEY_TOKEN, null)
-
-    fun obtenerIdDispositivo(): String? =
-        prefs().getString(KEY_DISPOSITIVO, null)
-
-    fun obtenerUsuario(): String? =
-        prefs().getString(KEY_USUARIO, null)
-
-    fun obtenerCorreo(): String? =
-        prefs().getString(KEY_CORREO, null)
 
     fun guardarSesion(token: String, usuario: String, correo: String = "") {
         prefs().edit()

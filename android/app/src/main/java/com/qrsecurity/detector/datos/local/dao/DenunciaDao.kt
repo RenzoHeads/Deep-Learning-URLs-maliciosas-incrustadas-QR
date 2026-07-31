@@ -28,31 +28,6 @@ interface DenunciaDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertarTodos(denuncias: List<DenunciaEntity>)
 
-    /**
-     * UPDATE parcial por id (sin tocar columnas ausentes en [denuncia]).
-     * Retorna el numero de filas afectadas: 1 si existia el row con ese id,
-     * 0 si no existia (caller debe tratarlo como no-encontrado y decidir
-     * insert vs. error).
-     *
-     * OID pattern: el caller usa este metodo para mutar columnas explicitas
-     * de un row ya identificado por su id (PK = server OID). No reemplaza el
-     * row completo — para reemplazo atomico usar [insertar] con
-     * OnConflictStrategy.REPLACE.
-     */
-    @Query(
-        "UPDATE denuncias SET url = :url, idCategoria = :idCategoria, " +
-            "nombreCategoria = :nombreCategoria, descripcion = :descripcion, " +
-            "estado = :estado WHERE id = :id"
-    )
-    suspend fun actualizar(
-        id: String,
-        url: String,
-        idCategoria: Int,
-        nombreCategoria: String?,
-        descripcion: String?,
-        estado: String
-    ): Int
-
     @Query("DELETE FROM denuncias WHERE id = :id")
     suspend fun eliminarPorId(id: String)
 

@@ -5,13 +5,9 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import com.qrsecurity.detector.datos.local.entidades.SyncStateEntity
-import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface SyncStateDao {
-
-    @Query("SELECT * FROM sync_state")
-    fun observarTodo(): Flow<List<SyncStateEntity>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(estado: SyncStateEntity)

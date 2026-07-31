@@ -26,16 +26,11 @@ import java.util.concurrent.TimeUnit
  *  - `POST /auth/registrar`            → [registrarUsuario]
  *  - `POST /auth/login`               → [login]
  *  - `POST /escaneos`                 → [registrarEscaneo]
- *  - `GET  /escaneos?filtro=`         → [listarEscaneos]
  *  - `DELETE /escaneos/{id}`          → [eliminarEscaneo]
- *  - `GET  /urls-bloqueadas`          → [listarUrlsBloqueadas]
- *  - `POST /urls-bloqueadas`          → [bloquearUrl]
+ *  - `GET  /urls-bloqueadas`          → [bloquearUrl]
  *  - `DELETE /urls-bloqueadas/{id}`   → [desbloquearUrl]
  *  - `GET  /denuncias/categorias`     → [listarCategoriasDenuncia]
  *  - `POST /denuncias`                → [crearDenuncia]
- *  - `GET  /denuncias`                → [listarDenuncias]
- *  - `DELETE /denuncias/{id}`         → [eliminarDenuncia]   (Bug B6 fix frontend)
- *  - `GET  /estadisticas`             → [obtenerEstadisticas]
  *
  * Bug A15 fix: el token_via se manda en el header estandar REST
  * `Authorization: Bearer <token>` en vez del query param `?token_api=...`.
@@ -177,13 +172,6 @@ class ClienteBackend(
     )
 
     @Serializable
-    data class Estadisticas(
-        @SerialName("total_escaneos") val totalEscaneos: Int,
-        val amenazas: Int,
-        @SerialName("ultimos_7_dias") val ultimos7Dias: Int
-    )
-
-    @Serializable
     data class CategoriaDenuncia(
         val id: Int,
         val nombre: String
@@ -297,34 +285,6 @@ class ClienteBackend(
     }
 
     /**
-     * Lista el historial de escaneos del usuario actual con paginacion server-side.
-     *
-     * Backend: `GET /escaneos?filtro=&limite=&offset=`
-     * - `limite`: cantidad por pagina (default backend 20).
-     * - `offset`: salto para paginacion (default backend 0).
-     *
-     * Bug A15 fix: auth via header `Authorization: Bearer <token>`.
-     *
-     * @param filtro "todos" | "seguros" | "maliciosos"
-     * @param pagina numero de pagina base-1 (se convierte a offset).
-     * @param limite cantidad de items por pagina.
-     */
-    suspend fun listarEscaneos(
-        token: String,
-        filtro: String = "todos",
-        pagina: Int = 1,
-        limite: Int = 20
-    ): List<Escaneo> = withContext(Dispatchers.IO) {
-        val offset = (pagina - 1).coerceAtLeast(0) * limite
-        val url = "$base/escaneos?filtro=$filtro&limite=$limite&offset=$offset"
-        val respuesta = get(url, token)
-        json.decodeFromString(
-            kotlinx.serialization.builtins.ListSerializer(Escaneo.serializer()),
-            respuesta
-        )
-    }
-
-    /**
      * Delta sync — lista solo los escaneos modificados desde [modificadosDesde].
      *
      * Backend: `GET /escaneos?modificados_desde=<ISO8601>`
@@ -353,26 +313,6 @@ class ClienteBackend(
         )
     }
 
-    /**
-     * Devuelve el total de escaneos del usuario segun el filtro, sin paginacion.
-     * Backend: `GET /escaneos/count?filtro=` → `{"total": int}`.
-     *
-     * Usado por la UI para calcular el numero total de paginas y mostrar
-     * "Pagina X de N" en el historial.
-     *
-     * Bug A15 fix: auth via header `Authorization: Bearer <token>`.
-     */
-    suspend fun contarEscaneos(
-        token: String,
-        filtro: String = "todos"
-    ): Int = withContext(Dispatchers.IO) {
-        val url = "$base/escaneos/count?filtro=$filtro"
-        val respuesta = get(url, token)
-        // Respuesta esperada: {"total": <int>}
-        val jsonRoot = json.parseToJsonElement(respuesta).jsonObject
-        jsonRoot["total"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0
-    }
-
     /** Elimina un escaneo especifico por su ID.
      *
      * Bug A15 fix: auth via header `Authorization: Bearer <token>`. */
@@ -384,15 +324,6 @@ class ClienteBackend(
     // ──────────────────────────────────────────────────────────────
     // URLs Bloqueadas
     // ──────────────────────────────────────────────────────────────
-
-    /** Bug A15 fix: auth via header. */
-    suspend fun listarUrlsBloqueadas(token: String): List<UrlBloqueada> = withContext(Dispatchers.IO) {
-        val respuesta = get("$base/urls-bloqueadas", token)
-        json.decodeFromString(
-            kotlinx.serialization.builtins.ListSerializer(UrlBloqueada.serializer()),
-            respuesta
-        )
-    }
 
     /**
      * Delta sync — lista solo las URLs bloqueadas modificadas desde [modificadosDesde].
@@ -463,23 +394,6 @@ class ClienteBackend(
     }
 
     /**
-     * Lista las denuncias del usuario actual (`GET /denuncias`).
-     *
-     * Bug A19 fix frontend: anade el metodo que faltaba para que la UI
-     * pueda listar las denuncias enviadas (necesario para la nueva feature
-     * de eliminacion de denuncias — ver [eliminarDenuncia]).
-     *
-     * Bug A15 fix: auth via header `Authorization: Bearer <token>`.
-     */
-    suspend fun listarDenuncias(token: String): List<Denuncia> = withContext(Dispatchers.IO) {
-        val respuesta = get("$base/denuncias", token)
-        json.decodeFromString(
-            kotlinx.serialization.builtins.ListSerializer(Denuncia.serializer()),
-            respuesta
-        )
-    }
-
-    /**
      * Delta sync — lista solo las denuncias modificadas desde [modificadosDesde].
      *
      * Backend: `GET /denuncias?modificados_desde=<ISO8601>`
@@ -500,31 +414,6 @@ class ClienteBackend(
             kotlinx.serialization.builtins.ListSerializer(Denuncia.serializer()),
             respuesta
         )
-    }
-
-    /**
-     * Elimina (soft-delete) una denuncia del usuario actual
-     * (`DELETE /denuncias/{id}`).
-     *
-     * Bug B6 fix frontend: el metodo no existia en el cliente Android aun
-     * cuando el backend ya lo soporta (ver `routers/denuncias.py`).
-     * Sin este metodo la UI no puede ofrecer la opcion de borrar denuncias.
-     *
-     * Bug A15 fix: auth via header `Authorization: Bearer <token>`.
-     */
-    suspend fun eliminarDenuncia(token: String, idDenuncia: String): Unit = withContext(Dispatchers.IO) {
-        delete("$base/denuncias/$idDenuncia", token)
-        Unit
-    }
-
-    // ──────────────────────────────────────────────────────────────
-    // Estadisticas
-    // ──────────────────────────────────────────────────────────────
-
-    /** Bug A15 fix: auth via header. */
-    suspend fun obtenerEstadisticas(token: String): Estadisticas = withContext(Dispatchers.IO) {
-        val respuesta = get("$base/estadisticas", token)
-        json.decodeFromString(Estadisticas.serializer(), respuesta)
     }
 
     // ──────────────────────────────────────────────────────────────

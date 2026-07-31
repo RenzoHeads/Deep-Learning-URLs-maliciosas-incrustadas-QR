@@ -257,8 +257,17 @@ class ClienteBackendMockWebServerTest {
         val cliente = clienteConToken()
 
         try {
-            cliente.obtenerEstadisticas(token = "test-token-abc")
-            fail("obtenerEstadisticas con 500 debe lanzar HttpBackendException")
+            // Cualquier endpoint authed sirve para verificar el manejo del 500;
+            // usar registrarEscaneo (metodo estable, no eliminado por dead-code
+            // cleanup) mantiene el test robusto frente a futuras purgas de API.
+            cliente.registrarEscaneo(
+                token = "test-token-abc",
+                urlOriginal = "https://x.example",
+                urlLimpia = "x.example",
+                probabilidad = 0.5f,
+                nivelAlerta = "SOSPECHOSO"
+            )
+            fail("registrarEscaneo con 500 debe lanzar HttpBackendException")
         } catch (e: ClienteBackend.HttpBackendException) {
             assertEquals(500, e.codigo)
             assertNull("500 no lleva Retry-After, debe ser null", e.retryAfterSegundos)
@@ -284,8 +293,12 @@ class ClienteBackendMockWebServerTest {
         val clienteSinToken = clienteConToken(token = null)
 
         try {
-            clienteSinToken.listarEscaneos(token = "")
-            fail("listarEscaneos con token '' debe resultar en backend 401")
+            // Cualquier endpoint authed GET sirve para verificar el header de la
+            // request; usar listarEscaneosDelta (metodo estable, no eliminado
+            // por dead-code cleanup) mantiene el test robusto frente a futuras
+            // purgas de API.
+            clienteSinToken.listarEscaneosDelta(token = "", modificadosDesde = "")
+            fail("listarEscaneosDelta con token '' debe resultar en backend 401")
         } catch (_: ClienteBackend.HttpBackendException) {
             // expected — lo que nos importa es el header de la request
         }
@@ -305,7 +318,7 @@ class ClienteBackendMockWebServerTest {
         // invocamos `listarCategoriasDenuncia` que no toma token:
         // ...
         //
-        // Nota: este test verifica que `listarEscaneos(token="")` aun
+        // Nota: este test verifica que `listarEscaneosDelta(token="")` aun
         // seteo el header (porque el helper boxtoa el '' != null). Esto
         // puede ser un bug latente: llamadas con token="" envian
         // "Authorization: Bearer " (Bearer con payload vacio).

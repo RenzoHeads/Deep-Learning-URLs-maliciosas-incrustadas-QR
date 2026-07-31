@@ -11,7 +11,7 @@ import androidx.compose.ui.graphics.Color
 /** Fondo base de la app — azul-negro profundo. */
 val CyberFondo = Color(0xFF0A0E1A)
 val CyberFondoSuperficie = Color(0xFF0D1516)
-val CyberFondoDim = Color(0xFF080F11)
+
 
 /** Superficies glassmorphism — translúcidas con tinte azulado. */
 val CyberGlass = Color(0xFF161B2C)
@@ -22,15 +22,12 @@ val CyberGlassVariant = Color(0xFF2E3638)
 /** Cyan — acento primario del design system. */
 val CyberCyan = Color(0xFF00E5FF)           // primary-container (acento principal)
 val CyberCyanClaro = Color(0xFFC3F5FF)      // primary text sobre oscuro
-val CyberCyanFijo = Color(0xFF9CF0FF)       // primary-fixed
-val CyberCyanDim = Color(0xFF00DAF3)        // primary-fixed-dim
 val CyberCyanOn = Color(0xFF00363D)         // on-primary (texto sobre cyan)
 val CyberCyanContainerOn = Color(0xFF001F24)// on-primary-fixed
 
 /** Texto — jerarquía sobre fondo oscuro. */
 val CyberTextoPrincipal = Color(0xFFE2E8F0)  // on-surface
 val CyberTextoSecundario = Color(0xFF94A3B8) // on-surface-variant
-val CyberTextoDesactivado = Color(0xFF64748B)// outline
 
 /** Rojo — alertas maliciosas. */
 val CyberRojo = Color(0xFFEF4444)            // error / amenaza principal
@@ -41,7 +38,6 @@ val CyberRojoOn = Color(0xFFFFDAD6)          // on-error-container
 
 /** Ámbar — alertas sospechosas. */
 val CyberAmbar = Color(0xFFF9A825)
-val CyberAmbarClaro = Color(0xFFFFD54F)
 val CyberAmbarFondo = Color(0xFF3D3500)
 
 /** Verde esmeralda — veredicto SEGURO + snackbars de exito. */
@@ -51,7 +47,6 @@ val CyberVerdeAlertaFondo = Color(0xFF0D3326)   // fondo sutil verde
 val CyberVerdeFondo = Color(0xFF0F2A1E)         // snackbar exito bg
 
 /** Outline / bordes sutiles. */
-val CyberOutline = Color(0xFF3B494C)         // outline-variant
 val CyberOutlineMedio = Color(0xFF849396)    // outline
 
 // ──────────────────────────────────────────────────────────────────
@@ -86,53 +81,7 @@ val md_errorContainer = CyberRojoContainer
 val md_onErrorContainer = CyberRojoOn
 
 // ──────────────────────────────────────────────────────────────────
-// Colores de alerta — usados por TarjetaAlerta (AlertUI.kt).
+// Colores de alerta — base (alias Alerta* eliminados con AlertUI.kt).
+// Los colores subyacentes CyberVerdeAlerta, CyberAmbar, CyberRojo se
+// mantienen activos via ResultadoSeguroScreen / ResultadoMaliciosoScreen.
 // ──────────────────────────────────────────────────────────────────
-
-/** Verde esmeralda — nivel SEGURO. */
-val AlertaSeguro = CyberVerdeAlerta
-val AlertaSeguroClaro = CyberVerdeAlertaClaro
-val AlertaSeguroFondo = CyberVerdeAlertaFondo
-
-/** Ámbar — nivel SOSPECHOSO. */
-val AlertaSospechoso = CyberAmbar
-val AlertaSospechosoClaro = CyberAmbarClaro
-val AlertaSospechosoFondo = CyberAmbarFondo
-
-/** Rojo — nivel MALICIOSO. */
-val AlertaMalicioso = CyberRojo
-val AlertaMaliciosoClaro = CyberRojoClaro
-val AlertaMaliciosoFondo = CyberRojoFondo
-
-// Alias tema oscuro (no se usa tema claro; la app es siempre oscura).
-val AlertaSeguroOscuro = CyberVerdeAlerta
-val AlertaSospechosoOscuro = CyberAmbar
-val AlertaMaliciosoOscuro = CyberRojo
-val AlertaSeguroFondoOscuro = AlertaSeguroFondo
-val AlertaSospechosoFondoOscuro = CyberAmbarFondo
-val AlertaMaliciosoFondoOscuro = CyberRojoFondo
-
-// Alias tema oscuro M3 (idénticos — la app es siempre oscura).
-val md_primary_dark = md_primary
-val md_onPrimary_dark = md_onPrimary
-val md_primaryContainer_dark = md_primaryContainer
-val md_onPrimaryContainer_dark = md_onPrimaryContainer
-val md_secondary_dark = md_secondary
-val md_onSecondary_dark = md_onSecondary
-val md_secondaryContainer_dark = md_secondaryContainer
-val md_onSecondaryContainer_dark = md_onSecondaryContainer
-val md_tertiary_dark = md_tertiary
-val md_onTertiary_dark = md_onTertiary
-val md_tertiaryContainer_dark = md_tertiaryContainer
-val md_onTertiaryContainer_dark = md_onTertiaryContainer
-val md_background_dark = md_background
-val md_onBackground_dark = md_onBackground
-val md_surface_dark = md_surface
-val md_onSurface_dark = md_onSurface
-val md_surfaceVariant_dark = md_surfaceVariant
-val md_onSurfaceVariant_dark = md_onSurfaceVariant
-val md_outline_dark = md_outline
-val md_error_dark = md_error
-val md_onError_dark = md_onError
-val md_errorContainer_dark = md_errorContainer
-val md_onErrorContainer_dark = md_onErrorContainer

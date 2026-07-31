@@ -28,27 +28,6 @@ interface UrlBloqueadaDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertarTodos(urls: List<UrlBloqueadaEntity>)
 
-    /**
-     * UPSERT por clave primaria (id). Devuelve el row id asignado por SQLite
-     * (o el id existente si reemplazo). Usar cuando el caller necesita el id
-     * (por ejemplo, para encolar un pending op con ese idLocal).
-     *
-     * Diferencia con [actualizar]: este metodo hace REPLACE completo del row
-     * y retorna el row id; [actualizar] hace UPDATE parcial por id y retorna
-     * el conteo de filas afectadas (0/1).
-     */
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun upsertar(url: UrlBloqueadaEntity): Long
-
-    /**
-     * UPDATE parcial por id (sin tocar columnas ausentes en [url]).
-     * Retorna el numero de filas afectadas: 1 si existia el row con ese id,
-     * 0 si no existia (caller debe tratarlo como no-encontrado y decidir
-     * insert vs. error).
-     */
-    @Query("UPDATE urls_bloqueadas SET url = :urlNueva, razon = :razonNueva WHERE id = :id")
-    suspend fun actualizar(id: String, urlNueva: String, razonNueva: String?): Int
-
     @Query("DELETE FROM urls_bloqueadas WHERE id = :id")
     suspend fun eliminarPorId(id: String)
 

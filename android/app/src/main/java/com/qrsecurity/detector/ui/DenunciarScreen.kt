@@ -105,12 +105,10 @@ fun PantallaDenunciar(
         estadoSync = estadoSync,
         categorias = categorias,
         categoriaFija = categoriaFija,
-        syncDisparada = syncDisparada,
-        onSyncDisparadaChanged = { syncDisparada = it },
+        syncState = EstadoSyncDisparada(syncDisparada) { syncDisparada = it },
         uiState = uiState,
         viewModel = viewModel,
-        onMensaje = onMensaje,
-        onExito = onExito
+        callbacks = CallbacksResultado(onMensaje, onExito)
     )
 
     Column(
@@ -152,20 +150,36 @@ fun PantallaDenunciar(
 }
 
 /**
+ * S107 fix: agrupa el flag de sync disparada y su callback en un unico
+ * parametro para reducir el numero de parametros de DenunciarEfectos.
+ */
+private data class EstadoSyncDisparada(
+    val disparada: Boolean,
+    val onChanged: (Boolean) -> Unit
+)
+
+/**
+ * S107 fix: agrupa los callbacks de resultado en un unico parametro.
+ */
+private data class CallbacksResultado(
+    val onMensaje: (TipoMensaje, String) -> Unit,
+    val onExito: () -> Unit
+)
+
+/**
  * S3776 fix: todos los LaunchedEffects extraidos a esta funcion para reducir
  * la Cognitive Complexity de PantallaDenunciar de 21 a <= 15.
+ * S107 fix: parametros agrupados via EstadoSyncDisparada y CallbacksResultado.
  */
 @Composable
 private fun DenunciarEfectos(
     estadoSync: List<WorkInfo>,
     categorias: List<CategoriaDenunciaEntity>,
     categoriaFija: String,
-    syncDisparada: Boolean,
-    onSyncDisparadaChanged: (Boolean) -> Unit,
+    syncState: EstadoSyncDisparada,
     uiState: DenunciarUiState,
     viewModel: DenunciarViewModel,
-    onMensaje: (TipoMensaje, String) -> Unit,
-    onExito: () -> Unit
+    callbacks: CallbacksResultado
 ) {
     LaunchedEffect(estadoSync) {
         val estados = estadoSync.map { it.state }
@@ -173,24 +187,24 @@ private fun DenunciarEfectos(
             WorkInfo.State.FAILED in estados ||
             WorkInfo.State.CANCELLED in estados
         ) {
-            onSyncDisparadaChanged(false)
+            syncState.onChanged(false)
         }
     }
     LaunchedEffect(categorias) {
         viewModel.resolverCategoriaPhishing(categoriaFija)
-        if (categorias.isEmpty() && !syncDisparada) {
-            onSyncDisparadaChanged(true)
+        if (categorias.isEmpty() && !syncState.disparada) {
+            syncState.onChanged(true)
             viewModel.dispararSyncCategorias()
         }
     }
     LaunchedEffect(uiState.exito, uiState.error) {
         if (uiState.exito) {
-            onMensaje(TipoMensaje.EXITO, "Denuncia enviada")
+            callbacks.onMensaje(TipoMensaje.EXITO, "Denuncia enviada")
             viewModel.consumirEvento()
-            onExito()
+            callbacks.onExito()
         }
         uiState.error?.let { msg ->
-            onMensaje(TipoMensaje.ERROR, msg)
+            callbacks.onMensaje(TipoMensaje.ERROR, msg)
             viewModel.consumirEvento()
         }
     }

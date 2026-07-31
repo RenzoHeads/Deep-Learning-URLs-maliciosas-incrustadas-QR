@@ -15,10 +15,9 @@ interface CategoriaDao {
     fun observarTodas(): Flow<List<CategoriaDenunciaEntity>>
 
     /**
-     * Inserta (o reemplaza) la lista completa de categorias en una sola sentencia
-     * por fila. No se anota con `@Transaction`: envolver una unica operacion DAO
-     * seria el anti-patron A-04. La atomicidad de multiples operaciones la aporta
-     * `db.withTransaction { ... }` en el repositorio (ver RepositorioCategorias).
+     * Inserta (o reemplaza) la lista completa de categorias. Helper de seeding
+     * para tests de integracion (Room @Upsert falla al reemplazar un row
+     * existente con "Cannot execute for last inserted row ID").
      */
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertarTodos(categorias: List<CategoriaDenunciaEntity>)
@@ -31,9 +30,4 @@ interface CategoriaDao {
     @Upsert
     suspend fun upsertAll(categorias: List<CategoriaDenunciaEntity>)
 
-    @Query("UPDATE categorias_denuncia SET syncedAtMillis = :syncedAt")
-    suspend fun marcarSincronizadas(syncedAt: Long)
-
-    @Query("DELETE FROM categorias_denuncia")
-    suspend fun eliminarTodas()
 }
