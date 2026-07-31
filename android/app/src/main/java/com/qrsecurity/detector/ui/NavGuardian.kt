@@ -162,21 +162,21 @@ fun NavGuardian() {
     // y arrancamos en Escanear. Antes, el onboarding reaparecia tras cada
     // login porque no se persistia la finalizacion.
     //
-    // Bug S1 fix: la lectura de SharedPreferences (`getBoolean`) se hace
-    // en un hilo IO (produceState + withContext(Dispatchers.IO)) en lugar
-    // del hilo main. Antes el `remember { getSharedPreferences(...).getBoolean(...) }`
-    // hacia una lectura sincrona de disco en el hilo main durante la
-    // composicion inicial — podia causar jank en arranque y ANR en
-    // dispositivos lentos. Mientras se carga, se usa LOGIN como destino
-    // provisional (se actualiza cuando el IO termina).
+    // Bug S1 original fix intentaba evitar jank leyendo SharedPreferences
+    // en IO con produceState(initialValue = Rutas.LOGIN). Pero eso causaba un
+    // pantallazo visible de LOGIN por un frame antes de cambiar a ESCANEAR
+    // cuando el usuario ya estaba logueado — el initialValue era LOGIN y la
+    // lectura IO tardaba ~1 frame en completarse.
+    // SOLUCION: lectura sincrona con remember. SharedPreferences.getBoolean()
+    // es una lectura de un booleano de un archivo XML mapeado en memoria
+    // (~1ms), no causa jank ni ANR. El valor se lee una sola vez al montar
+    // el NavHost y nunca cambia durante la vida util de este NavGuardian.
     val logueado = remember { sessionViewModel.estaLogueado() }
-    val destinoInicial by produceState(initialValue = Rutas.LOGIN) {
-        val onboardingDone = withContext(kotlinx.coroutines.Dispatchers.IO) {
-            context
-                .getSharedPreferences(PREFS_QR_GUARDIAN, android.content.Context.MODE_PRIVATE)
-                .getBoolean(CLAVE_ONBOARDING_COMPLETADO, false)
-        }
-        value = calcularDestinoInicial(
+    val destinoInicial = remember {
+        val onboardingDone = context
+            .getSharedPreferences(PREFS_QR_GUARDIAN, android.content.Context.MODE_PRIVATE)
+            .getBoolean(CLAVE_ONBOARDING_COMPLETADO, false)
+        calcularDestinoInicial(
             logueado = logueado,
             onboardingDone = onboardingDone
         )
@@ -218,24 +218,22 @@ fun NavGuardian() {
                 BarraNavegacionInferior(
                     rutaActual = rutaActual,
                     onNavegar = { ruta ->
-                        // Bug NAV-1 fix: usar popUpTo(ESCANEAR) explicitamente en
-                        // lugar de findStartDestination().id. Si el usuario arranco
-                        // sin sesion, startDestination = LOGIN; tras hacer login y
-                        // navegar a ESCANEAR con popUpTo(LOGIN) { inclusive = true },
-                        // LOGIN se elimina del back stack. Pero findStartDestination()
-                        // sigue devolviendo LOGIN, asi que popUpTo con el id de LOGIN
-                        // no hace nada (no existe en el stack) y la navegacion a
-                        // ESCANEAR desde otra tab falla silenciosamente.
-                        // SOLUCION: popUpTo(ESCANEAR) siempre, porque ESCANEAR es el
-                        // home tras login, sin importar el startDestination del grafo.
-                        //
-                        // Performance: saveState=true + restoreState=true preserva
-                        // el estado de cada tab (scroll, datos Room, Flows) para
-                        // que no se recomponga desde cero al volver. Esto evita
-                        // el lag/lentitud al cambiar de tab. El bug #4 (nav bar
-                        // bloquea ESCANEAR desde BLOQUEADAS) se fixeo por separado
-                        // haciendo que onVerBloqueadas popee RESULTADO_MALICIOSO
-                        // del stack — asi el LaunchedEffect no re-dispara.
+                        // Bug NAV-1 fix + bug nav-bloqueado-tras-malicioso fix:
+                        // Cuando el usuario esta en RESULTADO_MALICIOSO y toca
+                        // "Escanear" en la nav bar, el popUpTo(ESCANEAR) con
+                        // saveState=true restaura el back stack que incluye
+                        // RESULTADO_MALICIOSO encima de ESCANEAR. El
+                        // LaunchedEffect(estadoPipeline) se re-dispara, ve el
+                        // ResultadoListo stalado, y re-navega a
+                        // RESULTADO_MALICIOSO — bloqueando la transicion a
+                        // Escanear.
+                        // SOLUCION: limpiar el estado del pipeline antes de
+                        // navegar. Al poner estadoPipeline en Idle, el
+                        // LaunchedEffect no encuentra ResultadoListo y no
+                        // re-navega.
+                        if (rutaActual != Rutas.ESCANEAR) {
+                            pipeline.reiniciar()
+                        }
                         navController.navigate(ruta) {
                             launchSingleTop = true
                             restoreState = true

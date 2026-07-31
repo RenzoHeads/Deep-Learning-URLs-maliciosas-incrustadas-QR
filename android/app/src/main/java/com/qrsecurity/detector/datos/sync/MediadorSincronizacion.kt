@@ -9,7 +9,10 @@ import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkInfo
 import androidx.work.WorkManager
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -41,11 +44,23 @@ open class MediadorSincronizacion @Inject constructor(
     private val context: Context
 ) {
 
-    private val workManager: WorkManager? = try {
-        WorkManager.getInstance(context)
-    } catch (e: Exception) {
-        android.util.Log.e("MediadorSync", "WorkManager.getInstance() fallo", e)
-        null
+    /**
+     * Obtiene WorkManager on-demand. NO se cachea en constructor porque
+     * Hilt inyecta esta clase durante AppSeguridadQR.onCreate() (via
+     * super.onCreate() que disparan los ContentProviders de startup).
+     * En ese momento, si el auto-init de WorkManager esta deshabilitado,
+     * WorkManager aun no se ha inicializado. Al llamar getInstance()
+     * bajo demanda, WorkManager detecta que no esta inicializado y usa
+     * el Configuration.Provider de AppSeguridadQR (que incluye
+     * HiltWorkerFactory).
+     */
+    private fun obtenerWorkManager(): WorkManager? {
+        return try {
+            WorkManager.getInstance(context)
+        } catch (e: Exception) {
+            Log.e("MediadorSync", "WorkManager.getInstance() fallo", e)
+            null
+        }
     }
 
     /**
@@ -70,7 +85,7 @@ open class MediadorSincronizacion @Inject constructor(
      *  - Cuando [MonitorRed] emite `true` despues de offline.
      */
     open fun dispararSyncUnica() {
-        val wm = workManager ?: run {
+        val wm = obtenerWorkManager() ?: run {
             Log.w("MediadorSync", "dispararSyncUnica() — WorkManager no inicializado, skip")
             return
         }
@@ -108,6 +123,16 @@ open class MediadorSincronizacion @Inject constructor(
             ExistingWorkPolicy.APPEND,
             request
         )
+
+        // Inspeccionar estado de la cola para debug.
+        try {
+            val infos = wm.getWorkInfosForUniqueWork(SyncWorker.NOMBRE_TRABAJO).get()
+            infos?.forEach { info ->
+                Log.d("MediadorSync", "WorkInfo: state=${info.state} id=${info.id} tags=${info.tags}")
+            } ?: Log.w("MediadorSync", "getWorkInfos devolvio null")
+        } catch (e: Exception) {
+            Log.e("MediadorSync", "getWorkInfos fallo", e)
+        }
     }
 
     /**
@@ -132,7 +157,7 @@ open class MediadorSincronizacion @Inject constructor(
      * [dispararSyncUnica] tras cada write y al volver la red.
      */
     open fun programarSyncPeriodica() {
-        val wm = workManager ?: run {
+        val wm = obtenerWorkManager() ?: run {
             Log.w("MediadorSync", "programarSyncPeriodica() — WorkManager no inicializado, skip")
             return
         }
@@ -159,11 +184,38 @@ open class MediadorSincronizacion @Inject constructor(
      * Cancela cualquier sync en curso o programado (uso: cerrar sesion).
      */
     open fun cancelarTodo() {
-        val wm = workManager ?: run {
+        val wm = obtenerWorkManager() ?: run {
             Log.w("MediadorSync", "cancelarTodo() — WorkManager no inicializado, skip")
             return
         }
         wm.cancelUniqueWork(SyncWorker.NOMBRE_TRABAJO)
         wm.cancelUniqueWork(SyncWorker.NOMBRE_TRABAJO + "_periodica")
+    }
+
+    /**
+     * Fix #3 — Observa el estado del sync worker one-shot via WorkManager.
+     *
+     * Retorna un [Flow] que emite `true` cuando el worker esta ENQUEUED o RUNNING,
+     * `false` en cualquier otro estado (SUCCEEDED, FAILED, CANCELLED, o sin work).
+     *
+     * La UI usa este Flow para mostrar un skeleton/loading en el Historial mientras
+     * el primer PULL trae datos del servidor, en lugar de mostrar "Aun no hay escaneos"
+     * sobre una Room vacia.
+     *
+     * Usamos `getWorkInfosForUniqueWorkFlow` (WorkManager 2.9.0+) que retorna un
+     * Flow<List<WorkInfo>> — reactivo, no blocking. Mapeamos a Boolean para que la
+     * UI no conozca detalles de WorkManager.
+     */
+    fun observarSyncEnCurso(): Flow<Boolean> {
+        return try {
+            val wm = obtenerWorkManager() ?: return kotlinx.coroutines.flow.flowOf(false)
+            wm.getWorkInfosForUniqueWorkFlow(SyncWorker.NOMBRE_TRABAJO)
+                .map { infos ->
+                    infos.any { it.state == WorkInfo.State.ENQUEUED || it.state == WorkInfo.State.RUNNING }
+                }
+        } catch (e: Exception) {
+            Log.e("MediadorSync", "observarSyncEnCurso() fallo", e)
+            kotlinx.coroutines.flow.flowOf(false)
+        }
     }
 }

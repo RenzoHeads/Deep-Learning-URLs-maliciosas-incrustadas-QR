@@ -3,6 +3,7 @@ package com.qrsecurity.detector.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.qrsecurity.detector.api.ClienteBackend
+import com.qrsecurity.detector.datos.sync.MediadorSincronizacion
 import com.qrsecurity.detector.sesion.SesionUsuario
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.channels.Channel
@@ -64,7 +65,8 @@ sealed interface LoginAction {
 @HiltViewModel
 class LoginViewModel @Inject constructor(
     private val clienteBackend: ClienteBackend,
-    private val sesionUsuario: SesionUsuario
+    private val sesionUsuario: SesionUsuario,
+    private val mediadorSincronizacion: MediadorSincronizacion
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(LoginUiState())
@@ -115,6 +117,11 @@ class LoginViewModel @Inject constructor(
                     usuario = respuesta.nombreUsuario ?: nombreUsuario,
                     correo = respuesta.correo ?: correo
                 )
+                // Tras login exitoso, disparar sync inmediato para hacer PULL
+                // de los datos del usuario desde la nube (escaneos, URLs
+                // bloqueadas, denuncias, categorias). Sin esto, el usuario
+                // no veria su historial hasta hacer un nuevo escaneo.
+                mediadorSincronizacion.dispararSyncUnica()
                 _uiState.update { it.copy(procesando = false) }
                 _eventos.send(LoginEvento.Exito)
             } catch (e: ClienteBackend.HttpBackendException) {

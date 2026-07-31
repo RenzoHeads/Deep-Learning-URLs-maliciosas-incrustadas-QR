@@ -128,6 +128,51 @@ class RepositorioDenuncias(
                     mensaje = e.message ?: "Error sincronizando denuncias"
                 )
             }
+            }
+
+    /**
+     * Delta sync — pide solo las denuncias modificadas desde [cursor].
+     * Maneja tombstones (deleted_at != null → eliminar local).
+     */
+    suspend fun sincronizarDelta(token: String, cursor: String): ResultadoSync =
+        withContext(ioDispatcher) {
+            try {
+                val delta = backend.listarDenunciasDelta(token, cursor)
+                val ahora = System.currentTimeMillis()
+
+                val tombstones = delta.filter { it.deletedAt != null }
+                val vivos = delta.filter { it.deletedAt == null }
+
+                db.withTransaction {
+                    if (tombstones.isNotEmpty()) {
+                        db.denunciaDao().eliminarPorIds(tombstones.map { it.id })
+                    }
+                    if (vivos.isNotEmpty()) {
+                        val entidades = vivos.map { it.aEntidad(ahora) }
+                        db.denunciaDao().insertarTodos(entidades)
+                    }
+                    val nuevoCursor = delta.mapNotNull { it.updatedAt }.maxByOrNull { it }
+                    db.syncStateDao().actualizar("denuncias", ahora, exitosa = true)
+                    if (nuevoCursor != null) {
+                        db.syncStateDao().actualizarCursor("denuncias", nuevoCursor)
+                    }
+                }
+
+                ResultadoSync.Exitoso(
+                    filaSincronizadas = delta.size,
+                    idsServidor = vivos.map { it.id }
+                )
+            } catch (e: ClienteBackend.HttpBackendException) {
+                ResultadoSync.Fallido(
+                    mensaje = e.message ?: "Error en delta sync de denuncias",
+                    codigo = e.codigo,
+                    retryAfterSegundos = e.retryAfterSegundos
+                )
+            } catch (e: Exception) {
+                ResultadoSync.Fallido(
+                    mensaje = e.message ?: "Error en delta sync de denuncias"
+                )
+            }
         }
 
     /**

@@ -1,7 +1,12 @@
 package com.qrsecurity.detector.sesion
 
+import android.content.Context
 import com.qrsecurity.detector.datos.local.BaseDatosSeguridad
 import com.qrsecurity.detector.datos.sync.MediadorSincronizacion
+import com.qrsecurity.detector.datos.sync.SyncWorker.Companion.KEY_INITIAL_SYNC_COMPLETED
+import com.qrsecurity.detector.datos.sync.SyncWorker.Companion.KEY_ULTIMO_SYNC
+import com.qrsecurity.detector.datos.sync.SyncWorker.Companion.PREFS_SYNC
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
@@ -72,6 +77,7 @@ import javax.inject.Singleton
  */
 @Singleton
 class LogoutCoordinator @Inject constructor(
+    @ApplicationContext private val appContext: Context,
     private val mediadorSincronizacion: MediadorSincronizacion,
     private val db: BaseDatosSeguridad,
     private val sesionUsuario: SesionUsuario
@@ -96,7 +102,19 @@ class LogoutCoordinator @Inject constructor(
             db.clearAllTables()
         }
 
-        // 3) Eliminar token + flag de sesion (preserva id_dispositivo).
+        // 3) Resetear initial_sync_completed=false y KEY_ULTIMO_SYNC=0 — la DB
+        //    local esta vacia tras clearAllTables, asi que el siguiente
+        //    SyncWorker debe hacer full pull (no delta pull) para repoblar todo
+        //    desde el backend. Si dejamos KEY_ULTIMO_SYNC con el timestamp del
+        //    logout, debeSaltarPulls podria skippear el primer sync del nuevo
+        //    usuario si ocurre dentro de MIN_INTERVALO_SEGUNDOS.
+        appContext.getSharedPreferences(PREFS_SYNC, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_INITIAL_SYNC_COMPLETED, false)
+            .putLong(KEY_ULTIMO_SYNC, 0L)
+            .apply()
+
+        // 4) Eliminar token + flag de sesion (preserva id_dispositivo).
         sesionUsuario.cerrarSesion()
     }
 }

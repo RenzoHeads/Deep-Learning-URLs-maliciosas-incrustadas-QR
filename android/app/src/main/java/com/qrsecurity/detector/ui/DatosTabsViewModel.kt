@@ -62,4 +62,12 @@ class DatosTabsViewModel @Inject constructor(
     val urlsBloqueadas: StateFlow<List<UrlBloqueadaEntity>> =
         repoUrls.observarTodos()
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    // ── Fix #3: Estado de sincronizacion ──
+    // syncEnCurso emite true mientras el SyncWorker esta ENQUEUED o RUNNING.
+    // La UI lo usa para mostrar skeleton/loading en el Historial en lugar de
+    // "Aun no hay escaneos" cuando Room esta vacio y el PULL inicial esta corriendo.
+    val syncEnCurso: StateFlow<Boolean> =
+        mediadorSync.observarSyncEnCurso()
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 }

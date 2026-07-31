@@ -160,7 +160,9 @@ class ClienteBackend(
         @SerialName("nivel_alerta") val nivelAlerta: String,
         val delegado: String? = null,
         @SerialName("es_malicioso") val esMalicioso: Boolean,
-        @SerialName("creado_en") val creadoEn: String
+        @SerialName("creado_en") val creadoEn: String,
+        @SerialName("updated_at") val updatedAt: String? = null,
+        @SerialName("deleted_at") val deletedAt: String? = null
     )
 
     @Serializable
@@ -168,7 +170,9 @@ class ClienteBackend(
         val id: String,
         val url: String,
         val razon: String? = null,
-        @SerialName("creado_en") val creadoEn: String
+        @SerialName("creado_en") val creadoEn: String,
+        @SerialName("updated_at") val updatedAt: String? = null,
+        @SerialName("deleted_at") val deletedAt: String? = null
     )
 
     @Serializable
@@ -192,7 +196,9 @@ class ClienteBackend(
         @SerialName("nombre_categoria") val nombreCategoria: String? = null,
         val descripcion: String? = null,
         val estado: String,
-        @SerialName("creado_en") val creadoEn: String
+        @SerialName("creado_en") val creadoEn: String,
+        @SerialName("updated_at") val updatedAt: String? = null,
+        @SerialName("deleted_at") val deletedAt: String? = null
     )
 
     /**
@@ -318,6 +324,32 @@ class ClienteBackend(
     }
 
     /**
+     * Delta sync — lista solo los escaneos modificados desde [modificadosDesde].
+     *
+     * Backend: `GET /escaneos?modificados_desde=<ISO8601>`
+     *
+     * El modo delta del backend:
+     *  - Devuelve filas con `updated_at >= modificados_desde` (incluye tombstones).
+     *  - NO aplica filtro es_malicioso ni paginacion — devuelve todo el delta.
+     *  - Las filas con `deleted_at != null` son tombstones: el cliente debe
+     *    eliminarlas localmente.
+     *
+     * @param modificadosDesde Fecha ISO 8601 (ej. "2026-07-31T12:00:00Z").
+     *                         Null equivale a full pull (modo normal).
+     */
+    suspend fun listarEscaneosDelta(
+        token: String,
+        modificadosDesde: String
+    ): List<Escaneo> = withContext(Dispatchers.IO) {
+        val url = "$base/escaneos?modificados_desde=${java.net.URLEncoder.encode(modificadosDesde, "UTF-8")}"
+        val respuesta = get(url, token)
+        json.decodeFromString(
+            kotlinx.serialization.builtins.ListSerializer(Escaneo.serializer()),
+            respuesta
+        )
+    }
+
+    /**
      * Devuelve el total de escaneos del usuario segun el filtro, sin paginacion.
      * Backend: `GET /escaneos/count?filtro=` → `{"total": int}`.
      *
@@ -352,6 +384,26 @@ class ClienteBackend(
     /** Bug A15 fix: auth via header. */
     suspend fun listarUrlsBloqueadas(token: String): List<UrlBloqueada> = withContext(Dispatchers.IO) {
         val respuesta = get("$base/urls-bloqueadas", token)
+        json.decodeFromString(
+            kotlinx.serialization.builtins.ListSerializer(UrlBloqueada.serializer()),
+            respuesta
+        )
+    }
+
+    /**
+     * Delta sync — lista solo las URLs bloqueadas modificadas desde [modificadosDesde].
+     *
+     * Backend: `GET /urls-bloqueadas?modificados_desde=<ISO8601>`
+     *
+     * El modo delta incluye tombstones (deleted_at != null) — el cliente debe
+     * eliminar localmente las filas donde deleted_at no sea null.
+     */
+    suspend fun listarUrlsBloqueadasDelta(
+        token: String,
+        modificadosDesde: String
+    ): List<UrlBloqueada> = withContext(Dispatchers.IO) {
+        val url = "$base/urls-bloqueadas?modificados_desde=${java.net.URLEncoder.encode(modificadosDesde, "UTF-8")}"
+        val respuesta = get(url, token)
         json.decodeFromString(
             kotlinx.serialization.builtins.ListSerializer(UrlBloqueada.serializer()),
             respuesta
@@ -414,6 +466,26 @@ class ClienteBackend(
      */
     suspend fun listarDenuncias(token: String): List<Denuncia> = withContext(Dispatchers.IO) {
         val respuesta = get("$base/denuncias", token)
+        json.decodeFromString(
+            kotlinx.serialization.builtins.ListSerializer(Denuncia.serializer()),
+            respuesta
+        )
+    }
+
+    /**
+     * Delta sync — lista solo las denuncias modificadas desde [modificadosDesde].
+     *
+     * Backend: `GET /denuncias?modificados_desde=<ISO8601>`
+     *
+     * El modo delta incluye tombstones (deleted_at != null) — el cliente debe
+     * eliminar localmente las filas donde deleted_at no sea null.
+     */
+    suspend fun listarDenunciasDelta(
+        token: String,
+        modificadosDesde: String
+    ): List<Denuncia> = withContext(Dispatchers.IO) {
+        val url = "$base/denuncias?modificados_desde=${java.net.URLEncoder.encode(modificadosDesde, "UTF-8")}"
+        val respuesta = get(url, token)
         json.decodeFromString(
             kotlinx.serialization.builtins.ListSerializer(Denuncia.serializer()),
             respuesta

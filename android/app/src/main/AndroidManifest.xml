@@ -35,10 +35,19 @@
 
         <!--
             Deshabilita el auto-inicializador de WorkManager.
-            La app usa HiltWorkerFactory via Configuration.Provider en
-            AppSeguridadQR. Sin esto, WorkManager se inicializa on-demand
-            con DefaultWorkerFactory (sin DI), y los @HiltWorker crashean
-            silenciosamente al no poder resolver dependencias.
+            El WorkManagerInitializer (ContentProvider de androidx.startup)
+            se ejecuta ANTES de Application.onCreate() e inicializa
+            WorkManager con DefaultWorkerFactory (sin HiltWorkerFactory).
+            Eso hace que los @HiltWorker fallen al instanciar.
+
+            Con el auto-init deshabilitado, WorkManager se inicializa
+            on-demand la primera vez que se llama WorkManager.getInstance()
+            (desde MediadorSincronizacion, despues de AppSeguridadQR.onCreate()),
+            usando el Configuration.Provider que proporciona HiltWorkerFactory.
+
+            Los componentes del scheduler (SystemJobService, ConstraintProxy
+            receivers) se habilitan automaticamente cuando WorkManager se
+            inicializa on-demand.
         -->
         <provider
             android:name="androidx.startup.InitializationProvider"
@@ -47,7 +56,7 @@
             tools:node="merge">
             <meta-data
                 android:name="androidx.work.WorkManagerInitializer"
-                android:value="androidx.startup"
+                android:value="androidx.startup.InitializationProvider"
                 tools:node="remove" />
         </provider>
 

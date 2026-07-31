@@ -139,6 +139,8 @@ fun PantallaHistorial(
     val totalEscaneos by datosViewModel.totalEscaneos.collectAsStateWithLifecycle()
     val amenazas by datosViewModel.amenazas.collectAsStateWithLifecycle()
     val ultimos7Dias by datosViewModel.ultimos7Dias.collectAsStateWithLifecycle()
+    // Fix #3 — observar si el sync worker esta corriendo para mostrar skeleton.
+    val syncEnCurso by datosViewModel.syncEnCurso.collectAsStateWithLifecycle()
     var escaneoEliminar by remember { mutableStateOf<EscaneoEntity?>(null) }
 
     val estadisticas = EstadisticasHistorial(
@@ -239,13 +241,17 @@ fun PantallaHistorial(
 
             Spacer(modifier = Modifier.height(Espaciado.lg))
 
-            // ── Estado: vacio / lista ──
-            // Performance fix: historial nunca es null ahora (el StateFlow
-            // del ViewModel siempre tiene emptyList como valor inicial).
-            // no hay spinner de carga — la lista aparece instantaneamente.
+            // ── Estado: cargando / vacio / lista ──
+            // Fix #3: cuando el historial esta vacio Y el sync inicial esta
+            // corriendo, mostrar skeleton de carga en lugar de "Aun no hay
+            // escaneos". Esto elimina el pantallazo de "0 URLs" antes del PULL.
             val lista = historial
             if (lista.isEmpty()) {
-                EstadoVacio(totalEscaneos = totalEscaneos)
+                if (syncEnCurso && totalEscaneos == 0) {
+                    EstadoCargando()
+                } else {
+                    EstadoVacio(totalEscaneos = totalEscaneos)
+                }
             } else {
                 ListaHistorial(
                     lista = lista,
@@ -329,6 +335,39 @@ private fun EstadoVacio(totalEscaneos: Int) {
                    else "Prueba con otro filtro",
             style = MaterialTheme.typography.bodyMedium,
             color = CyberTextoSecundario,
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
+/**
+ * Fix #3 — Skeleton de carga mostrado mientras el primer PULL del SyncWorker
+ * trae datos del servidor. Se muestra en lugar de [EstadoVacio] cuando la Room
+ * esta vacia y el sync esta ENQUEUED o RUNNING.
+ */
+@Composable
+private fun EstadoCargando() {
+    Column(
+        modifier = Modifier.fillMaxSize(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        androidx.compose.material3.CircularProgressIndicator(
+            color = CyberCyan,
+            strokeWidth = 3.dp,
+            modifier = Modifier.size(48.dp)
+        )
+        Spacer(modifier = Modifier.height(Espaciado.lg))
+        Text(
+            text = "Sincronizando con el servidor...",
+            style = MaterialTheme.typography.titleSmall,
+            color = CyberTextoSecundario
+        )
+        Spacer(modifier = Modifier.height(Espaciado.xs))
+        Text(
+            text = "Cargando tus escaneos por primera vez",
+            style = MaterialTheme.typography.bodySmall,
+            color = CyberTextoSecundario.copy(alpha = 0.7f),
             textAlign = TextAlign.Center
         )
     }

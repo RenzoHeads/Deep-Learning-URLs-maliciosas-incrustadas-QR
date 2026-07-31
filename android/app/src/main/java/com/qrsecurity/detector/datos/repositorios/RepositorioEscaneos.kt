@@ -39,6 +39,18 @@ class RepositorioEscaneos(
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) {
 
+    /**
+     * Fix #4 — Maximo de paginas a traer por cada worker-run.
+     *
+     * Con limite=200 por pagina, esto permite hasta 1000 registros por sync.
+     * Si el servidor tiene mas, el pullCompleto=false y el siguiente worker
+     * continuara trayendo las paginas restantes (idempotente via REPLACE).
+     *
+     * 5 paginas = 1000 registros es suficiente para el volumen actual del
+     * backend (~31 escaneos). Aumentar si el dataset crece significativamente.
+     */
+    private val MAX_PAGINAS_POR_RUN = 5
+
     // ── Observacion reactiva (UI usa estos Flows) ──
 
     fun observarTodos(): Flow<List<EscaneoEntity>> = db.escaneoDao().observarTodos()
@@ -192,36 +204,55 @@ class RepositorioEscaneos(
      */
     suspend fun sincronizarDesdeBackend(token: String): ResultadoSync = withContext(ioDispatcher) {
         try {
-            // Paginar todos los escaneos del servidor (limite=200 por pagina).
-            val todosEscaneos = mutableListOf<Escaneo>()
-            var pagina = 1
+            // Fix #4 — Paginacion incremental:
+            // - Persistir cada pagina a Room dentro del loop (no acumular en memoria).
+            // - Limitar a MAX_PAGINAS_POR_RUN por worker-run para evitar traer
+            //   1M registros de golpe. El siguiente worker continuara desde
+            //   la siguiente pagina (el loop siempre empieza en pagina 1 porque
+            //   el backend no tiene cursor/delta; las pages ya persistidas se
+            //   sobreescriben via REPLACE — idempotente).
+            // - ResultadoSync.Exitoso.pullCompleto = false si no llegamos a la
+            //   ultima pagina, para que SyncWorker NO haga limpiarHuerfanos.
             val limite = 200
-            while (true) {
+            val todosIdsServidor = mutableListOf<String>()
+            var totalFilas = 0
+            var pagina = 1
+            var pullCompleto = false
+
+            while (pagina <= MAX_PAGINAS_POR_RUN) {
                 val batch = backend.listarEscaneos(token, filtro = "todos", pagina = pagina, limite = limite)
-                todosEscaneos.addAll(batch)
-                if (batch.size < limite) break
+
+                if (batch.isEmpty()) {
+                    pullCompleto = true
+                    break
+                }
+
+                // Persistir esta pagina inmediatamente — no acumular en memoria.
+                val ahora = System.currentTimeMillis()
+                val entidades = batch.map { it.aEntidad(ahora) }
+                db.withTransaction {
+                    db.escaneoDao().insertarTodos(entidades)
+                }
+                todosIdsServidor.addAll(batch.map { it.id })
+                totalFilas += batch.size
+
+                if (batch.size < limite) {
+                    pullCompleto = true
+                    break
+                }
                 pagina++
             }
 
-            val ahora = System.currentTimeMillis()
-
+            // Marcar sync_state exitosa.
+            val ahoraFinal = System.currentTimeMillis()
             db.withTransaction {
-                // 1. Upsert de rows del servidor (LWW: server wins on non-dirty locals).
-                val entidades = todosEscaneos.map { it.aEntidad(ahora) }
-                db.escaneoDao().insertarTodos(entidades)
-
-                // 2. Bug M10 fix — orphan cleanup se hace FUERA del repo, en
-                //    SyncWorker, llamando a [limpiarHuerfanos] con los ids que
-                //    trae el PULL. Aqui persistimos y reportamos los idsServidor
-                //    para que el worker haga el diff. No tocamos los rows dirty.
-
-                // 3. Marcar sync_state exitosa: cambia timestamp + flag exitosa.
-                db.syncStateDao().actualizar("escaneos", ahora, exitosa = true)
+                db.syncStateDao().actualizar("escaneos", ahoraFinal, exitosa = true)
             }
 
             ResultadoSync.Exitoso(
-                filaSincronizadas = todosEscaneos.size,
-                idsServidor = todosEscaneos.map { it.id }
+                filaSincronizadas = totalFilas,
+                idsServidor = todosIdsServidor,
+                pullCompleto = pullCompleto
             )
         } catch (e: ClienteBackend.HttpBackendException) {
             // Bug C3 fix: propagar el codigo HTTP (propiedad, no parseo de
@@ -234,6 +265,71 @@ class RepositorioEscaneos(
         } catch (e: Exception) {
             // IOException pura de red (sin codigo HTTP): transitorio.
             ResultadoSync.Fallido(mensaje = e.message ?: "Error desconocido sincronizando escaneos")
+        }
+    }
+
+    /**
+     * Delta sync — pide solo los escaneos modificados desde [cursor] y los
+     * aplica a Room. Maneja tombstones (deleted_at != null → eliminar local).
+     *
+     * Flujo:
+     *  1. GET /escaneos?modificados_desde=<cursor> — devuelve filas con
+     *     updated_at >= cursor, incluyendo tombstones.
+     *  2. Para cada fila:
+     *     - Si deleted_at != null → eliminar local (tombstone).
+     *     - Si no → upsert (REPLACE — server wins on non-dirty).
+     *  3. Actualizar sync_state.ultimoCursorModificacion al max(updated_at)
+     *     de las filas recibidas.
+     *  4. ResultadoSync.Exitoso con pullCompleto=true (el delta siempre es
+     *     completo — no hay paginacion en modo delta).
+     *
+     * No se hace limpiarHuerfanos en delta sync — los tombstones ya vienen
+     * explicitos en la respuesta del backend.
+     */
+    suspend fun sincronizarDelta(token: String, cursor: String): ResultadoSync = withContext(ioDispatcher) {
+        try {
+            val delta = backend.listarEscaneosDelta(token, cursor)
+            val ahora = System.currentTimeMillis()
+
+            val tombstones = delta.filter { it.deletedAt != null }
+            val vivos = delta.filter { it.deletedAt == null }
+
+            db.withTransaction {
+                // 1. Aplicar tombstones — eliminar filas locales.
+                if (tombstones.isNotEmpty()) {
+                    db.escaneoDao().eliminarPorIds(tombstones.map { it.id })
+                }
+
+                // 2. Upsert de filas vivas (LWW: server wins on non-dirty).
+                if (vivos.isNotEmpty()) {
+                    val entidades = vivos.map { it.aEntidad(ahora) }
+                    db.escaneoDao().insertarTodos(entidades)
+                }
+
+                // 3. Actualizar cursor al max(updated_at) de las filas recibidas.
+                val nuevoCursor = delta.mapNotNull { it.updatedAt }.maxByOrNull { it }
+                if (nuevoCursor != null) {
+                    db.syncStateDao().actualizar("escaneos", ahora, exitosa = true)
+                    db.syncStateDao().actualizarCursor("escaneos", nuevoCursor)
+                } else {
+                    // Delta vacio — el cursor no avanza pero marcamos sync exitosa.
+                    db.syncStateDao().actualizar("escaneos", ahora, exitosa = true)
+                }
+            }
+
+            ResultadoSync.Exitoso(
+                filaSincronizadas = delta.size,
+                idsServidor = vivos.map { it.id },
+                pullCompleto = true
+            )
+        } catch (e: ClienteBackend.HttpBackendException) {
+            ResultadoSync.Fallido(
+                mensaje = e.message ?: "Error desconocido en delta sync de escaneos",
+                codigo = e.codigo,
+                retryAfterSegundos = e.retryAfterSegundos
+            )
+        } catch (e: Exception) {
+            ResultadoSync.Fallido(mensaje = e.message ?: "Error desconocido en delta sync de escaneos")
         }
     }
 
@@ -443,7 +539,18 @@ class RepositorioEscaneos(
 sealed class ResultadoSync {
     data class Exitoso(
         val filaSincronizadas: Int,
-        val idsServidor: List<String> = emptyList()
+        val idsServidor: List<String> = emptyList(),
+        /**
+         * Fix #4 — indica si el PULL trajo TODAS las paginas del servidor (true)
+         * o si se detuvo tras N paginas por un limite por worker-run (false).
+         *
+         * Solo cuando [pullCompleto] = true el SyncWorker puede hacer
+         * [limpiarHuerfanos] de forma segura — si el pull fue parcial,
+         * limpiar orphans eliminaria rows que existen en paginas no fetchadas.
+         * Default true para preservar compatibilidad con URLs/denuncias que
+         * siempre hacen pull completo.
+         */
+        val pullCompleto: Boolean = true
     ) : ResultadoSync()
     data class Fallido(
         val mensaje: String,

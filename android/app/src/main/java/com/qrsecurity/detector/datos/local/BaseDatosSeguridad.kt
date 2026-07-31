@@ -46,7 +46,7 @@ import com.qrsecurity.detector.datos.local.entidades.UrlBloqueadaEntity
         PendingOpEntity::class,
         SyncStateEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = true
 )
 abstract class BaseDatosSeguridad : RoomDatabase() {
@@ -151,6 +151,25 @@ abstract class BaseDatosSeguridad : RoomDatabase() {
         }
 
         /**
+         * Migration 2 → 3:
+         *
+         * Cambio aditivo — anade columna `ultimoCursorModificacion TEXT` a
+         * `sync_state` para persistir el cursor de delta sync (ISO 8601 del
+         * max(updated_at) del backend). Es nullable: null = nunca se ha hecho
+         * delta pull → el SyncWorker hace full pull.
+         *
+         * ALTER TABLE ADD COLUMN es instantaneo en SQLite (no reescribe la
+         * tabla) — no hay riesgo de bloqueo ni de perdida de datos.
+         */
+        val MIGRATION_2_3: Migration = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE `sync_state` ADD COLUMN `ultimoCursorModificacion` TEXT"
+                )
+            }
+        }
+
+        /**
          * Obtiene o construye la instancia unica de la base de datos.
          * Thread-safe via double-checked locking.
          *
@@ -167,7 +186,7 @@ abstract class BaseDatosSeguridad : RoomDatabase() {
                     BaseDatosSeguridad::class.java,
                     "qr_guardian.db"
                 )
-                    .addMigrations(MIGRATION_1_2)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .also { builder ->
                         if (BuildConfig.DEBUG) {
                             builder.fallbackToDestructiveMigration()

@@ -40,4 +40,12 @@ interface SyncStateDao {
      */
     @Query("UPDATE sync_state SET ultimaSincronizacionAtMillis = :millis, ultimaSincronizacionExitosa = 0 WHERE tabla = :tabla")
     suspend fun actualizarTimestamp(tabla: String, millis: Long): Int
+
+    /**
+     * Delta sync — actualiza el cursor de modificacion tras un delta pull
+     * exitosa. El cursor es el max(updated_at) de las filas recibidas del
+     * backend. La proxima delta pull pedira ?modificados_desde=<cursor>.
+     */
+    @Query("UPDATE sync_state SET ultimoCursorModificacion = :cursor, ultimaSincronizacionExitosa = 1 WHERE tabla = :tabla")
+    suspend fun actualizarCursor(tabla: String, cursor: String): Int
 }

@@ -2,6 +2,7 @@ package com.qrsecurity.detector
 
 import android.app.Application
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -47,15 +48,26 @@ class AppSeguridadQR : Application(), Configuration.Provider {
 
     override fun onCreate() {
         super.onCreate()
+        Log.d("AppSeguridadQR", "onCreate() — iniciando. workerFactory injected=${::workerFactory.isInitialized}")
 
         // Safety-net: sync periodico cada 15 min cuando hay red.
-        mediadorSincronizacion.programarSyncPeriodica()
+        try {
+            mediadorSincronizacion.programarSyncPeriodica()
+            Log.d("AppSeguridadQR", "programarSyncPeriodica() OK")
+        } catch (e: Exception) {
+            Log.e("AppSeguridadQR", "programarSyncPeriodica() fallo", e)
+        }
 
         // Procesar pending_ops que quedaron de sesiones anteriores.
         // dispararSyncUnica() solo se llama tras un write local nuevo,
         // pero los pending_ops antiguos (escaneos hechos offline) nunca
         // se procesarian si el usuario no hace un nuevo write.
-        mediadorSincronizacion.dispararSyncUnica()
+        try {
+            mediadorSincronizacion.dispararSyncUnica()
+            Log.d("AppSeguridadQR", "dispararSyncUnica() OK")
+        } catch (e: Exception) {
+            Log.e("AppSeguridadQR", "dispararSyncUnica() fallo", e)
+        }
     }
 }
 

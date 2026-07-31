@@ -174,6 +174,51 @@ class RepositorioUrlsBloqueadas(
         }
 
     /**
+     * Delta sync — pide solo las URLs bloqueadas modificadas desde [cursor].
+     * Maneja tombstones (deleted_at != null → eliminar local).
+     */
+    suspend fun sincronizarDelta(token: String, cursor: String): ResultadoSync =
+        withContext(ioDispatcher) {
+            try {
+                val delta = backend.listarUrlsBloqueadasDelta(token, cursor)
+                val ahora = System.currentTimeMillis()
+
+                val tombstones = delta.filter { it.deletedAt != null }
+                val vivos = delta.filter { it.deletedAt == null }
+
+                db.withTransaction {
+                    if (tombstones.isNotEmpty()) {
+                        db.urlBloqueadaDao().eliminarPorIds(tombstones.map { it.id })
+                    }
+                    if (vivos.isNotEmpty()) {
+                        val entidades = vivos.map { it.aEntidad(ahora) }
+                        db.urlBloqueadaDao().insertarTodos(entidades)
+                    }
+                    val nuevoCursor = delta.mapNotNull { it.updatedAt }.maxByOrNull { it }
+                    db.syncStateDao().actualizar("urls_bloqueadas", ahora, exitosa = true)
+                    if (nuevoCursor != null) {
+                        db.syncStateDao().actualizarCursor("urls_bloqueadas", nuevoCursor)
+                    }
+                }
+
+                ResultadoSync.Exitoso(
+                    filaSincronizadas = delta.size,
+                    idsServidor = vivos.map { it.id }
+                )
+            } catch (e: ClienteBackend.HttpBackendException) {
+                ResultadoSync.Fallido(
+                    mensaje = e.message ?: "Error en delta sync de URLs bloqueadas",
+                    codigo = e.codigo,
+                    retryAfterSegundos = e.retryAfterSegundos
+                )
+            } catch (e: Exception) {
+                ResultadoSync.Fallido(
+                    mensaje = e.message ?: "Error en delta sync de URLs bloqueadas"
+                )
+            }
+        }
+
+    /**
      * Bug M10 fix: limpia rows locales **no dirty** ausentes en [idsServidor].
      * Ver [RepositorioEscaneos.limpiarHuerfanos] para la estrategia detallada.
      *
