@@ -173,7 +173,15 @@ class ExtractorUrls {
         // attacks (``аpple.com`` vs ``apple.com``). Rechazamos hosts que
         // contengan cualquier caracter fuera de ASCII printables basicos.
         val host = uri.host
-        if (host != null && !host.matches(Regex("^[A-Za-z0-9.\\-:]+$"))) {
+        // Bug fix: si host es null o blank, la URL no es valida — antes el
+        // short-circuit `host != null &&` dejaba pasar URLs sin host como
+        // `https://?q=1` o `https:example.com` (java.net.URI parsea estas
+        // formas sin error pero host queda null). Esas URLs no tienen autoridad
+        // y no deben alimentarse al modelo ML.
+        if (host.isNullOrBlank()) {
+            return false
+        }
+        if (!host.matches(Regex("^[A-Za-z0-9.\\-:]+$"))) {
             return false
         }
 

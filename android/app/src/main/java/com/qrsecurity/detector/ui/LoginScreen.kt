@@ -82,7 +82,7 @@ import com.qrsecurity.detector.ui.theme.TamanosToque
  */
 @Composable
 fun PantallaLogin(
-    onExito: () -> Unit,
+    onExito: (esNuevoRegistro: Boolean) -> Unit,
     onMensaje: (TipoMensaje, String) -> Unit = { _, _ -> },
     viewModel: LoginViewModel = hiltViewModel()
 ) {
@@ -103,7 +103,7 @@ fun PantallaLogin(
             when (evento) {
                 is LoginEvento.Exito -> {
                     onMensaje(TipoMensaje.EXITO, "Sesion iniciada")
-                    onExito()
+                    onExito(evento.esNuevoRegistro)
                 }
                 is LoginEvento.Error -> {
                     onMensaje(TipoMensaje.ERROR, evento.mensaje)

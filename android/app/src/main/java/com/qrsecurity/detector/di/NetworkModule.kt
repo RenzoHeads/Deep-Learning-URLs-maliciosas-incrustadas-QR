@@ -66,11 +66,13 @@ object NetworkModule {
     @Provides
     @Singleton
     fun provideClienteBackend(
-        sesion: SesionUsuario
+        sesion: SesionUsuario,
+        okHttpClient: OkHttpClient
     ): ClienteBackend {
         return ClienteBackend(
             baseUrl = ClienteBackend.BASE_POR_DEFECTO,
-            tokenProvider = { sesion.obtenerToken() }
+            tokenProvider = { sesion.obtenerToken() },
+            clienteOkHttp = okHttpClient
         )
     }
 }

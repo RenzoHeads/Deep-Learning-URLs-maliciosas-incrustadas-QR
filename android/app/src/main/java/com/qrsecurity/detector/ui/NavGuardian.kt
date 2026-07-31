@@ -232,7 +232,7 @@ fun NavGuardian() {
                         // LaunchedEffect no encuentra ResultadoListo y no
                         // re-navega.
                         if (rutaActual != Rutas.ESCANEAR) {
-                            pipeline.reiniciar()
+                            pipelineViewModel.reiniciar()
                         }
                         navController.navigate(ruta) {
                             launchSingleTop = true
@@ -266,19 +266,32 @@ fun NavGuardian() {
             popExitTransition = { ExitTransition.None }
         ) {
             // ── Login (pantalla inicial si no hay sesion) ──
-            // Bug A11 fix: tras login exitoso, verificar si el onboarding ya
-            // fue completado (flag persistido en SharedPreferences). Antes,
-            // onExito siempre navegaba a ONBOARDING sin importar si el usuario
-            // ya lo habia visto — el onboarding reaparecia en cada login.
-            // Ahora: si el flag es true, navega directo a ESCANEAR; si no,
-            // navega a ONBOARDING como antes.
+            // Bug A11 fix + fix onboarding-nueva-cuenta: tras login/registro
+            // exitoso, decidir destino segun si es nuevo registro o login
+            // existente.
+            //
+            // - Nuevo registro (esNuevoRegistro=true): SIEMPRE va a
+            //   ONBOARDING. El usuario es nuevo y necesita el tour inicial.
+            //   Antes, el flag global `onboarding_completado` persistia de
+            //   sesiones de otros usuarios anteriores, asi que el onboarding
+            //   nunca aparecia al crear una cuenta nueva — el usuario nuevo
+            //   veia directamente Escanear sin explicacion.
+            //
+            // - Login existente (esNuevoRegistro=false): si el flag global
+            //   `onboarding_completado` esta en true (el usuario ya paso el
+            //   onboarding en algun momento), va directo a ESCANEAR. Si no,
+            //   va a ONBOARDING.
             composable(Rutas.LOGIN) {
                 PantallaLogin(
-                    onExito = {
-                        val onboardingDone = context
-                            .getSharedPreferences(PREFS_QR_GUARDIAN, android.content.Context.MODE_PRIVATE)
-                            .getBoolean(CLAVE_ONBOARDING_COMPLETADO, false)
-                        val destino = if (onboardingDone) Rutas.ESCANEAR else Rutas.ONBOARDING
+                    onExito = { esNuevoRegistro ->
+                        val destino = if (esNuevoRegistro) {
+                            Rutas.ONBOARDING
+                        } else {
+                            val onboardingDone = context
+                                .getSharedPreferences(PREFS_QR_GUARDIAN, android.content.Context.MODE_PRIVATE)
+                                .getBoolean(CLAVE_ONBOARDING_COMPLETADO, false)
+                            if (onboardingDone) Rutas.ESCANEAR else Rutas.ONBOARDING
+                        }
                         navController.navigate(destino) {
                             popUpTo(Rutas.LOGIN) { inclusive = true }
                         }
@@ -332,7 +345,7 @@ fun NavGuardian() {
                     PantallaResultadoSeguro(
                         resultado = res,
                         onEscanearOtro = {
-                            pipeline.reiniciar()
+                            pipelineViewModel.reiniciar()
                             navController.navigate(Rutas.ESCANEAR) {
                                 popUpTo(Rutas.ESCANEAR) { inclusive = true }
                             }
@@ -354,7 +367,7 @@ fun NavGuardian() {
                     PantallaResultadoMalicioso(
                         resultado = res,
                         onEscanearOtro = {
-                            pipeline.reiniciar()
+                            pipelineViewModel.reiniciar()
                             navController.navigate(Rutas.ESCANEAR) {
                                 popUpTo(Rutas.ESCANEAR) { inclusive = true }
                             }
@@ -490,7 +503,7 @@ fun NavGuardian() {
                             // reloguearse, el NavHost podria auto-navegar a una
                             // pantalla de resultado zombie. reiniciar() pone el
                             // Pipeline en Estado.Idle.
-                            pipeline.reiniciar()
+                            pipelineViewModel.reiniciar()
                             mostrarMensaje(TipoMensaje.INFO, "Sesión cerrada")
                             // Tras logout (Room vacio + token borrado),
                             // navega a Login y limpia el back stack para

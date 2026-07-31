@@ -10,7 +10,6 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import com.qrsecurity.detector.BuildConfig
-import okhttp3.CertificatePinner
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -51,7 +50,8 @@ import java.util.concurrent.TimeUnit
  */
 class ClienteBackend(
     baseUrl: String = BASE_POR_DEFECTO,
-    tokenProvider: () -> String? = { null }
+    tokenProvider: () -> String? = { null },
+    clienteOkHttp: OkHttpClient? = null
 ) {
 
     /**
@@ -104,31 +104,32 @@ class ClienteBackend(
     }
 
     /**
-     * Cliente OkHttp (M-12): timeouts explicitos en cada fase. No se
-     * dependen los defaults de OkHttp.
-     *  - connectTimeout = 15s
-     *  - readTimeout    = 30s
-     *  - writeTimeout   = 30s
-     *  - callTimeout    = 60s (cubierta completa, incluyendo retries/redirecciones)
+     * Cliente OkHttp — si se inyecta via Hilt ([NetworkModule.provideOkHttpClient]),
+     * usa esa instancia configurada (timeouts, redaction, pinning). Si no se
+     * inyecta (constructor directo en tests), construye uno propio con la
+     * misma config.
      *
-     * Bug C3 fix: SSL pinning (CertificatePinner) con placeholder vacio.
-     * El backend Vercel esta detras de su certificado gestionado, pero el
-     * pinParsing se completa en Phase 7. Sin pin, OkHttpClient acepta cualquier
-     * certificado valido CA-firmado; con pin, restringe al SPKI conocido.
+     * Bug fix: antes ClienteBackend SIEMPRE construye su propio OkHttpClient
+     * interno, ignorando el @Provides de NetworkModule. El cliente inyectado
+     * por Hilt (con timeouts, redaction de headers y certificate pinning) nunca
+     * se usaba. Ahora, si Hilt pasa clienteOkHttp, lo usamos; si es null
+     * (tests), caemos al builder local.
      */
-    // Nota(staging): añadir SPKI pin base64 del backend Vercel antes de producción.
-    // Por ahora sin pin (placeholder); el pinning se completa en Phase 7.
-    private val pinner: CertificatePinner = CertificatePinner.Builder().build()
-
-    private val cliente: OkHttpClient = OkHttpClient.Builder()
-        .addInterceptor(interceptorAuth)
-        .addInterceptor(interceptorLogging)
-        .certificatePinner(pinner)
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
-        .writeTimeout(30, TimeUnit.SECONDS)
-        .callTimeout(60, TimeUnit.SECONDS)
-        .build()
+    private val cliente: OkHttpClient = clienteOkHttp?.let { inyectado ->
+        inyectado.newBuilder()
+            .addInterceptor(interceptorAuth)
+            .addInterceptor(interceptorLogging)
+            .build()
+    } ?: run {
+        OkHttpClient.Builder()
+            .addInterceptor(interceptorAuth)
+            .addInterceptor(interceptorLogging)
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .writeTimeout(30, TimeUnit.SECONDS)
+            .callTimeout(60, TimeUnit.SECONDS)
+            .build()
+    }
 
     private val base = baseUrl.trimEnd('/')
 

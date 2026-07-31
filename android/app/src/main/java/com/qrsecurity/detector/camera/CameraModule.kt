@@ -10,6 +10,7 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
+import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
@@ -71,7 +72,16 @@ class ModuloCamara(
      * Nulable para distinguir el estado "sin executor vivo" del estado "con executor".
      */
     private var executorAnalizador: ExecutorService? = null
-    private val escanerCodigosBarras = BarcodeScanning.getClient()
+    // Bug fix: restringir el scanner a FORMAT_QR_CODE unicamente. Antes
+    // BarcodeScanning.getClient() sin opciones escaneaba TODOS los formatos
+    // de barcode (UPC-A, UPC-E, EAN-8, EAN-13, Code 39, Code 93, Code 128,
+    // Codabar, ITF, Data Matrix, PDF-417, Aztec). La CPU procesa cada frame
+    // buscando todos esos formatos innecesariamente — la app solo acepta QR.
+    private val escanerCodigosBarras = BarcodeScanning.getClient(
+        BarcodeScannerOptions.Builder()
+            .setBarcodeFormats(Barcode.FORMAT_QR_CODE)
+            .build()
+    )
 
     /**
      * Bug A3 fix: debouncing de detecciones QR. Antes cada frame con un QR

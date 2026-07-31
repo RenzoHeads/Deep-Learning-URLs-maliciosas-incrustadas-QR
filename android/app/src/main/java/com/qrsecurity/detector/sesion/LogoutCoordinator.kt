@@ -1,13 +1,18 @@
 package com.qrsecurity.detector.sesion
 
 import android.content.Context
+import android.util.Log
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
 import com.qrsecurity.detector.datos.local.BaseDatosSeguridad
 import com.qrsecurity.detector.datos.sync.MediadorSincronizacion
+import com.qrsecurity.detector.datos.sync.SyncWorker
 import com.qrsecurity.detector.datos.sync.SyncWorker.Companion.KEY_INITIAL_SYNC_COMPLETED
 import com.qrsecurity.detector.datos.sync.SyncWorker.Companion.KEY_ULTIMO_SYNC
 import com.qrsecurity.detector.datos.sync.SyncWorker.Companion.PREFS_SYNC
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -94,8 +99,15 @@ class LogoutCoordinator @Inject constructor(
      *      preserva `id_dispositivo` para re-registro del mismo fisico).
      */
     suspend fun logout() {
-        // 1) Cancelar WorkManager.
+        // 1) Cancelar WorkManager y ESPERAR a que el worker en curso termine.
+        // Bug fix: cancelarTodo() es non-blocking — encola cancelAllWorkByTag
+        // y devuelve. Si un SyncWorker estaba corriendo un PULL, puede terminar
+        // y escribir filas a Room DESPUES de clearAllTables(), contaminando la
+        // DB vacia del siguiente usuario. Ahora esperamos hasta 3s a que el
+        // worker pase a estado terminal (CANCELLED/SUCCEEDED/FAILED) antes de
+        // limpiar Room.
         mediadorSincronizacion.cancelarTodo()
+        esperarCancelacionWorkManager()
 
         // 2) Vaciar todas las tablas Room (D4-P2 fix: withContext IO).
         withContext(Dispatchers.IO) {
@@ -116,5 +128,53 @@ class LogoutCoordinator @Inject constructor(
 
         // 4) Eliminar token + flag de sesion (preserva id_dispositivo).
         sesionUsuario.cerrarSesion()
+    }
+
+    /**
+     * Espera hasta 3 segundos a que el SyncWorker one-shot y periodico pasen
+     * a estado terminal (CANCELLED/SUCCEEDED/FAILED) antes de continuar.
+     *
+     * Bug fix: [MediadorSincronizacion.cancelarTodo] es non-blocking —
+     * encola cancelAllWorkByTag y devuelve. Si un SyncWorker estaba corriendo
+     * un PULL, puede terminar y escribir filas a Room DESPUES de
+     * [BaseDatosSeguridad.clearAllTables], contaminando la DB vacia del
+     * siguiente usuario con datos del usuario anterior.
+     *
+     * Polling con timeout (3s max): si WorkManager no responde en 3s, seguimos
+     * adelante con clearAllTables — el worker tiene checkpoints [isStopped] que
+     * cortaran su ejecucion en la siguiente oportunidad, despues de cada PULL.
+     */
+    private suspend fun esperarCancelacionWorkManager() {
+        val wm = try {
+            WorkManager.getInstance(appContext)
+        } catch (e: Exception) {
+            Log.w("LogoutCoordinator", "WorkManager no inicializado, skip await")
+            return
+        }
+
+        val nombres = listOf(
+            SyncWorker.NOMBRE_TRABAJO,
+            SyncWorker.NOMBRE_TRABAJO + "_periodica"
+        )
+
+        var intentos = 0
+        val maxIntentos = 15 // 15 x 200ms = 3s max
+
+        while (intentos < maxIntentos) {
+            val algunoCorriendo = nombres.any { nombre ->
+                try {
+                    val infos = wm.getWorkInfosForUniqueWork(nombre).get()
+                    infos?.any { it.state == WorkInfo.State.RUNNING || it.state == WorkInfo.State.ENQUEUED }
+                        ?: false
+                } catch (e: Exception) {
+                    Log.w("LogoutCoordinator", "getWorkInfos fallo para $nombre", e)
+                    false
+                }
+            }
+            if (!algunoCorriendo) return
+            delay(200)
+            intentos++
+        }
+        Log.w("LogoutCoordinator", "Timeout esperando cancelacion WorkManager (${intentos * 200}ms)")
     }
 }

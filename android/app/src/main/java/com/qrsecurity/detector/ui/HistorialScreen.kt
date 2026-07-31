@@ -118,19 +118,11 @@ fun PantallaHistorial(
 ) {
     val scope = rememberCoroutineScope()
 
-    // Performance fix: los Flows de Room se hospedan en DatosTabsViewModel
-    // (scoped al NavGuardian, fuera del NavHost) para que no se cancelen al
-    // cambiar de tab. El VM se pasa como parametro desde NavGuardian para
-    // garantizar que Historial y Bloqueadas compartan la misma instancia.
-    // Hilt: repoEscaneos y mediadorSync se inyectan via DatosTabsViewModel.
     val repoEscaneos = datosViewModel.repoEscaneos
     val mediadorSync = datosViewModel.mediadorSync
 
     var filtroActual by remember { mutableStateOf(FiltroHistorial.TODOS) }
 
-    // Flows persistentes desde el ViewModel compartido — no se cancelan
-    // al cambiar de tab. initialValue nunca es null (emptyList/0), asi
-    // que nunca muestra el spinner de carga al volver.
     val historial by when (filtroActual) {
         FiltroHistorial.TODOS -> datosViewModel.historialTodos
         FiltroHistorial.SEGUROS -> datosViewModel.historialSeguros
@@ -139,129 +131,28 @@ fun PantallaHistorial(
     val totalEscaneos by datosViewModel.totalEscaneos.collectAsStateWithLifecycle()
     val amenazas by datosViewModel.amenazas.collectAsStateWithLifecycle()
     val ultimos7Dias by datosViewModel.ultimos7Dias.collectAsStateWithLifecycle()
-    // Fix #3 — observar si el sync worker esta corriendo para mostrar skeleton.
     val syncEnCurso by datosViewModel.syncEnCurso.collectAsStateWithLifecycle()
     var escaneoEliminar by remember { mutableStateOf<EscaneoEntity?>(null) }
 
-    val estadisticas = EstadisticasHistorial(
-        totalEscaneos = totalEscaneos,
-        amenazas = amenazas,
-        ultimos7Dias = ultimos7Dias
-    )
+    val estadisticas = EstadisticasHistorial(totalEscaneos, amenazas, ultimos7Dias)
 
     Box(modifier = Modifier.fillMaxSize().background(CyberFondo)) {
         Column(
             modifier = Modifier.fillMaxSize().padding(horizontal = Espaciado.lg)
         ) {
-            // ── Top AppBar ──
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(top = Espaciado.lg, bottom = Espaciado.sm),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        imageVector = Icons.Filled.CheckCircle,
-                        contentDescription = null,
-                        tint = CyberCyan,
-                        modifier = Modifier.size(TamanosIcono.estandar)
-                    )
-                    Spacer(modifier = Modifier.width(Espaciado.sm))
-                    Text(
-                        text = "QR GUARDIAN",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = CyberCyan,
-                        modifier = Modifier.testTag("titulo_qr_guardian")
-                    )
-                }
-                Icon(
-                    imageVector = Icons.Filled.FilterList,
-                    contentDescription = null,
-                    tint = CyberTextoSecundario
-                )
-            }
-
-            // ── Titulo + descripcion ──
-            Text(
-                text = "Historial de escaneos",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold,
-                color = CyberTextoPrincipal,
-                modifier = Modifier.testTag("titulo_historial_escaneos")
+            CabeceraHistorial()
+            StatsRowHistorial(estadisticas)
+            FiltrosHistorial(filtroActual) { filtroActual = it }
+            Spacer(modifier = Modifier.height(Espaciado.lg))
+            ContenidoHistorial(
+                lista = historial,
+                syncEnCurso = syncEnCurso,
+                totalEscaneos = totalEscaneos,
+                onEliminar = { escaneoEliminar = it },
+                onVerDetalle = onVerDetalle
             )
-            Text(
-                text = "Tus escaneos se guardan localmente y se sincronizan con el servidor.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = CyberTextoSecundario
-            )
-
-            Spacer(modifier = Modifier.height(Espaciado.lg))
-
-            // ── Stats row (3 tarjetas glass) ──
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(Espaciado.sm)
-            ) {
-                TarjetaEstadistica(
-                    etiqueta = "Total",
-                    valor = estadisticas.totalEscaneos.toString(),
-                    modifier = Modifier.weight(1f),
-                    colorAcento = CyberCyan
-                )
-                TarjetaEstadistica(
-                    etiqueta = "Amenazas",
-                    valor = estadisticas.amenazas.toString(),
-                    modifier = Modifier.weight(1f),
-                    colorAcento = CyberRojo
-                )
-                TarjetaEstadistica(
-                    etiqueta = "7 dias",
-                    valor = estadisticas.ultimos7Dias.toString(),
-                    modifier = Modifier.weight(1f),
-                    colorAcento = CyberTextoSecundario
-                )
-            }
-
-            Spacer(modifier = Modifier.height(Espaciado.lg))
-
-            // ── Filter chips ──
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(Espaciado.sm)
-            ) {
-                FiltroHistorial.entries.forEach { filtro ->
-                    ChipFiltro(
-                        etiqueta = filtro.etiqueta,
-                        seleccionado = filtroActual == filtro,
-                        onClick = { filtroActual = filtro }
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(Espaciado.lg))
-
-            // ── Estado: cargando / vacio / lista ──
-            // Fix #3: cuando el historial esta vacio Y el sync inicial esta
-            // corriendo, mostrar skeleton de carga en lugar de "Aun no hay
-            // escaneos". Esto elimina el pantallazo de "0 URLs" antes del PULL.
-            val lista = historial
-            if (lista.isEmpty()) {
-                if (syncEnCurso && totalEscaneos == 0) {
-                    EstadoCargando()
-                } else {
-                    EstadoVacio(totalEscaneos = totalEscaneos)
-                }
-            } else {
-                ListaHistorial(
-                    lista = lista,
-                    onEliminar = { escaneoEliminar = it },
-                    onVerDetalle = onVerDetalle
-                )
-            }
         }
 
-        // ── FAB ──
         FloatingActionButton(
             onClick = onEscanear,
             modifier = Modifier
@@ -273,24 +164,12 @@ fun PantallaHistorial(
             Icon(Icons.Filled.QrCodeScanner, contentDescription = "Escanear")
         }
 
-        // Dialogo de confirmacion antes de eliminar un escaneo.
         escaneoEliminar?.let { escaneo ->
-            DialogoConfirmacion(
-                titulo = "Eliminar escaneo",
-                mensaje = "¿Estas seguro de que quieres eliminar el escaneo de \"${escaneo.urlLimpia.take(60)}${if (escaneo.urlLimpia.length > 60) "..." else ""}\"? Esta accion se sincronizara con el servidor.",
-                textoConfirmar = "Eliminar",
-                colorConfirmar = CyberRojo,
+            DialogoConfirmacionEliminar(
+                escaneo = escaneo,
                 onConfirmar = {
                     val aEliminar = escaneo
-                    // Bug D6 fix: NO cerrar el dialogo antes de que Room
-                    // confirme. Antes se seteaba escaneoEliminar = null aqui
-                    // y si eliminarLocal fallaba, el usuario veia el
-                    // snackbar de error pero el dialogo ya estaba cerrado
-                    // — no podia reintentar. Ahora se cierra solo tras
-                    // exito (dentro del try).
                     scope.launch {
-                        // Offline-first: borra local + encola DELETE en outbox.
-                        // El SyncWorker lo envia al backend cuando haya red.
                         try {
                             repoEscaneos.eliminarLocal(aEliminar.id)
                             mediadorSync.dispararSyncUnica()
@@ -298,7 +177,6 @@ fun PantallaHistorial(
                             onMensaje(TipoMensaje.EXITO, "Escaneo eliminado")
                         } catch (e: Exception) {
                             onMensaje(TipoMensaje.ERROR, "No se pudo eliminar: ${e.message ?: "error"}")
-                            // Dialogo queda abierto para reintentar.
                         }
                     }
                 },
@@ -306,6 +184,123 @@ fun PantallaHistorial(
             )
         }
     }
+}
+
+@Composable
+private fun CabeceraHistorial() {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(top = Espaciado.lg, bottom = Espaciado.sm),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                imageVector = Icons.Filled.CheckCircle,
+                contentDescription = null,
+                tint = CyberCyan,
+                modifier = Modifier.size(TamanosIcono.estandar)
+            )
+            Spacer(modifier = Modifier.width(Espaciado.sm))
+            Text(
+                text = "QR GUARDIAN",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = CyberCyan,
+                modifier = Modifier.testTag("titulo_qr_guardian")
+            )
+        }
+        Icon(
+            imageVector = Icons.Filled.FilterList,
+            contentDescription = null,
+            tint = CyberTextoSecundario
+        )
+    }
+
+    Text(
+        text = "Historial de escaneos",
+        style = MaterialTheme.typography.headlineMedium,
+        fontWeight = FontWeight.Bold,
+        color = CyberTextoPrincipal,
+        modifier = Modifier.testTag("titulo_historial_escaneos")
+    )
+    Text(
+        text = "Tus escaneos se guardan localmente y se sincronizan con el servidor.",
+        style = MaterialTheme.typography.bodyMedium,
+        color = CyberTextoSecundario
+    )
+    Spacer(modifier = Modifier.height(Espaciado.lg))
+}
+
+@Composable
+private fun StatsRowHistorial(estadisticas: EstadisticasHistorial) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(Espaciado.sm)
+    ) {
+        TarjetaEstadistica("Total", estadisticas.totalEscaneos.toString(), Modifier.weight(1f), CyberCyan)
+        TarjetaEstadistica("Amenazas", estadisticas.amenazas.toString(), Modifier.weight(1f), CyberRojo)
+        TarjetaEstadistica("7 dias", estadisticas.ultimos7Dias.toString(), Modifier.weight(1f), CyberTextoSecundario)
+    }
+    Spacer(modifier = Modifier.height(Espaciado.lg))
+}
+
+@Composable
+private fun FiltrosHistorial(
+    filtroActual: FiltroHistorial,
+    onFiltroCambiado: (FiltroHistorial) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(Espaciado.sm)
+    ) {
+        FiltroHistorial.entries.forEach { filtro ->
+            ChipFiltro(
+                etiqueta = filtro.etiqueta,
+                seleccionado = filtroActual == filtro,
+                onClick = { onFiltroCambiado(filtro) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun ContenidoHistorial(
+    lista: List<EscaneoEntity>,
+    syncEnCurso: Boolean,
+    totalEscaneos: Int,
+    onEliminar: (EscaneoEntity) -> Unit,
+    onVerDetalle: (String) -> Unit
+) {
+    if (lista.isEmpty()) {
+        if (syncEnCurso && totalEscaneos == 0) {
+            EstadoCargando()
+        } else {
+            EstadoVacio(totalEscaneos = totalEscaneos)
+        }
+    } else {
+        ListaHistorial(
+            lista = lista,
+            onEliminar = onEliminar,
+            onVerDetalle = onVerDetalle
+        )
+    }
+}
+
+@Composable
+private fun DialogoConfirmacionEliminar(
+    escaneo: EscaneoEntity,
+    onConfirmar: () -> Unit,
+    onCancelar: () -> Unit
+) {
+    val urlTruncada = escaneo.urlLimpia.take(60) + if (escaneo.urlLimpia.length > 60) "..." else ""
+    DialogoConfirmacion(
+        titulo = "Eliminar escaneo",
+        mensaje = "¿Estas seguro de que quieres eliminar el escaneo de \"$urlTruncada\"? Esta accion se sincronizara con el servidor.",
+        textoConfirmar = "Eliminar",
+        colorConfirmar = CyberRojo,
+        onConfirmar = onConfirmar,
+        onCancelar = onCancelar
+    )
 }
 
 @Composable

@@ -45,7 +45,10 @@ object DatabaseModule {
             BaseDatosSeguridad::class.java,
             "qr_guardian.db"
         )
-            .addMigrations(BaseDatosSeguridad.MIGRATION_1_2)
+            .addMigrations(
+                BaseDatosSeguridad.MIGRATION_1_2,
+                BaseDatosSeguridad.MIGRATION_2_3
+            )
             .also { builder ->
                 if (BuildConfig.DEBUG) {
                     builder.fallbackToDestructiveMigration()

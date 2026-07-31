@@ -35,7 +35,16 @@ data class LoginUiState(
  * del UiState que re-disparaban en rotacion.
  */
 sealed interface LoginEvento {
-    data object Exito : LoginEvento
+    /**
+     * Login o registro exitoso.
+     *
+     * [esNuevoRegistro] es true cuando el usuario acabo de crear una cuenta
+     * (modo registro), false cuando inicio sesion con una cuenta existente.
+     * NavGuardian lo usa para decidir si mostrar el onboarding: un registro
+     * nuevo siempre lo muestra (el usuario es nuevo y necesita la tour),
+     * un login existente lo saltea si el flag global ya esta en true.
+     */
+    data class Exito(val esNuevoRegistro: Boolean) : LoginEvento
     data class Error(val mensaje: String) : LoginEvento
 }
 
@@ -123,7 +132,7 @@ class LoginViewModel @Inject constructor(
                 // no veria su historial hasta hacer un nuevo escaneo.
                 mediadorSincronizacion.dispararSyncUnica()
                 _uiState.update { it.copy(procesando = false) }
-                _eventos.send(LoginEvento.Exito)
+                _eventos.send(LoginEvento.Exito(esNuevoRegistro = modoRegistro))
             } catch (e: ClienteBackend.HttpBackendException) {
                 _uiState.update { it.copy(procesando = false) }
                 _eventos.send(LoginEvento.Error(manejarErrorBackend(e.codigo, e.cuerpo, e.message)))
