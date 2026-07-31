@@ -86,7 +86,9 @@ async def listar_escaneos(
     params: list = [id_usuario]
 
     if modificados_desde is not None:
-        # Modo delta: filtrar por updated_at, incluir tombstones
+        # Modo delta: filtrar por updated_at, incluir tombstones.
+        # Paginacion server-side con LIMIT/OFFSET para soportar datasets
+        # grandes (1M+ filas) sin OOM del cliente ni timeouts de red.
         condiciones.append("updated_at >= $2")
         params.append(modificados_desde)
         where = _OP_AND.join(condiciones)
@@ -95,8 +97,11 @@ async def listar_escaneos(
             f"nivel_alerta, delegado, es_malicioso, creado_en, "
             f"updated_at, deleted_at "
             f"FROM historial_escaneos WHERE {where} "
-            f"ORDER BY updated_at ASC"
+            f"ORDER BY updated_at ASC "
+            f"LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
         )
+        params.append(limite)
+        params.append(offset)
     else:
         # Modo normal: excluir eliminados, aplicar filtro + paginacion
         condiciones.append("deleted_at IS NULL")

@@ -22,6 +22,7 @@ router = APIRouter(prefix="/urls-bloqueadas", tags=["urls-bloqueadas"])
 async def listar_urls_bloqueadas(
     id_usuario: Annotated[str, Depends(verificar_token)],
     limite: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
     modificados_desde: Annotated[datetime | None, Query(
         description="Fecha ISO 8601 desde donde obtener modificados (delta sync). Incluye tombstones."
     )] = None,
@@ -34,6 +35,7 @@ async def listar_urls_bloqueadas(
     Modo delta (con modificados_desde): devuelve todas las URLs modificadas
     desde esa fecha (updated_at >= modificados_desde), incluyendo tombstones.
     El cliente debe eliminar localmente las filas donde deleted_at != null.
+    Paginacion server-side con LIMIT/OFFSET para datasets grandes.
     """
     pool = await obtener_pool()
     async with pool.acquire() as conexion:
@@ -44,9 +46,12 @@ async def listar_urls_bloqueadas(
                 FROM urls_bloqueadas
                 WHERE id_usuario = $1 AND updated_at >= $2
                 ORDER BY updated_at ASC
+                LIMIT $3 OFFSET $4
                 """,
                 id_usuario,
                 modificados_desde,
+                limite,
+                offset,
             )
         else:
             filas = await conexion.fetch(
@@ -55,10 +60,11 @@ async def listar_urls_bloqueadas(
                 FROM urls_bloqueadas
                 WHERE id_usuario = $1 AND deleted_at IS NULL
                 ORDER BY creado_en DESC
-                LIMIT $2
+                LIMIT $2 OFFSET $3
                 """,
                 id_usuario,
                 limite,
+                offset,
             )
     return [fila_a_url_bloqueada(f) for f in filas]
 

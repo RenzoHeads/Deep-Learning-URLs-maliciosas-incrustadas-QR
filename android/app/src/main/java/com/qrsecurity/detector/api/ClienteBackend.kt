@@ -339,9 +339,12 @@ class ClienteBackend(
      */
     suspend fun listarEscaneosDelta(
         token: String,
-        modificadosDesde: String
+        modificadosDesde: String,
+        limite: Int = 200,
+        offset: Int = 0
     ): List<Escaneo> = withContext(Dispatchers.IO) {
-        val url = "$base/escaneos?modificados_desde=${java.net.URLEncoder.encode(modificadosDesde, "UTF-8")}"
+        val url = "$base/escaneos?modificados_desde=${java.net.URLEncoder.encode(modificadosDesde, "UTF-8")}" +
+            "&limite=$limite&offset=$offset"
         val respuesta = get(url, token)
         json.decodeFromString(
             kotlinx.serialization.builtins.ListSerializer(Escaneo.serializer()),
@@ -400,9 +403,12 @@ class ClienteBackend(
      */
     suspend fun listarUrlsBloqueadasDelta(
         token: String,
-        modificadosDesde: String
+        modificadosDesde: String,
+        limite: Int = 200,
+        offset: Int = 0
     ): List<UrlBloqueada> = withContext(Dispatchers.IO) {
-        val url = "$base/urls-bloqueadas?modificados_desde=${java.net.URLEncoder.encode(modificadosDesde, "UTF-8")}"
+        val url = "$base/urls-bloqueadas?modificados_desde=${java.net.URLEncoder.encode(modificadosDesde, "UTF-8")}" +
+            "&limite=$limite&offset=$offset"
         val respuesta = get(url, token)
         json.decodeFromString(
             kotlinx.serialization.builtins.ListSerializer(UrlBloqueada.serializer()),
@@ -482,9 +488,12 @@ class ClienteBackend(
      */
     suspend fun listarDenunciasDelta(
         token: String,
-        modificadosDesde: String
+        modificadosDesde: String,
+        limite: Int = 200,
+        offset: Int = 0
     ): List<Denuncia> = withContext(Dispatchers.IO) {
-        val url = "$base/denuncias?modificados_desde=${java.net.URLEncoder.encode(modificadosDesde, "UTF-8")}"
+        val url = "$base/denuncias?modificados_desde=${java.net.URLEncoder.encode(modificadosDesde, "UTF-8")}" +
+            "&limite=$limite&offset=$offset"
         val respuesta = get(url, token)
         json.decodeFromString(
             kotlinx.serialization.builtins.ListSerializer(Denuncia.serializer()),

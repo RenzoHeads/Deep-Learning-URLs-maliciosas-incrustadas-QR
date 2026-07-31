@@ -83,6 +83,7 @@ async def crear_denuncia(
 async def listar_denuncias(
     id_usuario: Annotated[str, Depends(verificar_token)],
     limite: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
     modificados_desde: Annotated[datetime | None, Query(
         description="Fecha ISO 8601 desde donde obtener modificados (delta sync). Incluye tombstones."
     )] = None,
@@ -95,6 +96,7 @@ async def listar_denuncias(
     Modo delta (con modificados_desde): devuelve todas las denuncias modificadas
     desde esa fecha (updated_at >= modificados_desde), incluyendo tombstones.
     El cliente debe eliminar localmente las filas donde deleted_at != null.
+    Paginacion server-side con LIMIT/OFFSET para datasets grandes.
     """
     pool = await obtener_pool()
     async with pool.acquire() as conexion:
@@ -107,9 +109,12 @@ async def listar_denuncias(
                 LEFT JOIN categorias_denuncia c ON d.id_categoria = c.id
                 WHERE d.id_usuario = $1 AND d.updated_at >= $2
                 ORDER BY d.updated_at ASC
+                LIMIT $3 OFFSET $4
                 """,
                 id_usuario,
                 modificados_desde,
+                limite,
+                offset,
             )
         else:
             filas = await conexion.fetch(
@@ -120,10 +125,11 @@ async def listar_denuncias(
                 LEFT JOIN categorias_denuncia c ON d.id_categoria = c.id
                 WHERE d.id_usuario = $1 AND d.deleted_at IS NULL
                 ORDER BY d.creado_en DESC
-                LIMIT $2
+                LIMIT $2 OFFSET $3
                 """,
                 id_usuario,
                 limite,
+                offset,
             )
     return [fila_a_denuncia(f) for f in filas]
 

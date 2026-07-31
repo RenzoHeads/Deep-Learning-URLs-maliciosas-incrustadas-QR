@@ -75,18 +75,14 @@ class SyncWorker @AssistedInject constructor(
             return Result.success()
         }
 
-        Log.d(TAG, "doWork() procede con ${if (initialSyncCompleted) "DELTA pull" else "FULL pull"} + PUSH pending_ops")
+        Log.d(TAG, "doWork() procede con DELTA pull incremental (cursor-based) + PUSH pending_ops")
 
-        // ── PULLs: full o delta segun initial_sync_completed ──
-        val estadoPulls = if (initialSyncCompleted) {
-            procesarDeltaPulls(
-                repoCategorias, repoUrls, repoEscaneos, repoDenuncias, token
-            )
-        } else {
-            procesarPulls(
-                repoCategorias, repoUrls, repoEscaneos, repoDenuncias, token
-            )
-        }
+        // ── PULLs: siempre delta pull incremental (cursor-based) ──
+        // El primer login usa epoch cursor (1970-01-01T00:00:00Z) que equivale
+        // a un full pull paginado. Subsequent syncs usan el cursor persistido.
+        val estadoPulls = procesarDeltaPulls(
+            repoCategorias, repoUrls, repoEscaneos, repoDenuncias, token
+        )
         if (estadoPulls.falloPermanente) {
             Log.e(TAG, "doWork() PULL fallo permanente → Result.failure()")
             return Result.failure()
@@ -114,11 +110,16 @@ class SyncWorker @AssistedInject constructor(
         context.getSharedPreferences(PREFS_SYNC, Context.MODE_PRIVATE)
             .edit().putLong(KEY_ULTIMO_SYNC, System.currentTimeMillis()).apply()
 
-        // Fix #4: marcar initial_sync_completed=true tras el primer full pull
-        // exitoso. Los siguientes workers haran delta pull en lugar de full pull.
-        if (!initialSyncCompleted) {
+        // Incremental sync unificado — marcar initial_sync_completed=true solo
+        // cuando TODAS las tablas reportan masPorSincronizar=false (al dia).
+        // Antes, el flag se seteaba tras el primer full pull, pero un solo
+        // worker-run solo trae hasta 1000 filas por tabla — para datasets
+        // grandes (1M+), el flag se seteaba prematuramente.
+        if (!initialSyncCompleted && !estadoPulls.masPorSincronizar) {
             syncPrefs.edit().putBoolean(KEY_INITIAL_SYNC_COMPLETED, true).apply()
-            Log.d(TAG, "doWork() initial_sync_completed=true marcado — proximos syncs seran delta")
+            Log.d(TAG, "doWork() initial_sync_completed=true — todas las tablas al dia")
+        } else if (estadoPulls.masPorSincronizar) {
+            Log.d(TAG, "doWork() initial sync仍在en progreso — quedan paginas por sincronizar")
         }
 
         Log.d(TAG, "doWork() completado OK → Result.success()")
@@ -128,80 +129,30 @@ class SyncWorker @AssistedInject constructor(
     /** Estado consolidado de los 4 PULLs para reducir complejidad de doWork(). */
     private data class EstadoPulls(
         val falloPermanente: Boolean = false,
-        val huboErrorTransitorio: Boolean = false
+        val huboErrorTransitorio: Boolean = false,
+        /**
+         * Incremental sync unificado — true si alguna tabla aun tiene mas
+         * paginas por sincronizar. El SyncWorker NO marca
+         * initial_sync_completed=true mientras esto sea true.
+         */
+        val masPorSincronizar: Boolean = false
     )
 
     /**
-     * Ejecuta los 4 PULLs en orden correcto (categorias → urls → escaneos → denuncias).
-     * Bug H6 fix: orden correccto — categorias antes que denuncias (FK).
-     */
-    private suspend fun procesarPulls(
-        repoCategorias: RepositorioCategorias,
-        repoUrls: RepositorioUrlsBloqueadas,
-        repoEscaneos: RepositorioEscaneos,
-        repoDenuncias: RepositorioDenuncias,
-        token: String
-    ): EstadoPulls {
-        var estado = EstadoPulls()
-
-        // 1. PULL categorias (no requiere token) — antes que denuncias (FK)
-        when (val r = repoCategorias.sincronizarDesdeBackend()) {
-            is ResultadoSync.Exitoso -> { /* ok */ }
-            is ResultadoSync.Fallido -> {
-                val mapeo = decidirResultadoPull(r.codigo, r.retryAfterSegundos)
-                if (mapeo is DecisionPull.Decision.Failure && (r.codigo == 401 || r.codigo == 403)) {
-                    return EstadoPulls(falloPermanente = true)
-                }
-                if (mapeo is DecisionPull.Decision.Retry) estado = estado.copy(huboErrorTransitorio = true)
-            }
-        }
-
-        // 2. PULL URLs bloqueadas + orphan cleanup
-        when (val r = repoUrls.sincronizarDesdeBackend(token)) {
-            is ResultadoSync.Exitoso -> repoUrls.limpiarHuerfanos(r.idsServidor)
-            is ResultadoSync.Fallido -> estado = aplicarFallidoPull(r, estado)
-        }
-
-        // 3. PULL escaneos + orphan cleanup (solo si pullCompleto)
-        // Fix #4: si el pull fue parcial (pullCompleto=false), NO hacemos
-        // limpiarHuerfanos — eliminaria rows que existen en paginas no fetchadas.
-        when (val r = repoEscaneos.sincronizarDesdeBackend(token)) {
-            is ResultadoSync.Exitoso -> {
-                if (r.pullCompleto) {
-                    repoEscaneos.limpiarHuerfanos(r.idsServidor)
-                } else {
-                    Log.w(TAG, "PULL escaneos parcial (${r.filaSincronizadas} filas) — orphan cleanup omitido")
-                }
-            }
-            is ResultadoSync.Fallido -> estado = aplicarFallidoPull(r, estado)
-        }
-
-        // 4. PULL denuncias + orphan cleanup
-        when (val r = repoDenuncias.sincronizarDesdeBackend(token)) {
-            is ResultadoSync.Exitoso -> repoDenuncias.limpiarHuerfanos(r.idsServidor)
-            is ResultadoSync.Fallido -> estado = aplicarFallidoPull(r, estado)
-        }
-
-        return estado
-    }
-
-    /**
-     * Delta sync — Ejecuta los PULLs incrementales (solo modificados desde
-     * cursor). Se llama cuando [KEY_INITIAL_SYNC_COMPLETED] = true.
+     * PULL incremental unificado — reemplaza a procesarPulls y procesarDeltaPulls.
      *
-     * Flujo por tabla:
-     *   1. Leer cursor de `sync_state` (ultimoCursorModificacion).
-     *   2. Si cursor == null (fila no existe o cursor vacio), hacer full pull
-     *      de esa tabla (fallback seguro — no perdemos datos).
-     *   3. Si cursor != null, llamar `repo.sincronizarDelta(token, cursor)`.
-     *   4. Si el delta devuelve [ResultadoSync.Fallido] con 401/403 → fallo
-     *      permanente. Otros errores → transitorio (retry).
+     * Ejecuta los PULLs en orden FK (categorias → urls → escaneos → denuncias).
+     * Cada tabla usa el cursor persistido en `sync_state.ultimoCursorModificacion`.
+     * Si el cursor es null/blank (primera vez o tras logout), se usa epoch
+     * (1970-01-01T00:00:00Z) que equivale a un full pull paginado.
      *
-     * Categorias siempre hace full pull (volumen bajo, read-only, no tiene
-     * updated_at en el backend).
+     * Categorias siempre hace full pull (read-only, bajo volumen, sin updated_at).
      *
-     * No hay orphan cleanup en delta pull — los tombstones se manejan via
-     * `deleted_at` dentro de cada `sincronizarDelta`.
+     * No hay orphan cleanup — los tombstones se manejan via `deleted_at` dentro
+     * de cada `sincronizarDelta`.
+     *
+     * @return EstadoPulls con [EstadoPulls.masPorSincronizar] = true si alguna
+     *         tabla aun tiene paginas pendientes.
      */
     private suspend fun procesarDeltaPulls(
         repoCategorias: RepositorioCategorias,
@@ -211,9 +162,8 @@ class SyncWorker @AssistedInject constructor(
         token: String
     ): EstadoPulls {
         var estado = EstadoPulls()
-        val syncStateDao = db.syncStateDao()
 
-        // 1. Categorias — siempre full pull (read-only, bajo volumen).
+        // 1. Categorias — siempre full pull (read-only, bajo volumen, sin updated_at).
         when (val r = repoCategorias.sincronizarDesdeBackend()) {
             is ResultadoSync.Exitoso -> { /* ok */ }
             is ResultadoSync.Fallido -> {
@@ -225,32 +175,26 @@ class SyncWorker @AssistedInject constructor(
             }
         }
 
-        // 2. URLs bloqueadas — delta pull con cursor.
+        // 2. URLs bloqueadas — delta pull incremental con cursor.
         estado = procesarDeltaTabla(
             tabla = "urls_bloqueadas",
-            syncStateDao = syncStateDao,
-           pullDelta = { cursor -> repoUrls.sincronizarDelta(token, cursor) },
-            pullFull = { repoUrls.sincronizarDesdeBackend(token) },
+            pullDelta = { cursor -> repoUrls.sincronizarDelta(token, cursor) },
             estadoActual = estado
         )
         if (estado.falloPermanente) return estado
 
-        // 3. Escaneos — delta pull con cursor.
+        // 3. Escaneos — delta pull incremental con cursor.
         estado = procesarDeltaTabla(
             tabla = "escaneos",
-            syncStateDao = syncStateDao,
             pullDelta = { cursor -> repoEscaneos.sincronizarDelta(token, cursor) },
-            pullFull = { repoEscaneos.sincronizarDesdeBackend(token) },
             estadoActual = estado
         )
         if (estado.falloPermanente) return estado
 
-        // 4. Denuncias — delta pull con cursor.
+        // 4. Denuncias — delta pull incremental con cursor.
         estado = procesarDeltaTabla(
             tabla = "denuncias",
-            syncStateDao = syncStateDao,
             pullDelta = { cursor -> repoDenuncias.sincronizarDelta(token, cursor) },
-            pullFull = { repoDenuncias.sincronizarDesdeBackend(token) },
             estadoActual = estado
         )
 
@@ -261,29 +205,42 @@ class SyncWorker @AssistedInject constructor(
      * Procesa el delta pull de una sola tabla. Si no hay cursor guardado,
      * hace full pull de fallback (no perdemos datos).
      */
+    /**
+     * Ejecuta el delta pull de una tabla con cursor incremental.
+     *
+     * Si el cursor en `sync_state` es null/blank (primera vez o tras logout),
+     * usa epoch ("1970-01-01T00:00:00Z") que equivale a un full pull paginado.
+     *
+     * Propaga [ResultadoSync.Exitoso.masPorSincronizar] al [EstadoPulls] para
+     * que doWork() decida si marcar initial_sync_completed=true.
+     */
     private suspend fun procesarDeltaTabla(
         tabla: String,
-        syncStateDao: com.qrsecurity.detector.datos.local.dao.SyncStateDao,
         pullDelta: suspend (String) -> ResultadoSync,
-        pullFull: suspend () -> ResultadoSync,
         estadoActual: EstadoPulls
     ): EstadoPulls {
         var estado = estadoActual
+        val syncStateDao = db.syncStateDao()
         val syncState = syncStateDao.obtener(tabla)
         val cursor = syncState?.ultimoCursorModificacion
 
-        Log.d(TAG, "procesarDeltaTabla($tabla): cursor=${cursor ?: "null → full pull fallback"}")
-
-        val resultado = if (cursor.isNullOrBlank()) {
-            Log.w(TAG, "Delta pull '$tabla': cursor null → fallback a full pull")
-            pullFull()
+        // Si cursor null/blank, usar epoch — equivale a full pull paginado.
+        val cursorEfectivo = if (cursor.isNullOrBlank()) {
+            Log.w(TAG, "procesarDeltaTabla($tabla): cursor null → epoch (full pull paginado)")
+            "1970-01-01T00:00:00Z"
         } else {
-            pullDelta(cursor)
+            cursor
         }
+
+        Log.d(TAG, "procesarDeltaTabla($tabla): cursor=$cursorEfectivo")
+
+        val resultado = pullDelta(cursorEfectivo)
 
         when (resultado) {
             is ResultadoSync.Exitoso -> {
-                Log.d(TAG, "Delta pull '$tabla' OK — ${resultado.filaSincronizadas} cambios aplicados")
+                Log.d(TAG, "Delta pull '$tabla' OK — ${resultado.filaSincronizadas} filas" +
+                    if (resultado.masPorSincronizar) " (mas paginas pendientes)" else " (al dia)")
+                estado = estado.copy(masPorSincronizar = estado.masPorSincronizar || resultado.masPorSincronizar)
             }
             is ResultadoSync.Fallido -> {
                 val mapeo = decidirResultadoPull(resultado.codigo, resultado.retryAfterSegundos)

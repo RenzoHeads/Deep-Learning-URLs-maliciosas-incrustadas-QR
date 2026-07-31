@@ -5,7 +5,6 @@ import com.qrsecurity.detector.api.ClienteBackend
 import com.qrsecurity.detector.api.ClienteBackend.UrlBloqueada
 import com.qrsecurity.detector.datos.local.BaseDatosSeguridad
 import com.qrsecurity.detector.datos.local.entidades.PendingOpEntity
-import com.qrsecurity.detector.datos.local.entidades.SyncStateEntity
 import com.qrsecurity.detector.datos.local.entidades.UrlBloqueadaEntity
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -36,6 +35,9 @@ class RepositorioUrlsBloqueadas(
 ) {
 
     fun observarTodos(): Flow<List<UrlBloqueadaEntity>> = db.urlBloqueadaDao().observarTodos()
+
+    private val MAX_PAGINAS_POR_RUN = 5
+    private val LIMITE_PAGINA = 200
 
     /**
      * Consulta puntual (no reactiva) para verificar si una URL esta
@@ -134,76 +136,80 @@ class RepositorioUrlsBloqueadas(
     }
 
     /**
-     * PULL: trae todas las URLs bloqueadas del backend y merge LWW.
-     * El backend no pagina este endpoint (volumen bajo) — un solo GET.
+     * PULL legacy — delega a [sincronizarDelta] con epoch cursor.
+     * Equivale a un full pull paginado via el endpoint delta.
      */
     suspend fun sincronizarDesdeBackend(token: String): ResultadoSync =
-        withContext(ioDispatcher) {
-            try {
-                val urlsServidor = backend.listarUrlsBloqueadas(token)
-                val ahora = System.currentTimeMillis()
-
-                db.withTransaction {
-                    val entidades = urlsServidor.map { it.aEntidad(ahora) }
-                    db.urlBloqueadaDao().insertarTodos(entidades)
-
-                    db.syncStateDao().upsert(
-                        SyncStateEntity(
-                            tabla = "urls_bloqueadas",
-                            ultimaSincronizacionAtMillis = ahora,
-                            ultimaSincronizacionExitosa = true
-                        )
-                    )
-                }
-                ResultadoSync.Exitoso(
-                    filaSincronizadas = urlsServidor.size,
-                    idsServidor = urlsServidor.map { it.id }
-                )
-            } catch (e: ClienteBackend.HttpBackendException) {
-                // Bug C3 fix: propagar codigo HTTP + Retry-After al SyncWorker.
-                ResultadoSync.Fallido(
-                    mensaje = e.message ?: "Error sincronizando URLs bloqueadas",
-                    codigo = e.codigo,
-                    retryAfterSegundos = e.retryAfterSegundos
-                )
-            } catch (e: Exception) {
-                ResultadoSync.Fallido(
-                    mensaje = e.message ?: "Error sincronizando URLs bloqueadas"
-                )
-            }
-        }
+        sincronizarDelta(token, "1970-01-01T00:00:00Z")
 
     /**
-     * Delta sync — pide solo las URLs bloqueadas modificadas desde [cursor].
+     * PULL incremental unificado — pide solo las URLs bloqueadas modificadas
+     * desde [cursor], paginando en batches de [LIMITE_PAGINA] filas hasta
+     * [MAX_PAGINAS_POR_RUN] paginas por worker-run.
+     *
+     * Si [cursor] es epoch, equivale a full pull paginado.
      * Maneja tombstones (deleted_at != null → eliminar local).
+     * El cursor se persiste por batch dentro de la transaccion.
      */
     suspend fun sincronizarDelta(token: String, cursor: String): ResultadoSync =
         withContext(ioDispatcher) {
             try {
-                val delta = backend.listarUrlsBloqueadasDelta(token, cursor)
+                var offset = 0
+                val limite = LIMITE_PAGINA
+                var totalFilas = 0
+                val todosIdsServidor = mutableListOf<String>()
+                var masPorSincronizar = false
                 val ahora = System.currentTimeMillis()
 
-                val tombstones = delta.filter { it.deletedAt != null }
-                val vivos = delta.filter { it.deletedAt == null }
+                for (pagina in 1..MAX_PAGINAS_POR_RUN) {
+                    val delta = backend.listarUrlsBloqueadasDelta(token, cursor, limite, offset)
 
-                db.withTransaction {
-                    if (tombstones.isNotEmpty()) {
-                        db.urlBloqueadaDao().eliminarPorIds(tombstones.map { it.id })
+                    if (delta.isEmpty()) {
+                        masPorSincronizar = false
+                        break
                     }
-                    if (vivos.isNotEmpty()) {
-                        val entidades = vivos.map { it.aEntidad(ahora) }
-                        db.urlBloqueadaDao().insertarTodos(entidades)
+
+                    val tombstones = delta.filter { it.deletedAt != null }
+                    val vivos = delta.filter { it.deletedAt == null }
+                    val batchIds = mutableListOf<String>()
+
+                    db.withTransaction {
+                        if (tombstones.isNotEmpty()) {
+                            db.urlBloqueadaDao().eliminarPorIds(tombstones.map { it.id })
+                        }
+                        if (vivos.isNotEmpty()) {
+                            val entidades = vivos.map { it.aEntidad(ahora) }
+                            db.urlBloqueadaDao().insertarTodos(entidades)
+                        }
+
+                        val nuevoCursor = delta.mapNotNull { it.updatedAt }.maxByOrNull { it }
+                        if (nuevoCursor != null) {
+                            db.syncStateDao().actualizarCursor("urls_bloqueadas", nuevoCursor)
+                        }
+                        db.syncStateDao().actualizar("urls_bloqueadas", ahora, exitosa = true)
+
+                        batchIds.addAll(vivos.map { it.id })
                     }
-                    val nuevoCursor = delta.mapNotNull { it.updatedAt }.maxByOrNull { it }
-                    db.syncStateDao().actualizar("urls_bloqueadas", ahora, exitosa = true)
-                    if (nuevoCursor != null) {
-                        db.syncStateDao().actualizarCursor("urls_bloqueadas", nuevoCursor)
+
+                    todosIdsServidor.addAll(batchIds)
+                    totalFilas += delta.size
+
+                    if (delta.size < limite) {
+                        masPorSincronizar = false
+                        break
+                    }
+
+                    offset += limite
+                    if (pagina == MAX_PAGINAS_POR_RUN) {
+                        masPorSincronizar = true
                     }
                 }
 
                 ResultadoSync.Exitoso(
-                    filaSincronizadas = delta.size,
-                    idsServidor = vivos.map { it.id }
+                    filaSincronizadas = totalFilas,
+                    idsServidor = todosIdsServidor,
+                    pullCompleto = !masPorSincronizar,
+                    masPorSincronizar = masPorSincronizar
                 )
             } catch (e: ClienteBackend.HttpBackendException) {
                 ResultadoSync.Fallido(
