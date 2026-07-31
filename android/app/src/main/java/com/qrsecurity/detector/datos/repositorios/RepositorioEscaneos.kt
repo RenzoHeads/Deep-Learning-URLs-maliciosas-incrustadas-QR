@@ -228,57 +228,24 @@ class RepositorioEscaneos(
     suspend fun sincronizarDelta(token: String, cursor: String): ResultadoSync = withContext(ioDispatcher) {
         try {
             var offset = 0
-            val limite = LIMITE_PAGINA
             var totalFilas = 0
             val todosIdsServidor = mutableListOf<String>()
             var masPorSincronizar = false
             val ahora = System.currentTimeMillis()
 
             for (pagina in 1..MAX_PAGINAS_POR_RUN) {
-                val delta = backend.listarEscaneosDelta(token, cursor, limite, offset)
+                val delta = backend.listarEscaneosDelta(token, cursor, LIMITE_PAGINA, offset)
 
-                if (delta.isEmpty()) {
-                    masPorSincronizar = false
-                    break
-                }
+                if (delta.isEmpty()) break
 
-                val tombstones = delta.filter { it.deletedAt != null }
-                val vivos = delta.filter { it.deletedAt == null }
-                val batchIds = mutableListOf<String>()
-
-                db.withTransaction {
-                    if (tombstones.isNotEmpty()) {
-                        db.escaneoDao().eliminarPorIds(tombstones.map { it.id })
-                    }
-                    if (vivos.isNotEmpty()) {
-                        val entidades = vivos.map { it.aEntidad(ahora) }
-                        db.escaneoDao().insertarTodos(entidades)
-                    }
-
-                    // Avanzar cursor dentro de la transaccion — max(updated_at)
-                    // de este batch. Si el worker crashea, el cursor queda en
-                    // el ultimo batch aplicado y el siguiente run continua desde ahi.
-                    val nuevoCursor = delta.mapNotNull { it.updatedAt }.maxByOrNull { it }
-                    if (nuevoCursor != null) {
-                        db.syncStateDao().actualizarCursor("escaneos", nuevoCursor)
-                    }
-                    db.syncStateDao().actualizar("escaneos", ahora, exitosa = true)
-
-                    batchIds.addAll(vivos.map { it.id })
-                }
-
+                val batchIds = aplicarBatchEscaneos(delta, ahora)
                 todosIdsServidor.addAll(batchIds)
                 totalFilas += delta.size
 
-                if (delta.size < limite) {
-                    masPorSincronizar = false
-                    break
-                }
+                if (delta.size < LIMITE_PAGINA) break
 
-                offset += limite
-                if (pagina == MAX_PAGINAS_POR_RUN) {
-                    masPorSincronizar = true
-                }
+                offset += LIMITE_PAGINA
+                if (pagina == MAX_PAGINAS_POR_RUN) masPorSincronizar = true
             }
 
             ResultadoSync.Exitoso(
@@ -296,6 +263,35 @@ class RepositorioEscaneos(
         } catch (e: Exception) {
             ResultadoSync.Fallido(mensaje = e.message ?: "Error desconocido en delta sync de escaneos")
         }
+    }
+
+    /**
+     * Aplica un batch de escaneos (tombstones + upsert + cursor) en una
+     * transaccion Room. Devuelve los ids de las filas vivas para control
+     * de huerfanos.
+     */
+    private suspend fun aplicarBatchEscaneos(
+        delta: List<Escaneo>,
+        ahora: Long
+    ): List<String> = db.withTransaction {
+        val tombstones = delta.filter { it.deletedAt != null }
+        val vivos = delta.filter { it.deletedAt == null }
+
+        if (tombstones.isNotEmpty()) {
+            db.escaneoDao().eliminarPorIds(tombstones.map { it.id })
+        }
+        if (vivos.isNotEmpty()) {
+            val entidades = vivos.map { it.aEntidad(ahora) }
+            db.escaneoDao().insertarTodos(entidades)
+        }
+
+        val nuevoCursor = delta.mapNotNull { it.updatedAt }.maxByOrNull { it }
+        if (nuevoCursor != null) {
+            db.syncStateDao().actualizarCursor("escaneos", nuevoCursor)
+        }
+        db.syncStateDao().actualizar("escaneos", ahora, exitosa = true)
+
+        vivos.map { it.id }
     }
 
     /**

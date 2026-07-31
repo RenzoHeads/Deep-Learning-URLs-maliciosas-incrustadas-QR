@@ -41,7 +41,7 @@ class SyncWorker @AssistedInject constructor(
     // ════════════════════════════════════════════════════════════════
     // S1066 fix aplicado (if anidado fusionado).
     // S3776 (Cognitive Complexity): refactored — los 4 bloques `when` PULL
-    // usan `manejarFallidoPull()` helper y el loop PUSH usa
+    // usan `decidirResultadoPull()` helper y el loop PUSH usa
     // `procesarPendingOps()`. doWork() ahora < 15 de complejidad.
     // Hilt: dependencias inyectadas via @AssistedInject (repositorios,
     // db, backend, sesion, monitorRed).
@@ -255,19 +255,6 @@ class SyncWorker @AssistedInject constructor(
         return estado
     }
 
-    /** Aplica el resultado de un PULL fallido al estado consolidado. */
-    private fun aplicarFallidoPull(
-        r: ResultadoSync.Fallido,
-        estado: EstadoPulls
-    ): EstadoPulls {
-        val result = manejarFallidoPull(r)
-        // Si manejarFallidoPull devuelve non-null (failure/retry), marca transitorio.
-        if (result != null) {
-            return estado.copy(huboErrorTransitorio = estado.huboErrorTransitorio || result is DecisionPull.Decision.Retry)
-        }
-        return estado
-    }
-
     private suspend fun debeSaltarPulls(
         context: Context,
         pendingDao: PendingOpDao
@@ -437,11 +424,3 @@ fun decidirResultadoPull(codigo: Int?, retryAfterSegundos: Long?): DecisionPull.
  */
 private const val BACKOFF_MIN_SEGUNDOS_TOTAL = 10L
 
-/**
- * Procesa el resultado Fallido de un PULL y devuelve la decision.
- * - null =Success → continuar con siguiente PULL
- * - Decision.Failure → abortar permanentemente
- * - Decision.Retry → reintentar transitoriamente
- */
-fun manejarFallidoPull(r: ResultadoSync.Fallido): DecisionPull.Decision? =
-    decidirResultadoPull(r.codigo, r.retryAfterSegundos)
