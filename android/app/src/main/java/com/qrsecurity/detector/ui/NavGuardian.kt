@@ -83,6 +83,23 @@ import java.net.URLDecoder
 // Rutas de navegacion — 9 pantallas de la app QR Guardian.
 // ──────────────────────────────────────────────────────────────────
 
+// Agrupacion de ViewModels + estado del pipeline para NavGuardianRutas
+// (evita S107 — max 7 parametros).
+private data class NavGuardianViewModels(
+    val pipelineViewModel: PipelineViewModel,
+    val datosViewModel: DatosTabsViewModel,
+    val sessionViewModel: SessionViewModel,
+    val estadoPipeline: Pipeline.Estado
+)
+
+// Agrupacion de utilities de UI/navegacion para NavGuardianRutas.
+private data class NavGuardianContexto(
+    val navController: androidx.navigation.NavHostController,
+    val context: android.content.Context,
+    val scope: kotlinx.coroutines.CoroutineScope,
+    val mostrarMensaje: (TipoMensaje, String) -> Unit
+)
+
 object Rutas {
     const val LOGIN = "login"
     const val ONBOARDING = "onboarding"
@@ -128,7 +145,6 @@ fun NavGuardian() {
     // rotacion y no se reinicializa en cada recomposicion. Hilt inyecta el
     // Pipeline @Singleton automaticamente.
     val pipelineViewModel: PipelineViewModel = hiltViewModel()
-    val pipeline = pipelineViewModel.pipeline
     val estadoPipeline by pipelineViewModel.estado.collectAsState()
 
     // Performance: DatosTabsViewModel compartido entre Historial y
@@ -249,273 +265,316 @@ fun NavGuardian() {
             SnackbarHostCyber(hostState = snackbarHostState)
         }
     ) { padding ->
-        NavHost(
-            navController = navController,
-            startDestination = destinoInicial,
+        NavGuardianRutas(
+            viewModels = NavGuardianViewModels(
+                pipelineViewModel = pipelineViewModel,
+                datosViewModel = datosViewModel,
+                sessionViewModel = sessionViewModel,
+                estadoPipeline = estadoPipeline
+            ),
+            contexto = NavGuardianContexto(
+                navController = navController,
+                context = context,
+                scope = scope,
+                mostrarMensaje = ::mostrarMensaje
+            ),
+            destinoInicial = destinoInicial,
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding),
-            // Performance: transiciones instantaneas entre tabs. Las
-            // animaciones por defecto de NavHost (fadeIn/fadeOut 700ms)
-            // causan lag perceptible al cambiar de tab, especialmente
-            // en dispositivos mid-range. Sin animaciones, el cambio es
-            // inmediato.
-            enterTransition = { EnterTransition.None },
-            exitTransition = { ExitTransition.None },
-            popEnterTransition = { EnterTransition.None },
-            popExitTransition = { ExitTransition.None }
-        ) {
-            // ── Login (pantalla inicial si no hay sesion) ──
-            // Bug A11 fix + fix onboarding-nueva-cuenta: tras login/registro
-            // exitoso, decidir destino segun si es nuevo registro o login
-            // existente.
-            //
-            // - Nuevo registro (esNuevoRegistro=true): SIEMPRE va a
-            //   ONBOARDING. El usuario es nuevo y necesita el tour inicial.
-            //   Antes, el flag global `onboarding_completado` persistia de
-            //   sesiones de otros usuarios anteriores, asi que el onboarding
-            //   nunca aparecia al crear una cuenta nueva — el usuario nuevo
-            //   veia directamente Escanear sin explicacion.
-            //
-            // - Login existente (esNuevoRegistro=false): si el flag global
-            //   `onboarding_completado` esta en true (el usuario ya paso el
-            //   onboarding en algun momento), va directo a ESCANEAR. Si no,
-            //   va a ONBOARDING.
-            composable(Rutas.LOGIN) {
-                PantallaLogin(
-                    onExito = { esNuevoRegistro ->
-                        val destino = if (esNuevoRegistro) {
-                            Rutas.ONBOARDING
-                        } else {
-                            val onboardingDone = context
-                                .getSharedPreferences(PREFS_QR_GUARDIAN, android.content.Context.MODE_PRIVATE)
-                                .getBoolean(CLAVE_ONBOARDING_COMPLETADO, false)
-                            if (onboardingDone) Rutas.ESCANEAR else Rutas.ONBOARDING
-                        }
-                        navController.navigate(destino) {
-                            popUpTo(Rutas.LOGIN) { inclusive = true }
-                        }
-                    },
-                    onMensaje = ::mostrarMensaje
-                )
-            }
+                .padding(padding)
+        )
+    }
+}
 
-            // ── Onboarding ──
-            composable(Rutas.ONBOARDING) {
-                PantallaOnboarding(
-                    onComenzar = {
-                        navController.navigate(Rutas.ESCANEAR) {
-                            popUpTo(Rutas.ONBOARDING) { inclusive = true }
-                        }
+/**
+ * Contenido del NavHost — 9 rutas de la app QR Guardian.
+ *
+ * Extraido de [NavGuardian] para reducir la Cognitive Complexity (S3776):
+ * NavGuardian() queda como un wrapper delgado (state setup + Scaffold) y
+ * toda la logica de rutas vive aqui. Las referencias a ViewModels,
+ * navController, context, scope y mostrarMensaje se resuelven via los
+ * data classes [NavGuardianViewModels] y [NavGuardianContexto].
+ */
+@Composable
+private fun NavGuardianRutas(
+    viewModels: NavGuardianViewModels,
+    contexto: NavGuardianContexto,
+    destinoInicial: String,
+    modifier: Modifier
+) {
+    val navController = contexto.navController
+    val context = contexto.context
+    val scope = contexto.scope
+    val mostrarMensaje = contexto.mostrarMensaje
+    val pipelineViewModel = viewModels.pipelineViewModel
+    val datosViewModel = viewModels.datosViewModel
+    val sessionViewModel = viewModels.sessionViewModel
+    val estadoPipeline = viewModels.estadoPipeline
+
+    NavHost(
+        navController = navController,
+        startDestination = destinoInicial,
+        modifier = modifier,
+        // Performance: transiciones instantaneas entre tabs. Las
+        // animaciones por defecto de NavHost (fadeIn/fadeOut 700ms)
+        // causan lag perceptible al cambiar de tab, especialmente
+        // en dispositivos mid-range. Sin animaciones, el cambio es
+        // inmediato.
+        enterTransition = { EnterTransition.None },
+        exitTransition = { ExitTransition.None },
+        popEnterTransition = { EnterTransition.None },
+        popExitTransition = { ExitTransition.None }
+    ) {
+        // ── Login (pantalla inicial si no hay sesion) ──
+        // Bug A11 fix + fix onboarding-nueva-cuenta: tras login/registro
+        // exitoso, decidir destino segun si es nuevo registro o login
+        // existente.
+        //
+        // - Nuevo registro (esNuevoRegistro=true): SIEMPRE va a
+        //   ONBOARDING. El usuario es nuevo y necesita el tour inicial.
+        //   Antes, el flag global `onboarding_completado` persistia de
+        //   sesiones de otros usuarios anteriores, asi que el onboarding
+        //   nunca aparecia al crear una cuenta nueva — el usuario nuevo
+        //   veia directamente Escanear sin explicacion.
+        //
+        // - Login existente (esNuevoRegistro=false): si el flag global
+        //   `onboarding_completado` esta en true (el usuario ya paso el
+        //   onboarding en algun momento), va directo a ESCANEAR. Si no,
+        //   va a ONBOARDING.
+        composable(Rutas.LOGIN) {
+            PantallaLogin(
+                onExito = { esNuevoRegistro ->
+                    val destino = if (esNuevoRegistro) {
+                        Rutas.ONBOARDING
+                    } else {
+                        val onboardingDone = context
+                            .getSharedPreferences(PREFS_QR_GUARDIAN, android.content.Context.MODE_PRIVATE)
+                            .getBoolean(CLAVE_ONBOARDING_COMPLETADO, false)
+                        if (onboardingDone) Rutas.ESCANEAR else Rutas.ONBOARDING
                     }
-                )
-            }
+                    navController.navigate(destino) {
+                        popUpTo(Rutas.LOGIN) { inclusive = true }
+                    }
+                },
+                onMensaje = mostrarMensaje
+            )
+        }
 
-            // ── Escanear (Home & Scan) ──
-            // Bug 4 fix: onIrHistorial/onIrAcerca eliminados de PantallaEscanear
-            // (estaban declarados pero nunca conectados a botones en el top bar).
-            // El usuario accede a Historial/Acerca via la bottom nav bar.
-            composable(Rutas.ESCANEAR) {
-                PantallaEscanear(
-                    onQrDetectado = { payload ->
-                        // Bug G-1 fix: usar `pipelineViewModel.analizar()` (no
-                        // `pipeline.analizar` directo). El ViewModel expone
-                        // `analizar()` con gestion de `scanJob.cancelAndJoin()`
-                        // para cancelar scans en curso antes de empezar el nuevo
-                        // — evitando races de estado concurrente y navegacion
-                        // zombie tras rotacion. Antes el UI bypassaba el
-                        // discipline del VM y llamaba directo a Pipeline, lo que
-                        // dejaba el scanJob/cancelAndJoin del VM como dead code.
-                        scope.launch { pipelineViewModel.analizar(payload) }
-                    },
-                    onMensaje = ::mostrarMensaje
-                )
-            }
-
-            // ── Resultado Seguro ──
-            // Bug D2 fix: fallback a resultadoCacheado cuando estadoPipeline
-            // no tiene ResultadoListo (e.g. tras process death, el
-            // PipelineViewModel se recrea y pipeline.estado vuelve a
-            // Inicializando). Sin este fallback, la pantalla queda en blanco.
-            composable(Rutas.RESULTADO_SEGURO) {
-                val resultado = (estadoPipeline as? Pipeline.Estado.ResultadoListo)
-                    ?.resultado as? Pipeline.ResultadoAnalisis.ResultadoUrl
-                    ?: pipelineViewModel.resultadoCacheado.value
-                resultado?.let { res ->
-                    PantallaResultadoSeguro(
-                        resultado = res,
-                        onEscanearOtro = {
-                            pipelineViewModel.reiniciar()
-                            navController.navigate(Rutas.ESCANEAR) {
-                                popUpTo(Rutas.ESCANEAR) { inclusive = true }
-                            }
-                        },
-                        onMensaje = ::mostrarMensaje
-                    )
+        // ── Onboarding ──
+        composable(Rutas.ONBOARDING) {
+            PantallaOnboarding(
+                onComenzar = {
+                    navController.navigate(Rutas.ESCANEAR) {
+                        popUpTo(Rutas.ONBOARDING) { inclusive = true }
+                    }
                 }
-            }
+            )
+        }
 
-            // ── Resultado Malicioso ──
-            // Bug D2 fix: mismo fallback a resultadoCacheado que en
-            // RESULTADO_SEGURO. Si process death mato el StateFlow, la
-            // pantalla se reconstruye desde el cache de SavedStateHandle.
-            composable(Rutas.RESULTADO_MALICIOSO) {
-                val resultado = (estadoPipeline as? Pipeline.Estado.ResultadoListo)
-                    ?.resultado as? Pipeline.ResultadoAnalisis.ResultadoUrl
-                    ?: pipelineViewModel.resultadoCacheado.value
-                resultado?.let { res ->
-                    PantallaResultadoMalicioso(
-                        resultado = res,
-                        onEscanearOtro = {
-                            pipelineViewModel.reiniciar()
-                            navController.navigate(Rutas.ESCANEAR) {
-                                popUpTo(Rutas.ESCANEAR) { inclusive = true }
-                            }
-                        },
-                        onDenunciar = { url ->
-                            val urlCodificada = URLEncoder.encode(url, "UTF-8")
-                            navController.navigate("denunciar?url=$urlCodificada") {
-                                popUpTo(Rutas.RESULTADO_MALICIOSO) {
-                                    inclusive = true
-                                }
-                                launchSingleTop = true
-                            }
-                        },
-                        onVerBloqueadas = {
-                            navController.navigate(Rutas.BLOQUEADAS) {
-                                popUpTo(Rutas.RESULTADO_MALICIOSO) {
-                                    inclusive = true
-                                }
-                                launchSingleTop = true
-                            }
-                        },
-                        onMensaje = ::mostrarMensaje
-                    )
-                }
-            }
+        // ── Escanear (Home & Scan) ──
+        // Bug 4 fix: onIrHistorial/onIrAcerca eliminados de PantallaEscanear
+        // (estaban declarados pero nunca conectados a botones en el top bar).
+        // El usuario accede a Historial/Acerca via la bottom nav bar.
+        composable(Rutas.ESCANEAR) {
+            PantallaEscanear(
+                onQrDetectado = { payload ->
+                    // Bug G-1 fix: usar `pipelineViewModel.analizar()` (no
+                    // `pipeline.analizar` directo). El ViewModel expone
+                    // `analizar()` con gestion de `scanJob.cancelAndJoin()`
+                    // para cancelar scans en curso antes de empezar el nuevo
+                    // — evitando races de estado concurrente y navegacion
+                    // zombie tras rotacion. Antes el UI bypassaba el
+                    // discipline del VM y llamaba directo a Pipeline, lo que
+                    // dejaba el scanJob/cancelAndJoin del VM como dead code.
+                    scope.launch { pipelineViewModel.analizar(payload) }
+                },
+                onMensaje = mostrarMensaje
+            )
+        }
 
-            // ── Historial ──
-            // Bug DETAIL-1 fix: onVerDetalle navega al detalle del escaneo.
-            composable(Rutas.HISTORIAL) {
-                PantallaHistorial(
-                    datosViewModel = datosViewModel,
-                    onEscanear = {
+        // ── Resultado Seguro ──
+        // Bug D2 fix: fallback a resultadoCacheado cuando estadoPipeline
+        // no tiene ResultadoListo (e.g. tras process death, el
+        // PipelineViewModel se recrea y pipeline.estado vuelve a
+        // Inicializando). Sin este fallback, la pantalla queda en blanco.
+        composable(Rutas.RESULTADO_SEGURO) {
+            val resultado = (estadoPipeline as? Pipeline.Estado.ResultadoListo)
+                ?.resultado as? Pipeline.ResultadoAnalisis.ResultadoUrl
+                ?: pipelineViewModel.resultadoCacheado.value
+            resultado?.let { res ->
+                PantallaResultadoSeguro(
+                    resultado = res,
+                    onEscanearOtro = {
+                        pipelineViewModel.reiniciar()
                         navController.navigate(Rutas.ESCANEAR) {
                             popUpTo(Rutas.ESCANEAR) { inclusive = true }
                         }
                     },
-                    onVerDetalle = { id ->
-                        navController.navigate("detalle_escaneo/$id")
-                    },
-                    onMensaje = ::mostrarMensaje
+                    onMensaje = mostrarMensaje
                 )
             }
+        }
 
-            // ── Detalle de Escaneo ──
-            // Bug DETAIL-1 fix: pantalla de detalle accesible tocando una tarjeta
-            // del historial. Lee el EscaneoEntity desde Room por id.
-            composable(
-                route = Rutas.DETALLE_ESCANEO,
-                arguments = listOf(
-                    navArgument("id") {
-                        type = NavType.StringType
-                    }
-                )
-            ) { backStackEntry ->
-                val id = backStackEntry.arguments?.getString("id") ?: ""
-                DetalleEscaneoContainer(
-                    id = id,
-                    viewModel = hiltViewModel(),
-                    onVolver = { navController.popBackStack() },
+        // ── Resultado Malicioso ──
+        // Bug D2 fix: mismo fallback a resultadoCacheado que en
+        // RESULTADO_SEGURO. Si process death mato el StateFlow, la
+        // pantalla se reconstruye desde el cache de SavedStateHandle.
+        composable(Rutas.RESULTADO_MALICIOSO) {
+            val resultado = (estadoPipeline as? Pipeline.Estado.ResultadoListo)
+                ?.resultado as? Pipeline.ResultadoAnalisis.ResultadoUrl
+                ?: pipelineViewModel.resultadoCacheado.value
+            resultado?.let { res ->
+                PantallaResultadoMalicioso(
+                    resultado = res,
+                    onEscanearOtro = {
+                        pipelineViewModel.reiniciar()
+                        navController.navigate(Rutas.ESCANEAR) {
+                            popUpTo(Rutas.ESCANEAR) { inclusive = true }
+                        }
+                    },
                     onDenunciar = { url ->
                         val urlCodificada = URLEncoder.encode(url, "UTF-8")
-                        navController.navigate("denunciar?url=$urlCodificada")
-                    },
-                    onMensaje = ::mostrarMensaje
-                )
-            }
-
-            // ── URLs Bloqueadas ──
-            composable(Rutas.BLOQUEADAS) {
-                PantallaBloqueadas(
-                    datosViewModel = datosViewModel,
-                    onEscanear = {
-                        navController.navigate(Rutas.ESCANEAR) {
-                            popUpTo(Rutas.ESCANEAR) { inclusive = true }
-                        }
-                    },
-                    onMensaje = ::mostrarMensaje
-                )
-            }
-
-            // ── Denunciar URL ──
-            composable(
-                route = Rutas.DENUNCIAR,
-                arguments = listOf(
-                    navArgument("url") {
-                        type = NavType.StringType
-                        defaultValue = ""
-                        nullable = true
-                    }
-                )
-            ) { backStackEntry ->
-                val urlCodificada = backStackEntry.arguments?.getString("url") ?: ""
-                val urlPrevia = runCatching { URLDecoder.decode(urlCodificada, "UTF-8") }
-                    .getOrDefault(if (urlCodificada.isEmpty()) "" else urlCodificada)
-                PantallaDenunciar(
-                    urlPrevia = urlPrevia,
-                    onExito = {
-                        navController.popBackStack()
-                    },
-                    onCancelar = {
-                        navController.popBackStack()
-                    },
-                    onMensaje = ::mostrarMensaje
-                )
-            }
-
-            // ── Acerca de / Ayuda ──
-            // Bug D4-P1 (fix Lote H): anadido callback `onCerrarSesion`. Antes
-            // [LogoutCoordinator] (que vacia Room + borra token) no tenia ningun
-            // llamante en la UI — el logout completo nunca se ejecutaba desde la
-            // app. Ahora el boton "Cerrar sesion" de PantallaAcerca dispara este
-            // callback, que lanza una corutina IO para llamar
-            // [LogoutCoordinator.logout] (suspend, hace writes Room) y luego
-            // navega a Login. La corutina corre en el `scope` de NavGuardian
-            // (rememberCoroutineScope at line 82), ligado al composition; si
-            // NavGuardian sale de composition antes de que logout termine,
-            // la corutina se cancela (no queremos que un logout a medias
-            // deje Room parcialmente vacio). El caller Rif a este callback
-            // deberia ser defensive contra cancelacion.
-            composable(Rutas.ACERCA) {
-                PantallaAcerca(
-                    onVolver = {
-                        navController.navigate(Rutas.ESCANEAR) {
-                            popUpTo(Rutas.ESCANEAR) { inclusive = true }
-                        }
-                    },
-                    onCerrarSesion = {
-                        scope.launch {
-                            sessionViewModel.logout()
-                            // Bug S2 fix: resetear el estado del Pipeline tras
-                            // logout. Si no se hace, `estadoPipeline` retiene el
-                            // ultimo resultado (e.g. ResultadoListo) y, al
-                            // reloguearse, el NavHost podria auto-navegar a una
-                            // pantalla de resultado zombie. reiniciar() pone el
-                            // Pipeline en Estado.Idle.
-                            pipelineViewModel.reiniciar()
-                            mostrarMensaje(TipoMensaje.INFO, "Sesión cerrada")
-                            // Tras logout (Room vacio + token borrado),
-                            // navega a Login y limpia el back stack para
-                            // que el usuario no pueda ir "atras" a pantallas
-                            // con estado dependiente del usuario anterior.
-                            navController.navigate(Rutas.LOGIN) {
-                                popUpTo(navController.graph.id) { inclusive = true }
+                        navController.navigate("denunciar?url=$urlCodificada") {
+                            popUpTo(Rutas.RESULTADO_MALICIOSO) {
+                                inclusive = true
                             }
+                            launchSingleTop = true
                         }
                     },
+                    onVerBloqueadas = {
+                        navController.navigate(Rutas.BLOQUEADAS) {
+                            popUpTo(Rutas.RESULTADO_MALICIOSO) {
+                                inclusive = true
+                            }
+                            launchSingleTop = true
+                        }
+                    },
+                    onMensaje = mostrarMensaje
                 )
             }
+        }
+
+        // ── Historial ──
+        // Bug DETAIL-1 fix: onVerDetalle navega al detalle del escaneo.
+        composable(Rutas.HISTORIAL) {
+            PantallaHistorial(
+                datosViewModel = datosViewModel,
+                onEscanear = {
+                    navController.navigate(Rutas.ESCANEAR) {
+                        popUpTo(Rutas.ESCANEAR) { inclusive = true }
+                    }
+                },
+                onVerDetalle = { id ->
+                    navController.navigate("detalle_escaneo/$id")
+                },
+                onMensaje = mostrarMensaje
+            )
+        }
+
+        // ── Detalle de Escaneo ──
+        // Bug DETAIL-1 fix: pantalla de detalle accesible tocando una tarjeta
+        // del historial. Lee el EscaneoEntity desde Room por id.
+        composable(
+            route = Rutas.DETALLE_ESCANEO,
+            arguments = listOf(
+                navArgument("id") {
+                    type = NavType.StringType
+                }
+            )
+        ) { entryDetalle ->
+            val id = entryDetalle.arguments?.getString("id") ?: ""
+            DetalleEscaneoContainer(
+                id = id,
+                viewModel = hiltViewModel(),
+                onVolver = { navController.popBackStack() },
+                onDenunciar = { url ->
+                    val urlCodificada = URLEncoder.encode(url, "UTF-8")
+                    navController.navigate("denunciar?url=$urlCodificada")
+                },
+                onMensaje = mostrarMensaje
+            )
+        }
+
+        // ── URLs Bloqueadas ──
+        composable(Rutas.BLOQUEADAS) {
+            PantallaBloqueadas(
+                datosViewModel = datosViewModel,
+                onEscanear = {
+                    navController.navigate(Rutas.ESCANEAR) {
+                        popUpTo(Rutas.ESCANEAR) { inclusive = true }
+                    }
+                },
+                onMensaje = mostrarMensaje
+            )
+        }
+
+        // ── Denunciar URL ──
+        composable(
+            route = Rutas.DENUNCIAR,
+            arguments = listOf(
+                navArgument("url") {
+                    type = NavType.StringType
+                    defaultValue = ""
+                    nullable = true
+                }
+            )
+        ) { entryDenunciar ->
+            val urlCodificada = entryDenunciar.arguments?.getString("url") ?: ""
+            val urlPrevia = runCatching { URLDecoder.decode(urlCodificada, "UTF-8") }
+                .getOrDefault(if (urlCodificada.isEmpty()) "" else urlCodificada)
+            PantallaDenunciar(
+                urlPrevia = urlPrevia,
+                onExito = {
+                    navController.popBackStack()
+                },
+                onCancelar = {
+                    navController.popBackStack()
+                },
+                onMensaje = mostrarMensaje
+            )
+        }
+
+        // ── Acerca de / Ayuda ──
+        // Bug D4-P1 (fix Lote H): anadido callback `onCerrarSesion`. Antes
+        // [LogoutCoordinator] (que vacia Room + borra token) no tenia ningun
+        // llamante en la UI — el logout completo nunca se ejecutaba desde la
+        // app. Ahora el boton "Cerrar sesion" de PantallaAcerca dispara este
+        // callback, que lanza una corutina IO para llamar
+        // [LogoutCoordinator.logout] (suspend, hace writes Room) y luego
+        // navega a Login. La corutina corre en el `scope` de NavGuardian
+        // (rememberCoroutineScope at line 82), ligado al composition; si
+        // NavGuardian sale de composition antes de que logout termine,
+        // la corutina se cancela (no queremos que un logout a medias
+        // deje Room parcialmente vacio). El caller Rif a este callback
+        // deberia ser defensive contra cancelacion.
+        composable(Rutas.ACERCA) {
+            PantallaAcerca(
+                onVolver = {
+                    navController.navigate(Rutas.ESCANEAR) {
+                        popUpTo(Rutas.ESCANEAR) { inclusive = true }
+                    }
+                },
+                onCerrarSesion = {
+                    scope.launch {
+                        sessionViewModel.logout()
+                        // Bug S2 fix: resetear el estado del Pipeline tras
+                        // logout. Si no se hace, `estadoPipeline` retiene el
+                        // ultimo resultado (e.g. ResultadoListo) y, al
+                        // reloguearse, el NavHost podria auto-navegar a una
+                        // pantalla de resultado zombie. reiniciar() pone el
+                        // Pipeline en Estado.Idle.
+                        pipelineViewModel.reiniciar()
+                        mostrarMensaje(TipoMensaje.INFO, "Sesión cerrada")
+                        // Tras logout (Room vacio + token borrado),
+                        // navega a Login y limpia el back stack para
+                        // que el usuario no pueda ir "atras" a pantallas
+                        // con estado dependiente del usuario anterior.
+                        navController.navigate(Rutas.LOGIN) {
+                            popUpTo(navController.graph.id) { inclusive = true }
+                        }
+                    }
+                },
+            )
         }
     }
 }
