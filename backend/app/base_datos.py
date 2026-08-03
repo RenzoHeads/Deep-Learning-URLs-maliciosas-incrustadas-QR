@@ -12,7 +12,9 @@ Uso tipico dentro de un endpoint:
     async with pool.acquire() as conexion:
         ... = await conexion.fetchval("SELECT 1")
 """
+import hashlib
 import logging
+from typing import Any
 
 import asyncpg
 from app.config import obtener_ajustes
@@ -60,3 +62,133 @@ async def obtener_pool() -> asyncpg.Pool:
         _pool = None
         raise RuntimeError("No se pudo conectar a la base de datos") from e
     return _pool
+
+
+# ============================================================================
+# Deduplicación (cache + log) — helpers de hashing y lookup del cache maestro.
+# ============================================================================
+
+def hash_url(url_limpia: str) -> str:
+    """Computa ``SHA-256(url_limpia)`` en hexadecimal lowercase (64 chars).
+
+    Espejo exacto del helper Android
+    ``com.qrsecurity.detector.datos.local.sha256Hex`` — misma entrada (URL
+    limpia UTF-8), mismo algoritmo (SHA-256), misma salida (hex lowercase de
+    64 caracteres). La coherencia cross-platform es obligatoria: el hash es
+    la PK de ``urls_catalogo`` tanto en Room (Android) como en Neon (backend),
+    y los lookups de dedup de Android consultan ambos caches con el mismo
+    hash. Si divergieran, el dedup del cliente no encontraría entradas que el
+    backend ya registró, y viceversa.
+
+    Args:
+        url_limpia: URL ya normalizada (sin protocolo, sin ``www.``, sin
+            ``/`` final). El caller es responsable de normalizar antes de
+            hashear — aquí no se re-normaliza para mantener un único punto
+            de verdad (Preprocesador.limpiarUrl en Android).
+
+    Returns:
+        Hex string de 64 caracteres (SHA-256 = 32 bytes = 64 hex chars),
+        lowercase.
+    """
+    return hashlib.sha256(url_limpia.encode("utf-8")).hexdigest()
+
+
+async def buscar_url_catalogo(
+    conexion: asyncpg.Connection, url_limpia: str
+) -> dict[str, Any] | None:
+    """Busca una URL en el cache maestro ``urls_catalogo`` por su hash.
+
+    Patrón cache+log (deduplicación): el backend mantiene un cache maestro
+    denormalizado ``urls_catalogo`` (PK ``url_hash`` = SHA-256(url_limpia))
+    con el último resultado conocido + un contador ``veces_escaneada``. El
+    endpoint ``GET /escaneos/existe-url`` usa esta función para responder
+    sin tocar el log append-only ``historial_escaneos``.
+
+    Reutiliza la ``conexion`` del caller (ya dentro de un ``pool.acquire()``
+    o transacción) — no abre una nueva conexión.
+
+    Args:
+        conexion: Conexión asyncpg activa.
+        url_limpia: URL limpia (sin normalizar aquí — el caller normaliza).
+
+    Returns:
+        ``dict`` con las columnas de ``urls_catalogo`` si existe la entrada
+        (``url_hash``, ``url_limpia``, ``ultimo_nivel_alerta``,
+        ``ultima_probabilidad``, `` ultimo_escaneo_millis``,
+        ``veces_escaneada``, ``created_at``, ``updated_at``), o ``None`` si
+        la URL no fue escaneada antes.
+    """
+    h = hash_url(url_limpia)
+    fila = await conexion.fetchrow(
+        """
+        SELECT url_hash, url_limpia, ultimo_nivel_alerta,
+               ultima_probabilidad, ultimo_escaneo_millis, veces_escaneada,
+               created_at, updated_at
+        FROM urls_catalogo
+        WHERE url_hash = $1
+        """,
+        h,
+    )
+    if fila is None:
+        return None
+    return dict(fila)
+
+
+async def upsert_url_catalogo(
+    conexion: asyncpg.Connection,
+    url_limpia: str,
+    nivel_alerta: str,
+    probabilidad: float,
+) -> None:
+    """UPSERT de una entrada en el cache maestro ``urls_catalogo``.
+
+    Patrón cache+log (deduplicación): cada vez que se inserta un nuevo escaneo
+    en el log append-only ``historial_escaneos``, se hace UPSERT del cache
+    maestro **dentro de la misma transacción** (atomicidad cache+log). Si la
+    URL ya existe: se actualiza el último resultado + se incrementa
+    ``veces_escaneada`` en 1. Si es nueva: se inserta con ``veces_escaneada = 1``.
+
+    Uso típico dentro de ``POST /escaneos``::
+
+        async with pool.acquire() as conexion:
+            async with conexion.transaction():
+                await conexion.execute(INSERT historial_escaneos ...)
+                await upsert_url_catalogo(conexion, url_limpia, nivel, prob)
+
+    Reutiliza la ``conexion`` del caller — no abre una nueva, no hace su
+    propio ``BEGIN``/``COMMIT`` (el caller controla la tx).
+
+    Args:
+        conexion: Conexión asyncpg activa dentro de una transacción.
+        url_limpia: URL limpia (sin normalizar aquí — el caller normaliza).
+        nivel_alerta: Nivel discreto del último escaneo
+            (``"SEGURO"``/``"SOSPECHOSO"``/``"MALICIOSO"``).
+        probabilidad: Probabilidad sigmoid [0, 1] del último escaneo.
+    """
+    h = hash_url(url_limpia)
+    ahora_millis = _epoch_millis_ahora()
+    await conexion.execute(
+        """
+        INSERT INTO urls_catalogo
+            (url_hash, url_limpia, ultimo_nivel_alerta, ultima_probabilidad,
+             ultimo_escaneo_millis, veces_escaneada, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, 1, now(), now())
+        ON CONFLICT (url_hash) DO UPDATE
+            SET ultimo_nivel_alerta       = EXCLUDED.ultimo_nivel_alerta,
+                ultima_probabilidad       = EXCLUDED.ultima_probabilidad,
+                ultimo_escaneo_millis     = EXCLUDED.ultimo_escaneo_millis,
+                veces_escaneada           = urls_catalogo.veces_escaneada + 1,
+                updated_at                = now()
+        """,
+        h,
+        url_limpia,
+        nivel_alerta,
+        probabilidad,
+        ahora_millis,
+    )
+
+
+def _epoch_millis_ahora() -> int:
+    """Timestamp de ahora en millis desde epoch (UTC)."""
+    import time
+    return int(time.time() * 1000)

@@ -12,8 +12,14 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.base_datos import obtener_pool
-from app.modelos import CrearEscaneoEntrada, EscaneoRespuesta, fila_a_escaneo
+from app.base_datos import buscar_url_catalogo, obtener_pool, upsert_url_catalogo
+from app.modelos import (
+    CrearEscaneoEntrada,
+    EscaneoRespuesta,
+    UrlCatalogoRespuesta,
+    fila_a_escaneo,
+    fila_a_url_catalogo,
+)
 from app.routers.auth import verificar_token
 
 router = APIRouter(prefix="/escaneos", tags=["escaneos"])
@@ -28,28 +34,44 @@ async def crear_escaneo(
     datos: CrearEscaneoEntrada,
     id_usuario: Annotated[str, Depends(verificar_token)],
 ):
-    """Registra un nuevo escaneo en el historial."""
+    """Registra un nuevo escaneo en el historial.
+
+    Patrón cache+log (deduplicación): el INSERT en ``historial_escaneos``
+    (log append-only) y el UPSERT en ``urls_catalogo`` (cache maestro)
+    se ejecutan **dentro de la misma transacción** — atomicidad cache+log.
+    Si cualquiera falla, ambos se revierten. El cache maestro mantiene
+    el último resultado conocido + un contador ``veces_escaneada``;
+    el log append-only preserva la evidencia histórica completa.
+    """
     pool = await obtener_pool()
     async with pool.acquire() as conexion:
-        es_malicioso = datos.nivel_alerta == "MALICIOSO"
-        fila = await conexion.fetchrow(
-            """
-            INSERT INTO historial_escaneos
-                (id_usuario, url_original, url_limpia, probabilidad,
-                 nivel_alerta, delegado, es_malicioso)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-            RETURNING id, url_original, url_limpia, probabilidad,
-                      nivel_alerta, delegado, es_malicioso, creado_en,
-                      updated_at, deleted_at
-            """,
-            id_usuario,
-            datos.url_original,
-            datos.url_limpia,
-            datos.probabilidad,
-            datos.nivel_alerta,
-            datos.delegado,
-            es_malicioso,
-        )
+        async with conexion.transaction():
+            es_malicioso = datos.nivel_alerta == "MALICIOSO"
+            fila = await conexion.fetchrow(
+                """
+                INSERT INTO historial_escaneos
+                    (id_usuario, url_original, url_limpia, probabilidad,
+                     nivel_alerta, delegado, es_malicioso)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                RETURNING id, url_original, url_limpia, probabilidad,
+                          nivel_alerta, delegado, es_malicioso, creado_en,
+                          updated_at, deleted_at
+                """,
+                id_usuario,
+                datos.url_original,
+                datos.url_limpia,
+                datos.probabilidad,
+                datos.nivel_alerta,
+                datos.delegado,
+                es_malicioso,
+            )
+            # UPSERT del cache maestro urls_catalogo (atomicidad cache+log).
+            await upsert_url_catalogo(
+                conexion,
+                url_limpia=datos.url_limpia,
+                nivel_alerta=datos.nivel_alerta,
+                probabilidad=datos.probabilidad,
+            )
     return fila_a_escaneo(fila)
 
 
@@ -156,6 +178,41 @@ async def contar_escaneos(
         total = await conexion.fetchval(query, *params)
 
     return {"total": total or 0}
+
+
+@router.get("/existe-url", response_model=UrlCatalogoRespuesta)
+async def existe_url(
+    id_usuario: Annotated[str, Depends(verificar_token)],
+    url_limpia: Annotated[str, Query(
+        description="URL limpia (sin protocolo, sin www., sin / final) "
+                    "cuya existencia en el cache maestro se quiere verificar."
+    )],
+):
+    """Verifica si una URL ya fue escaneada antes (cache maestro urls_catalogo).
+
+    Patrón cache+log (deduplicación): consulta SOLO el cache maestro
+    ``urls_catalogo`` (O(log n) por PK ``url_hash``), sin tocar el log
+    append-only ``historial_escaneos``. El cliente Android consulta el
+    cache local Room ``urls_catalogo`` primero (offline-first); si hay red
+    y quiere dedup cross-device, llama este endpoint.
+
+    El endpoint computa ``url_hash = SHA-256(url_limpia)`` del mismo modo
+    que el cliente Android (``HashingUrls.sha256Hex``) y busca por esa PK.
+
+    Args:
+        url_limpia: URL limpia (query param). El caller es responsable
+            de normalizarla antes de llamar — aquí no se re-normaliza.
+
+    Returns:
+        [UrlCatalogoRespuesta] con ``existe=True`` + datos del último
+        escaneo (``ultimo_nivel_alerta``, ``ultima_probabilidad``,
+        ``ultimo_escaneo_millis``, ``veces_escaneada``) si la URL ya fue
+        escaneada, o ``existe=False`` + campos nulos/``0`` si no.
+    """
+    pool = await obtener_pool()
+    async with pool.acquire() as conexion:
+        fila = await buscar_url_catalogo(conexion, url_limpia)
+    return fila_a_url_catalogo(fila)
 
 
 @router.get(

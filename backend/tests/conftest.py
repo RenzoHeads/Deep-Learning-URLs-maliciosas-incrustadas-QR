@@ -210,12 +210,32 @@ class FakeConnection:
         if sql_u.startswith("UPDATE"):
             return await self._update(sql, list(params))
         if sql_u.startswith("INSERT"):
+            # INSERT ... ON CONFLICT es UPSERT (patron cache+log
+            # para urls_catalogo).
+            if "ON CONFLICT" in sql_u:
+                return await self._upsert(sql, list(params))
             return "INSERT 0 0"
         return "OK 0"
+
+    @asynccontextmanager
+    async def transaction(self) -> AsyncIterator[None]:
+        """No-op async context manager — simula
+        ``asyncpg.Connection.transaction()``.
+
+        El backend ahora envuelve ``crear_escaneo`` en
+        ``async with conexion.transaction():`` para atomicidad cache+log
+        (INSERT historial_escaneos + UPSERT urls_catalogo). El fake no
+        hace commit/rollback real — el almacen en memoria refleja el
+        estado final inmediatamente, lo cual es correcto para tests que
+        no prueban rollback.
+        """
+        yield
 
     # -- operacion interna -----------------------------------------------
     def _table(self, sql: str) -> str:
         sql_u = sql.upper()
+        if "URLS_CATALOGO" in sql_u:
+            return "urls_catalogo"
         if "HISTORIAL_ESCANEOS" in sql_u:
             return "historial_escaneos"
         if "URLS_BLOQUEADAS" in sql_u:
@@ -346,6 +366,55 @@ class FakeConnection:
 
         self._store.setdefault(table, []).append(new_row)
         return [FakeRecord(new_row)]
+
+    async def _upsert(self, sql: str, params: list) -> str:
+        """INSERT ... ON CONFLICT DO UPDATE — UPSERT (patron cache+log).
+
+        Usado por ``upsert_url_catalogo`` en ``base_datos.py`` para
+        mantener el cache maestro ``urls_catalogo`` atomicamente con el
+        log append-only ``historial_escaneos``. Reconoce la sentencia
+        por ``ON CONFLICT`` y la tabla por ``URLS_CATALOGO``.
+
+        Param order del UPSERT real (``base_datos.upsert_url_catalogo``):
+            $1 url_hash, $2 url_limpia, $3 ultimo_nivel_alerta,
+            $4 ultima_probabilidad, $5 ultimo_escaneo_millis
+
+        Comportamiento:
+          - Si no existe row con ``url_hash == $1``: inserta nuevo row con
+            ``veces_escaneada = 1`` y timestamps ``now()``.
+          - Si ya existe: actualiza ``ultimo_nivel_alerta``,
+            ``ultima_probabilidad``, ``ultimo_escaneo_millis``,
+            incrementa ``veces_escaneada`` en 1, y actualiza ``updated_at``.
+        """
+        table = self._table(sql)
+        if table != "urls_catalogo":
+            # Solo implementamos UPSERT para urls_catalogo por ahora.
+            return "INSERT 0 0"
+
+        url_hash = params[0]
+        rows = self._store.setdefault(table, [])
+        now = datetime.now(timezone.utc)
+        for r in rows:
+            if r.get("url_hash") == url_hash:
+                # Update path (ON CONFLICT DO UPDATE).
+                r["ultimo_nivel_alerta"] = params[2]
+                r["ultima_probabilidad"] = params[3]
+                r["ultimo_escaneo_millis"] = params[4]
+                r["veces_escaneada"] = r.get("veces_escaneada", 1) + 1
+                r["updated_at"] = now
+                return "UPDATE 1"
+        # Insert path (no conflict).
+        rows.append({
+            "url_hash": url_hash,
+            "url_limpia": params[1],
+            "ultimo_nivel_alerta": params[2],
+            "ultima_probabilidad": params[3],
+            "ultimo_escaneo_millis": params[4],
+            "veces_escaneada": 1,
+            "created_at": now,
+            "updated_at": now,
+        })
+        return "INSERT 0 1"
 
     async def _delete(self, sql: str, params: list) -> str:
         table = self._table(sql)

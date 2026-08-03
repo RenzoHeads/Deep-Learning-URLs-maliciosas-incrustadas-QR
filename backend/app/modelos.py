@@ -84,6 +84,36 @@ class EscaneoRespuesta(BaseModel):
 
 
 # ============================================================================
+# Deduplicación (cache + log) — Cache maestro urls_catalogo
+# ============================================================================
+# Patrón cache+log:
+#  - ``historial_escaneos`` es el log append-only (evidencia histórica completa,
+#    una fila por escaneo).
+#  - ``urls_catalogo`` es el cache maestro denormalizado (una fila por URL
+#    limpia, con el último resultado + contador veces_escaneada) — clave de
+#    dedup O(log n) vía PK ``url_hash = SHA-256(url_limpia)``.
+#
+# El endpoint ``GET /escaneos/existe-url`` consulta el cache maestro (sin
+# tocar el log) para responder rápido si una URL ya fue escaneada. El
+# cliente Android consulta el cache local Room ``urls_catalogo`` primero
+# (offline-first); si hay red, puede también consultar el backend para
+# dedup cross-device.
+class UrlCatalogoRespuesta(BaseModel):
+    """Respuesta del endpoint ``GET /escaneos/existe-url``.
+
+    Representa una entrada del cache maestro ``urls_catalogo``. Si la URL
+    no fue escaneada antes, el endpoint devuelve ``existe=False`` y todos
+    los demás campos son ``None``/``0``.
+    """
+    existe: bool
+    url_limpia: str | None = None
+    ultimo_nivel_alerta: str | None = None
+    ultima_probabilidad: float | None = None
+    ultimo_escaneo_millis: int | None = None
+    veces_escaneada: int = 0
+
+
+# ============================================================================
 # URLs Bloqueadas
 # ============================================================================
 class BloquearUrlEntrada(BaseModel):
@@ -172,4 +202,24 @@ def fila_a_denuncia(fila: asyncpg.Record) -> DenunciaRespuesta:
         creado_en=fila["creado_en"],
         updated_at=fila.get("updated_at"),
         deleted_at=fila.get("deleted_at"),
+    )
+
+
+def fila_a_url_catalogo(fila: asyncpg.Record | None) -> UrlCatalogoRespuesta:
+    """Convierte una fila de ``urls_catalogo`` en [UrlCatalogoRespuesta].
+
+    Si ``fila`` es ``None`` (la URL no existe en el cache maestro), devuelve
+    una respuesta con ``existe=False`` y todos los campos nulos/``0`` —
+    contrato esperado por el endpoint ``GET /escaneos/existe-url`` y por
+    el cliente Android para saber que debe escanear la URL.
+    """
+    if fila is None:
+        return UrlCatalogoRespuesta(existe=False)
+    return UrlCatalogoRespuesta(
+        existe=True,
+        url_limpia=fila["url_limpia"],
+        ultimo_nivel_alerta=fila["ultimo_nivel_alerta"],
+        ultima_probabilidad=fila["ultima_probabilidad"],
+        ultimo_escaneo_millis=fila["ultimo_escaneo_millis"],
+        veces_escaneada=fila["veces_escaneada"],
     )
