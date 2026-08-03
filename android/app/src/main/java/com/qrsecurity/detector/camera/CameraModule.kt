@@ -104,8 +104,13 @@ class ModuloCamara(
      */
     private val ultimoTimestampAceptado: AtomicLong = AtomicLong(0L)
 
-    /** Ventana de debounce en ms. 500ms → como mucho 2 inferencias por segundo. */
-    private val debounceMs: Long = 500L
+    /** Ventana de debounce en ms. 1200ms → el usuario ve el QR encuadrado
+     *  antes de que dispare el analisis (UX: estabilizacion visual). Antes
+     *  era 500ms — demasiado rapido, el usuario no alcanzaba a ver que el
+     *  QR estaba bien cuadrado y el modal aparecia de golpe. 1200ms da
+     *  tiempo suficiente para que el usuario confirme visualmente el
+     *  encuadre antes de que comience el analisis. */
+    private val debounceMs: Long = 1200L
 
     /** Selector de camara trasera. */
     private val selectorCamara: CameraSelector =

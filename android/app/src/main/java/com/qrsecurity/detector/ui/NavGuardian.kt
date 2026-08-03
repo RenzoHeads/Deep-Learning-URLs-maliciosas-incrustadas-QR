@@ -89,7 +89,8 @@ private data class NavGuardianViewModels(
     val pipelineViewModel: PipelineViewModel,
     val datosViewModel: DatosTabsViewModel,
     val sessionViewModel: SessionViewModel,
-    val estadoPipeline: Pipeline.Estado
+    val estadoPipeline: Pipeline.Estado,
+    val analizando: Boolean
 )
 
 // Agrupacion de utilities de UI/navegacion para NavGuardianRutas.
@@ -146,6 +147,7 @@ fun NavGuardian() {
     // Pipeline @Singleton automaticamente.
     val pipelineViewModel: PipelineViewModel = hiltViewModel()
     val estadoPipeline by pipelineViewModel.estado.collectAsState()
+    val analizando by pipelineViewModel.analizando.collectAsState()
 
     // Performance: DatosTabsViewModel compartido entre Historial y
     // Bloqueadas. Vive a nivel de NavGuardian para que ambas pantallas
@@ -265,48 +267,53 @@ fun NavGuardian() {
             SnackbarHostCyber(hostState = snackbarHostState)
         }
     ) { padding ->
-        NavGuardianRutas(
-            viewModels = NavGuardianViewModels(
-                pipelineViewModel = pipelineViewModel,
-                datosViewModel = datosViewModel,
-                sessionViewModel = sessionViewModel,
-                estadoPipeline = estadoPipeline
-            ),
-            contexto = NavGuardianContexto(
-                navController = navController,
-                context = context,
-                scope = scope,
-                mostrarMensaje = ::mostrarMensaje
-            ),
-            destinoInicial = destinoInicial,
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-        )
-
-        // Dedup (cache + log): diálogo "URL ya escaneada" cuando el Pipeline
-        // emite [Pipeline.Estado.UrlDuplicada]. Se renderiza sobre la pantalla
-        // actual (típicamente Escanear, ya que el LaunchedEffect de navegación
-        // solo reacciona a [ResultadoListo] — UrlDuplicada no navega, el
-        // usuario se queda en Escanear viendo el diálogo).
-        //
-        // Confirmar → `pipelineViewModel.confirmarReescaneo()` re-analiza con
-        // `forzar=true` (INSERT nuevo escaneo + UPSERT cache con veces+1).
-        // Cancelar → `pipelineViewModel.cancelarReescaneo()` limpia el payload
-        // pendiente y reinicia el Pipeline a Escaneando.
-        //
-        // `confirmarReescaneo` es `suspend` — se lanza en `scope` (el
-        // rememberCoroutineScope de NavGuardian, línea 131).
-        (estadoPipeline as? Pipeline.Estado.UrlDuplicada)?.let { estadoDup ->
-            DialogoUrlDuplicada(
-                estado = estadoDup,
-                onConfirmarReescaneo = {
-                    scope.launch { pipelineViewModel.confirmarReescaneo() }
-                },
-                onCancelarReescaneo = {
-                    pipelineViewModel.cancelarReescaneo()
-                }
+        // Bug 1 UX fix: usar un Box para overlay del modal de dedup como
+        // card inferior, NO como AlertDialog centro-pantalla. Antes el
+        // AlertDialog tapaba el preview de la camara — el usuario no podia
+        // ver que QR habia escaneado. Ahora el modal es una card pegada al
+        // borde inferior; el preview de la camara (pausado/frozen) queda
+        // visible arriba para que el usuario identifique el QR.
+        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+            NavGuardianRutas(
+                viewModels = NavGuardianViewModels(
+                    pipelineViewModel = pipelineViewModel,
+                    datosViewModel = datosViewModel,
+                    sessionViewModel = sessionViewModel,
+                    estadoPipeline = estadoPipeline,
+                    analizando = analizando
+                ),
+                contexto = NavGuardianContexto(
+                    navController = navController,
+                    context = context,
+                    scope = scope,
+                    mostrarMensaje = ::mostrarMensaje
+                ),
+                destinoInicial = destinoInicial,
+                modifier = Modifier.fillMaxSize()
             )
+
+            // Dedup (cache + log): card inferior "URL ya escaneada" cuando el
+            // Pipeline emite [Pipeline.Estado.UrlDuplicada]. Se renderiza
+            // como overlay inferior — NO tapa el preview de la camara.
+            //
+            // Confirmar → `pipelineViewModel.confirmarReescaneo()` re-analiza
+            // con `forzar=true` (INSERT nuevo escaneo + UPSERT cache).
+            // Cancelar → `pipelineViewModel.cancelarReescaneo()` limpia el
+            // payload pendiente y reinicia el Pipeline a Escaneando.
+            //
+            // `confirmarReescaneo` es `suspend` — se lanza en `scope`.
+            (estadoPipeline as? Pipeline.Estado.UrlDuplicada)?.let { estadoDup ->
+                DialogoUrlDuplicada(
+                    estado = estadoDup,
+                    onConfirmarReescaneo = {
+                        scope.launch { pipelineViewModel.confirmarReescaneo() }
+                    },
+                    onCancelarReescaneo = {
+                        pipelineViewModel.cancelarReescaneo()
+                    },
+                    modifier = Modifier.align(Alignment.BottomCenter)
+                )
+            }
         }
     }
 }
@@ -335,6 +342,7 @@ private fun NavGuardianRutas(
     val datosViewModel = viewModels.datosViewModel
     val sessionViewModel = viewModels.sessionViewModel
     val estadoPipeline = viewModels.estadoPipeline
+    val analizando = viewModels.analizando
 
     NavHost(
         navController = navController,
@@ -403,19 +411,19 @@ private fun NavGuardianRutas(
         composable(Rutas.ESCANEAR) {
             PantallaEscanear(
                 onQrDetectado = { payload ->
-                    // Bug 1 fix: ignorar nuevas detecciones QR mientras el
-                    // dialogo de deduplicacion ("URL ya escaneada") esta
-                    // visible. Sin este gate, la camara sigue escaneando,
-                    // detecta otro QR (o el mismo), dispara un nuevo
-                    // `pipeline.analizar()` que cambia el estado del
-                    // pipeline y sobreescribe el dialogo — causando el
-                    // fallo visual de animacion de aparicion que el usuario
-                    // reporto ("se cae porque se sobreescribe con otro tab
-                    // preguntando"). Con el gate, el dialogo se queda
-                    // estable; cuando el usuario confirma o cancela, el
-                    // estado deja de ser UrlDuplicada y las nuevas
-                    // detecciones se procesan normalmente.
-                    if (estadoPipeline !is Pipeline.Estado.UrlDuplicada) {
+                    // Bug 1 fix: ignorar nuevas detecciones QR mientras:
+                    //  (a) un analisis esta en vuelo (analizando=true) —
+                    //      resuelve la race condition donde la camara dispara
+                    //      una segunda deteccion durante Escaneando, antes
+                    //      de que UrlDuplicada sea visible. Antes el gate
+                    //      solo bloqueaba cuando UrlDuplicada ya estaba
+                    //      visible, pero durante Escaneando pasaba y
+                    //      cancelAndJoin sobrescribia el estado.
+                    //  (b) el dialogo de deduplicacion esta visible
+                    //      (UrlDuplicada) — sin este gate, la camara sigue
+                    //      escaneando, detecta otro QR, dispara un nuevo
+                    //      analizar() que sobreescribe el dialogo.
+                    if (!analizando && estadoPipeline !is Pipeline.Estado.UrlDuplicada) {
                         scope.launch { pipelineViewModel.analizar(payload) }
                     }
                 },

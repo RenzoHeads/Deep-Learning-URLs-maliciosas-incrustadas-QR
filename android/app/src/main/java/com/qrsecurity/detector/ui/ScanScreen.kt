@@ -7,6 +7,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -40,6 +41,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import com.qrsecurity.detector.R
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -61,6 +63,7 @@ import com.qrsecurity.detector.ml.ControladorAlerta
 import com.qrsecurity.detector.pipeline.Pipeline
 import com.qrsecurity.detector.ui.theme.CyberAmbar
 import com.qrsecurity.detector.ui.theme.CyberCyan
+import com.qrsecurity.detector.ui.theme.CyberCyanClaro
 import com.qrsecurity.detector.ui.theme.CyberFondo
 import com.qrsecurity.detector.ui.theme.CyberGlass
 import com.qrsecurity.detector.ui.theme.CyberGlassBorde
@@ -513,29 +516,31 @@ private fun PantallaSolicitudPermisoCyberSentinel(
 // ──────────────────────────────────────────────────────────────────
 
 /**
- * Diálogo cyber-sentinel que aparece cuando [Pipeline.Estado.UrlDuplicada]
- * dispara la deduplicación: todas las URLs del QR escaneado ya estaban en el
+ * Card cyber-sentinel inferior que aparece cuando [Pipeline.Estado.UrlDuplicada]
+ * dispara la deduplicacion: todas las URLs del QR escaneado ya estaban en el
  * cache maestro `urls_catalogo` (escaneadas antes). Pide al usuario confirmar
  * si desea **reescanear** (forzar) o **cancelar**.
  *
+ * Bug 1 UX fix: redisenado de AlertDialog centro-pantalla a Card inferior
+ * alineada al borde bottom. Antes el AlertDialog tapaba el preview de la
+ * camara — el usuario no podia ver que QR habia escaneado. Ahora el modal
+ * es una card pegada al borde inferior; el preview de la camara (pausado/
+ * frozen por el flag pausaCamara de Bug 1) queda visible arriba para que
+ * el usuario identifique el QR visualmente.
+ *
  * Renderiza:
- *  - Título con icono + nivel de alerta del peor resultado (color acorde:
- *    MALICIOSO → [CyberRojo], SOSPECHOSO → [CyberAmbar], SEGURO →
+ *  - Header con icono + "URL ya escaneada" + badge de nivel de alerta
+ *    (MALICIOSO → [CyberRojo], SOSPECHOSO → [CyberAmbar], SEGURO →
  *    [CyberVerdeAlerta]).
- *  - Cuerpo con: cantidad de URL(s) ya escaneada(s), veces escaneada (max),
- *    última vez (relativa: "hace 5 min"), y la lista de URLs consultadas
- *    (truncadas si son muchas) para dar contexto al usuario.
- *  - Botón "Reescanear" → [onConfirmarReescaneo] (color peligro: CyberRojo
+ *  - URL escaneada (truncada con ellipse) — para que el usuario identifique
+ *    exactamente que QR escaneo.
+ *  - Cuerpo con: veces escaneada (max), ultima vez (relativa: "hace 5 min").
+ *  - Botones "Reescanear" → [onConfirmarReescaneo] (color peligro: CyberRojo
  *    si el veredicto previo fue MALICIOSO, CyberCyan en caso contrario —
  *    reescanear una URL ya conocida como maliciosa pide cuidado visual).
  *  - Botón "Cancelar" → [onCancelarReescaneo].
  *
- * Mantiene el patrón de diálogo existente (ver [DialogoConfirmacion] en
- * HistorialScreen.kt): `AlertDialog` con `containerColor = CyberGlass`,
- * `titleContentColor = CyberTextoPrincipal`, `textContentColor =
- * CyberTextoSecundario`, `TextButton` para acciones.
- *
- * Tags de test expuestos: `dialogo_url_duplicada`, `btn_reescanear`,
+ * Tags de test: `dialogo_url_duplicada`, `btn_reescanear`,
  * `btn_cancelar_reescaneo`, `texto_url_duplicada`, `texto_veces_escaneada`,
  * `texto_ultima_vez`.
  *
@@ -544,12 +549,15 @@ private fun PantallaSolicitudPermisoCyberSentinel(
  *  dispara `pipelineViewModel.confirmarReescaneo()` (análisis con `forzar=true`).
  * @param onCancelarReescaneo Llamado al pulsar "Cancelar" o al cerrar por fuera
  *  — el caller dispara `pipelineViewModel.cancelarReescaneo()`.
+ * @param modifier Modifier para posicionar la card (típicamente
+ *  `Modifier.align(Alignment.BottomCenter)` desde el Box del Scaffold).
  */
 @Composable
 fun DialogoUrlDuplicada(
     estado: Pipeline.Estado.UrlDuplicada,
     onConfirmarReescaneo: () -> Unit,
-    onCancelarReescaneo: () -> Unit
+    onCancelarReescaneo: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val nivel = estado.resultado.nivelAlerta
     val colorNivel = when (nivel) {
@@ -562,140 +570,143 @@ fun DialogoUrlDuplicada(
         ControladorAlerta.NivelAlerta.SOSPECHOSO -> "Sospechoso"
         ControladorAlerta.NivelAlerta.SEGURO -> "Seguro"
     }
-    val urls = estado.urlsLimpiaConsultadas
-    val esMulti = urls.size > 1
+    val urlPrincipal = estado.resultado.urlLimpia
     val colorBotonConfirmar = if (nivel == ControladorAlerta.NivelAlerta.MALICIOSO) {
         CyberRojo
     } else {
         CyberCyan
     }
 
-    AlertDialog(
-        onDismissRequest = onCancelarReescaneo,
-        modifier = Modifier.testTag("dialogo_url_duplicada"),
-        title = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Filled.Security,
-                    contentDescription = null,
-                    tint = colorNivel,
-                    modifier = Modifier.size(TamanosIcono.estandar)
-                )
-                Spacer(modifier = Modifier.size(Espaciado.sm))
-                Text(
-                    text = "URL ya escaneada",
-                    fontWeight = FontWeight.Bold,
-                    color = CyberTextoPrincipal
-                )
-            }
-        },
-        text = {
-            Column {
-                // Veredicto previo (nivel) como badge de color.
-                Text(
-                    text = "Veredicto anterior: $nombreNivel " +
-                        "(${(estado.resultado.probabilidad * 100).toInt()}%)",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = colorNivel,
-                    modifier = Modifier.testTag("texto_veredicto_previo")
-                )
-                Spacer(modifier = Modifier.height(Espaciado.sm))
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(Espaciado.lg)
+            .clip(RoundedCornerShape(RadioBorde.xxl))
+            .background(CyberGlass.copy(alpha = 0.95f))
+            .border(
+                width = 1.dp,
+                color = colorNivel.copy(alpha = 0.4f),
+                shape = RoundedCornerShape(RadioBorde.xxl)
+            )
+            .padding(Espaciado.xl)
+            .testTag("dialogo_url_duplicada")
+    ) {
+        // ── Header: icono + titulo + badge nivel ──
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                imageVector = Icons.Filled.Security,
+                contentDescription = null,
+                tint = colorNivel,
+                modifier = Modifier.size(TamanosIcono.estandar)
+            )
+            Spacer(modifier = Modifier.size(Espaciado.sm))
+            Text(
+                text = "URL ya escaneada",
+                fontWeight = FontWeight.Bold,
+                color = CyberTextoPrincipal,
+                style = MaterialTheme.typography.titleMedium
+            )
+            Spacer(modifier = Modifier.weight(1f))
+            // Badge de nivel
+            Text(
+                text = nombreNivel,
+                fontWeight = FontWeight.Bold,
+                color = CyberFondo,
+                style = MaterialTheme.typography.labelSmall,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(RadioBorde.sm))
+                    .background(colorNivel)
+                    .padding(horizontal = Espaciado.sm, vertical = Espaciado.xs)
+            )
+        }
 
-                // Cantidad de URLs duplicadas.
-                val cantidadUrls = if (esMulti) "${urls.size} URLs" else "1 URL"
-                Text(
-                    text = "$cantidadUrls ya escaneada(s) antes.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = CyberTextoPrincipal,
-                    modifier = Modifier.testTag("texto_url_duplicada")
-                )
+        Spacer(modifier = Modifier.height(Espaciado.md))
 
-                // Veces escaneada (máximo entre las URLs consultadas con cache local).
-                // vecesEscaneadaMaxima=0 → cross-device hit (encontrada en backend,
-                // no en cache local). El count exacto no se expone por privacy (security
-                // fix cross-user leak). Mostrar mensaje genérico sin count.
-                val vecesTexto = when {
-                    estado.vecesEscaneadaMaxima == 0 -> "Esta URL ya fue escaneada antes."
-                    estado.vecesEscaneadaMaxima == 1 -> "Escaneada 1 vez."
-                    else -> "Escaneada ${estado.vecesEscaneadaMaxima} veces."
-                }
-                Spacer(modifier = Modifier.height(Espaciado.xs))
-                Text(
-                    text = vecesTexto,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = CyberTextoSecundario,
-                    modifier = Modifier.testTag("texto_veces_escaneada")
-                )
+        // ── URL escaneada (identificador visual para el usuario) ──
+        Text(
+            text = "URL detectada:",
+            style = MaterialTheme.typography.labelSmall,
+            color = CyberTextoSecundario
+        )
+        Spacer(modifier = Modifier.height(Espaciado.xs))
+        Text(
+            text = urlPrincipal,
+            style = MaterialTheme.typography.bodyMedium,
+            color = CyberCyanClaro,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            fontWeight = FontWeight.Medium
+        )
 
-                // Última vez (relativa) — solo si hay timestamp.
-                if (estado.ultimoEscaneoMillis > 0L) {
-                    Spacer(modifier = Modifier.height(Espaciado.xs))
-                    Text(
-                        text = "Última vez: ${formatearTiempoRelativo(estado.ultimoEscaneoMillis)}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = CyberTextoSecundario,
-                        modifier = Modifier.testTag("texto_ultima_vez")
-                    )
-                }
+        Spacer(modifier = Modifier.height(Espaciado.md))
 
-                // Lista de URLs (truncada a 3 para no saturar el diálogo).
-                if (urls.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(Espaciado.sm))
-                    val aMostrar = urls.take(3)
-                    aMostrar.forEach { url ->
-                        Text(
-                            text = "• $url",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = CyberTextoSecundario,
-                            maxLines = 1
-                        )
-                    }
-                    if (urls.size > 3) {
-                        Text(
-                            text = "… y ${urls.size - 3} más",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = CyberTextoSecundario
-                        )
-                    }
-                }
+        // ── Info: veces escaneada + ultima vez ──
+        val vecesTexto = when {
+            estado.vecesEscaneadaMaxima == 0 -> "Esta URL ya fue escaneada antes."
+            estado.vecesEscaneadaMaxima == 1 -> "Escaneada 1 vez."
+            else -> "Escaneada ${estado.vecesEscaneadaMaxima} veces."
+        }
+        Text(
+            text = vecesTexto,
+            style = MaterialTheme.typography.bodySmall,
+            color = CyberTextoSecundario,
+            modifier = Modifier.testTag("texto_veces_escaneada")
+        )
 
-                Spacer(modifier = Modifier.height(Espaciado.sm))
-                Text(
-                    text = "¿Deseas volver a escanear y registrar un nuevo " +
-                        "reporte en el historial?",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = CyberTextoPrincipal
-                )
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = onConfirmarReescaneo,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = colorBotonConfirmar,
-                    contentColor = CyberFondo
-                ),
-                modifier = Modifier.testTag("btn_reescanear")
-            ) {
-                Text("Reescanear", fontWeight = FontWeight.Bold)
-            }
-        },
-        dismissButton = {
+        if (estado.ultimoEscaneoMillis > 0L) {
+            Spacer(modifier = Modifier.height(Espaciado.xs))
+            Text(
+                text = "Ultima vez: ${formatearTiempoRelativo(estado.ultimoEscaneoMillis)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = CyberTextoSecundario,
+                modifier = Modifier.testTag("texto_ultima_vez")
+            )
+        }
+
+        Spacer(modifier = Modifier.height(Espaciado.md))
+
+        Text(
+            text = "¿Deseas volver a escanear y registrar un nuevo " +
+                "reporte en el historial?",
+            style = MaterialTheme.typography.bodyMedium,
+            color = CyberTextoPrincipal
+        )
+
+        Spacer(modifier = Modifier.height(Espaciado.lg))
+
+        // ── Botones ──
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(Espaciado.md)
+        ) {
             TextButton(
                 onClick = onCancelarReescaneo,
-                modifier = Modifier.testTag("btn_cancelar_reescaneo")
+                modifier = Modifier
+                    .weight(1f)
+                    .height(TamanosToque.boton)
+                    .testTag("btn_cancelar_reescaneo")
             ) {
                 Text(
                     text = stringResource(R.string.action_cancel),
                     color = CyberTextoSecundario
                 )
             }
-        },
-        containerColor = CyberGlass,
-        titleContentColor = CyberTextoPrincipal,
-        textContentColor = CyberTextoSecundario
-    )
+            Button(
+                onClick = onConfirmarReescaneo,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = colorBotonConfirmar,
+                    contentColor = CyberFondo
+                ),
+                shape = RoundedCornerShape(RadioBorde.lg),
+                modifier = Modifier
+                    .weight(1f)
+                    .height(TamanosToque.boton)
+                    .testTag("btn_reescanear")
+            ) {
+                Text("Reescanear", fontWeight = FontWeight.Bold)
+            }
+        }
+    }
 }
 
 /**

@@ -49,6 +49,24 @@ class PipelineViewModel @Inject constructor(
     private val _resultadoCacheado = MutableStateFlow<Pipeline.ResultadoAnalisis.ResultadoUrl?>(null)
     val resultadoCacheado: StateFlow<Pipeline.ResultadoAnalisis.ResultadoUrl?> = _resultadoCacheado.asStateFlow()
 
+    // ── Flag analizando: true mientras un analisis esta en vuelo ──
+    //
+    // Resuelve la race condition entre detecciones rapidas de la camara y
+    // el dedup check. Antes, el estado `Escaneando` servia tanto para
+    // "esperando QR" como para "analizando" — no se podia distinguir si
+    // un analisis estaba en curso. La camara disparaba una segunda
+    // deteccion 500ms despues de la primera (antes del debounce increase),
+    // el gate en NavGuardian solo bloqueaba cuando `UrlDuplicada` ya era
+    // visible, pero durante `Escaneando` el gate pasaba y la segunda
+    // llamada a `analizar()` cancelaba la primera (cancelAndJoin) y
+    // sobrescribia `UrlDuplicada` con `Escaneando` → flash del modal.
+    //
+    // Ahora `analizando` es true desde que `analyzeWithJobControl` lanza
+    // el Job hasta que termina (exito, cancelacion o error). El gate en
+    // NavGuardian bloquea nuevas detecciones cuando `analizando` es true.
+    private val _analizando = MutableStateFlow(false)
+    val analizando: StateFlow<Boolean> = _analizando.asStateFlow()
+
     // ── Bug C-09 fix: concurrencia estructurada para el escaneo en vuelo ──
     //
     // Antes, `analizar(payloadCrudo)` solo delegaba en `pipeline.analizar(...)`
@@ -153,6 +171,11 @@ class PipelineViewModel @Inject constructor(
         // mientras el nuevo ya habia arrancado.
         scanJob?.cancelAndJoin()
 
+        // Flag analizando: activar ANTES de lanzar el Job para que el gate
+        // en NavGuardian vea `analizando=true` inmediatamente — sin ventana
+        // de race entre cancelAndJoin() y launch{}.
+        _analizando.value = true
+
         scanJob = viewModelScope.launch {
             // Antes de mutar nada (pipeline.analizar pone Estado.Escaneando
             // al inicio), nos aseguramos de que este Job sigue activo.
@@ -183,6 +206,7 @@ class PipelineViewModel @Inject constructor(
                 if (scanJob === this.coroutineContext[Job]) {
                     scanJob = null
                 }
+                _analizando.value = false
             }
         }
 
@@ -226,6 +250,7 @@ class PipelineViewModel @Inject constructor(
         payloadPendiente = null
         scanJob?.cancel()
         scanJob = null
+        _analizando.value = false
         pipeline.reiniciar()
     }
 
@@ -235,6 +260,7 @@ class PipelineViewModel @Inject constructor(
         // el pipeline ya volvio a `Estado.Escaneando`.
         scanJob?.cancel()
         scanJob = null
+        _analizando.value = false
         pipeline.reiniciar()
         // Bug D2 fix: limpiar el cache del ultimo resultado al reiniciar
         // — el usuario escanea otro QR, el resultado anterior ya no aplica.
