@@ -283,6 +283,31 @@ fun NavGuardian() {
                 .fillMaxSize()
                 .padding(padding)
         )
+
+        // Dedup (cache + log): diálogo "URL ya escaneada" cuando el Pipeline
+        // emite [Pipeline.Estado.UrlDuplicada]. Se renderiza sobre la pantalla
+        // actual (típicamente Escanear, ya que el LaunchedEffect de navegación
+        // solo reacciona a [ResultadoListo] — UrlDuplicada no navega, el
+        // usuario se queda en Escanear viendo el diálogo).
+        //
+        // Confirmar → `pipelineViewModel.confirmarReescaneo()` re-analiza con
+        // `forzar=true` (INSERT nuevo escaneo + UPSERT cache con veces+1).
+        // Cancelar → `pipelineViewModel.cancelarReescaneo()` limpia el payload
+        // pendiente y reinicia el Pipeline a Escaneando.
+        //
+        // `confirmarReescaneo` es `suspend` — se lanza en `scope` (el
+        // rememberCoroutineScope de NavGuardian, línea 131).
+        (estadoPipeline as? Pipeline.Estado.UrlDuplicada)?.let { estadoDup ->
+            DialogoUrlDuplicada(
+                estado = estadoDup,
+                onConfirmarReescaneo = {
+                    scope.launch { pipelineViewModel.confirmarReescaneo() }
+                },
+                onCancelarReescaneo = {
+                    pipelineViewModel.cancelarReescaneo()
+                }
+            )
+        }
     }
 }
 

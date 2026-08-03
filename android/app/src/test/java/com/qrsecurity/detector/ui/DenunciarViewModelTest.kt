@@ -80,7 +80,12 @@ class DenunciarViewModelTest {
         repoDenuncias = RepositorioDenuncias(db, backend, json, Dispatchers.Unconfined)
         repoCategorias = RepositorioCategorias(db, backend, Dispatchers.Unconfined)
         mediadorSync = FakeMediadorSincronizacion(context)
-        viewModel = DenunciarViewModel(repoDenuncias, repoCategorias, mediadorSync)
+        // DenunciarViewModel requiere un WorkManager (4º param del ctor) para
+        // exponer el StateFlow de estado del worker de sync. Tras
+        // initializeTestWorkManager arriba, WorkManager.getInstance(context)
+        // devuelve la instancia de prueba y estadoSync funciona sobre ella.
+        val workManager = androidx.work.WorkManager.getInstance(context)
+        viewModel = DenunciarViewModel(repoDenuncias, repoCategorias, mediadorSync, workManager)
 
         // Seed categorias_denuncia — la denuncias table tiene FK a
         // categorias_denuncia(id) (migration MIGRATION_1_2). Sin este seed,

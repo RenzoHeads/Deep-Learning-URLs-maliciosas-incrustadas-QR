@@ -76,6 +76,17 @@ class PipelineViewModel @Inject constructor(
     //      (exito o error), el Job activo lo deja en `ResultadoListo`/`Error`.
     private var scanJob: Job? = null
 
+    // ── Dedup (cache + log): payload pendiente para el reescaneo ──
+    //
+    // Cuando [analizar] lleva al Pipeline a emitir
+    // [Pipeline.Estado.UrlDuplicada] (todas las URLs del QR ya estaban en el
+    // cache maestro `urls_catalogo`), la UI muestra un diálogo "URL ya
+    // escaneada". El payload que produjo ese estado se cachea aquí para que
+    // [confirmarReescaneo] lo re-envíe con `forzar = true` sin re-escanear
+    // físicamente el QR (la cámara está pausada detrás del diálogo).
+    // [cancelarReescaneo] y [reiniciar] lo limpian.
+    private var payloadPendiente: String? = null
+
     /**
      * Delegado de analisis — llamar desde una corutina de UI:
      * ```kotlin
@@ -94,7 +105,47 @@ class PipelineViewModel @Inject constructor(
      * `ensureActive()` previos a cada mutacion de estado fuerzan el mismo
      * corte dentro del propio Job.
      */
-    suspend fun analizar(payloadCrudo: String) {
+    /**
+     * Delegado de análisis — llamar desde una corutina de UI:
+     * ```kotlin
+     * scope.launch { vm.analizar(payload) }
+     * ```
+     *
+     * Sobrecarga con [forzar] para el flujo de reescaneo de deduplicación (cache
+     * + log). Cuando el Pipeline emite [Pipeline.Estado.UrlDuplicada] (todas las
+     * URLs del QR ya estaban en el cache maestro `urls_catalogo`), la UI muestra
+     * un diálogo; si el usuario confirma, llama a [confirmarReescaneo] que
+     * re-invoca `analizar(payloadPendiente, forzar = true)`. `forzar = true`
+     * salta el dedup del Pipeline y re-escanea de todas formas (persistiendo un
+     * nuevo escaneo en el log append-only + UPSERT del cache con veces+1).
+     *
+     * [payloadCrudo] se cachea en [payloadPendiente] para que
+     * [confirmarReescaneo] tenga el payload exacto que produjo el
+     * `UrlDuplicada` (la cámara no re-escanea el QR físico durante el diálogo).
+     */
+    suspend fun analizar(payloadCrudo: String, forzar: Boolean = false) {
+        // Cache del payload para el flujo de reescaneo: si el Pipeline emite
+        // UrlDuplicada, confirmarReescaneo() usa este payload para re-analizar
+        // con forzar=true sin necesidad de re-escanear físicamente el QR.
+        payloadPendiente = payloadCrudo
+        analyzeWithJobControl(payloadCrudo, forzar)
+    }
+
+    /**
+     * Núcleo compartido de [analizar] y [confirmarReescaneo]: lanza el trabajo
+     * de [Pipeline.analizar] en `viewModelScope` con la disciplina de
+     * concurrencia estructurada (C-09): cancela el Job en vuelo
+     * (`cancelAndJoin`), lanza el nuevo con `ensureActive()` previo a cada
+     * mutación de estado, cachea el resultado en [resultadoCacheado] (Bug D2:
+     * sobrevive a process death) y limpia `scanJob` al terminar si sigue
+     * siendo el vigente.
+     *
+     * `suspend` para conservar la semántica: el caller (UI desde
+     * `rememberCoroutineScope`) espera a que el escaneo termine — si el Job
+     * se cancela (rotación/nuevo escaneo), `join()` revienta con
+     * `CancellationException` y propaga el corte limpio.
+     */
+    private suspend fun analyzeWithJobControl(payloadCrudo: String, forzar: Boolean) {
         // Cancela el escaneo en vuelo antes de lanzar uno nuevo.
         // M5 fix: cancelAndJoin (no solo cancel) — esperar a que el Job
         // anterior termine/cancele antes de asignar el nuevo evita la carrera
@@ -112,7 +163,7 @@ class PipelineViewModel @Inject constructor(
             // Job: si nos cancelan, ensureActive() corta en el siguiente
             // punto de suspension y no llegamos a tocar nada mas.
             try {
-                pipeline.analizar(payloadCrudo)
+                pipeline.analizar(payloadCrudo, forzar)
                 // Bug D2 fix: cachear el ultimo ResultadoUrl en
                 // SavedStateHandle cuando el pipeline produce un resultado.
                 // Si el proceso muere y se restaura, las pantallas de
@@ -139,6 +190,43 @@ class PipelineViewModel @Inject constructor(
         // (o lo cancelen via rotacion/nuevo escaneo). Si el Job se cancela,
         // join() lanza CancellationException y propaga el corte limpio.
         scanJob?.join()
+    }
+
+    /**
+     * Reescaneo forzado tras un [Pipeline.Estado.UrlDuplicada] (flujo dedup
+     * cache + log). Llamado por la UI cuando el usuario confirma el diálogo
+     * "URL ya escaneada".
+     *
+     * Re-envía el [payloadPendiente] (el payload que produjo el `UrlDuplicada`)
+     * a [Pipeline.analizar] con `forzar = true`, que salta el dedup del cache
+     * maestro `urls_catalogo` y re-escanea: inserta un nuevo escaneo en el log
+     * append-only `escaneos` + hace UPSERT del cache con `vecesEscaneada` +1.
+     *
+     * Sigue el mismo patrón de concurrencia estructurada (C-09) que
+     * [analizar]: cancela el escaneo en vuelo, lanza el nuevo en
+     * `viewModelScope` con `ensureActive()`, y cachea el resultado en
+     * [resultadoCacheado] (Bug D2: sobrevive a process death). Si no hay
+     * `payloadPendiente` (se llamó sin un `UrlDuplicada` previo), no-op.
+     *
+     * `suspend` para conservar la semántica: el caller (UI desde
+     * `rememberCoroutineScope`) espera a que el reescaneo termine antes de
+     * que el diálogo se cierre visualmente.
+     */
+    suspend fun confirmarReescaneo() {
+        val payload = payloadPendiente ?: return
+        analyzeWithJobControl(payload, forzar = true)
+    }
+
+    /**
+     * Cancela el reescaneo: limpia el [payloadPendiente] y reinicia el
+     * Pipeline a [Pipeline.Estado.Escaneando]. Llamado por la UI cuando el
+     * usuario descarta el diálogo "URL ya escaneada".
+     */
+    fun cancelarReescaneo() {
+        payloadPendiente = null
+        scanJob?.cancel()
+        scanJob = null
+        pipeline.reiniciar()
     }
 
     fun reiniciar() {

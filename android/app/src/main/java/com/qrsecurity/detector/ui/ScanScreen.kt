@@ -56,12 +56,17 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.qrsecurity.detector.camera.ModuloCamara
 import com.qrsecurity.detector.ui.TipoMensaje
+import com.qrsecurity.detector.ml.ControladorAlerta
+import com.qrsecurity.detector.pipeline.Pipeline
+import com.qrsecurity.detector.ui.theme.CyberAmbar
 import com.qrsecurity.detector.ui.theme.CyberCyan
 import com.qrsecurity.detector.ui.theme.CyberFondo
 import com.qrsecurity.detector.ui.theme.CyberGlass
 import com.qrsecurity.detector.ui.theme.CyberGlassBorde
+import com.qrsecurity.detector.ui.theme.CyberRojo
 import com.qrsecurity.detector.ui.theme.CyberTextoPrincipal
 import com.qrsecurity.detector.ui.theme.CyberTextoSecundario
+import com.qrsecurity.detector.ui.theme.CyberVerdeAlerta
 import com.qrsecurity.detector.ui.theme.Espaciado
 import com.qrsecurity.detector.ui.theme.RadioBorde
 import com.qrsecurity.detector.ui.theme.TamanosIcono
@@ -433,4 +438,211 @@ private fun PantallaSolicitudPermisoCyberSentinel(
             Text(stringResource(R.string.action_grant_permission), fontWeight = FontWeight.Bold)
         }
     }
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Deduplicación (cache + log) — diálogo "URL ya escaneada".
+// ──────────────────────────────────────────────────────────────────
+
+/**
+ * Diálogo cyber-sentinel que aparece cuando [Pipeline.Estado.UrlDuplicada]
+ * dispara la deduplicación: todas las URLs del QR escaneado ya estaban en el
+ * cache maestro `urls_catalogo` (escaneadas antes). Pide al usuario confirmar
+ * si desea **reescanear** (forzar) o **cancelar**.
+ *
+ * Renderiza:
+ *  - Título con icono + nivel de alerta del peor resultado (color acorde:
+ *    MALICIOSO → [CyberRojo], SOSPECHOSO → [CyberAmbar], SEGURO →
+ *    [CyberVerdeAlerta]).
+ *  - Cuerpo con: cantidad de URL(s) ya escaneada(s), veces escaneada (max),
+ *    última vez (relativa: "hace 5 min"), y la lista de URLs consultadas
+ *    (truncadas si son muchas) para dar contexto al usuario.
+ *  - Botón "Reescanear" → [onConfirmarReescaneo] (color peligro: CyberRojo
+ *    si el veredicto previo fue MALICIOSO, CyberCyan en caso contrario —
+ *    reescanear una URL ya conocida como maliciosa pide cuidado visual).
+ *  - Botón "Cancelar" → [onCancelarReescaneo].
+ *
+ * Mantiene el patrón de diálogo existente (ver [DialogoConfirmacion] en
+ * HistorialScreen.kt): `AlertDialog` con `containerColor = CyberGlass`,
+ * `titleContentColor = CyberTextoPrincipal`, `textContentColor =
+ * CyberTextoSecundario`, `TextButton` para acciones.
+ *
+ * Tags de test expuestos: `dialogo_url_duplicada`, `btn_reescanear`,
+ * `btn_cancelar_reescaneo`, `texto_url_duplicada`, `texto_veces_escaneada`,
+ * `texto_ultima_vez`.
+ *
+ * @param estado El [Pipeline.Estado.UrlDuplicada] con los datos del cache hit.
+ * @param onConfirmarReescaneo Llamado al pulsar "Reescanear" — el caller
+ *  dispara `pipelineViewModel.confirmarReescaneo()` (análisis con `forzar=true`).
+ * @param onCancelarReescaneo Llamado al pulsar "Cancelar" o al cerrar por fuera
+ *  — el caller dispara `pipelineViewModel.cancelarReescaneo()`.
+ */
+@Composable
+fun DialogoUrlDuplicada(
+    estado: Pipeline.Estado.UrlDuplicada,
+    onConfirmarReescaneo: () -> Unit,
+    onCancelarReescaneo: () -> Unit
+) {
+    val nivel = estado.resultado.nivelAlerta
+    val colorNivel = when (nivel) {
+        ControladorAlerta.NivelAlerta.MALICIOSO -> CyberRojo
+        ControladorAlerta.NivelAlerta.SOSPECHOSO -> CyberAmbar
+        ControladorAlerta.NivelAlerta.SEGURO -> CyberVerdeAlerta
+    }
+    val nombreNivel = when (nivel) {
+        ControladorAlerta.NivelAlerta.MALICIOSO -> "Malicioso"
+        ControladorAlerta.NivelAlerta.SOSPECHOSO -> "Sospechoso"
+        ControladorAlerta.NivelAlerta.SEGURO -> "Seguro"
+    }
+    val urls = estado.urlsLimpiaConsultadas
+    val esMulti = urls.size > 1
+    val colorBotonConfirmar = if (nivel == ControladorAlerta.NivelAlerta.MALICIOSO) {
+        CyberRojo
+    } else {
+        CyberCyan
+    }
+
+    AlertDialog(
+        onDismissRequest = onCancelarReescaneo,
+        modifier = Modifier.testTag("dialogo_url_duplicada"),
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Filled.Security,
+                    contentDescription = null,
+                    tint = colorNivel,
+                    modifier = Modifier.size(TamanosIcono.estandar)
+                )
+                Spacer(modifier = Modifier.size(Espaciado.sm))
+                Text(
+                    text = "URL ya escaneada",
+                    fontWeight = FontWeight.Bold,
+                    color = CyberTextoPrincipal
+                )
+            }
+        },
+        text = {
+            Column {
+                // Veredicto previo (nivel) como badge de color.
+                Text(
+                    text = "Veredicto anterior: $nombreNivel " +
+                        "(${(estado.resultado.probabilidad * 100).toInt()}%)",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = colorNivel,
+                    modifier = Modifier.testTag("texto_veredicto_previo")
+                )
+                Spacer(modifier = Modifier.height(Espaciado.sm))
+
+                // Cantidad de URLs duplicadas.
+                val cantidadUrls = if (esMulti) "${urls.size} URLs" else "1 URL"
+                Text(
+                    text = "$cantidadUrls ya escaneada(s) antes.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = CyberTextoPrincipal,
+                    modifier = Modifier.testTag("texto_url_duplicada")
+                )
+
+                // Veces escaneada (máximo entre las URLs consultadas).
+                val vecesTexto = if (estado.vecesEscaneadaMaxima <= 1) {
+                    "Escaneada 1 vez."
+                } else {
+                    "Escaneada ${estado.vecesEscaneadaMaxima} veces."
+                }
+                Spacer(modifier = Modifier.height(Espaciado.xs))
+                Text(
+                    text = vecesTexto,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = CyberTextoSecundario,
+                    modifier = Modifier.testTag("texto_veces_escaneada")
+                )
+
+                // Última vez (relativa) — solo si hay timestamp.
+                if (estado.ultimoEscaneoMillis > 0L) {
+                    Spacer(modifier = Modifier.height(Espaciado.xs))
+                    Text(
+                        text = "Última vez: ${formatearTiempoRelativo(estado.ultimoEscaneoMillis)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = CyberTextoSecundario,
+                        modifier = Modifier.testTag("texto_ultima_vez")
+                    )
+                }
+
+                // Lista de URLs (truncada a 3 para no saturar el diálogo).
+                if (urls.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(Espaciado.sm))
+                    val aMostrar = urls.take(3)
+                    aMostrar.forEach { url ->
+                        Text(
+                            text = "• $url",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = CyberTextoSecundario,
+                            maxLines = 1
+                        )
+                    }
+                    if (urls.size > 3) {
+                        Text(
+                            text = "… y ${urls.size - 3} más",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = CyberTextoSecundario
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(Espaciado.sm))
+                Text(
+                    text = "¿Deseas volver a escanear y registrar un nuevo " +
+                        "reporte en el historial?",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = CyberTextoPrincipal
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onConfirmarReescaneo,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = colorBotonConfirmar,
+                    contentColor = CyberFondo
+                ),
+                modifier = Modifier.testTag("btn_reescanear")
+            ) {
+                Text("Reescanear", fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onCancelarReescaneo,
+                modifier = Modifier.testTag("btn_cancelar_reescaneo")
+            ) {
+                Text(
+                    text = stringResource(R.string.action_cancel),
+                    color = CyberTextoSecundario
+                )
+            }
+        },
+        containerColor = CyberGlass,
+        titleContentColor = CyberTextoPrincipal,
+        textContentColor = CyberTextoSecundario
+    )
+}
+
+/**
+ * Formatea `millis` (epoch) como tiempo relativo en español: "hace 5 min",
+ * "hace 2 h", "hace 3 días", o "justo ahora" si < 1 min.
+ *
+ * función pura para testeabilidad (sin depender de Android `DateUtils`).
+ */
+internal fun formatearTiempoRelativo(millis: Long): String {
+    val ahora = System.currentTimeMillis()
+    val diff = ahora - millis
+    if (diff < 60_000L) return "justo ahora"
+    val minutos = diff / 60_000L
+    if (minutos < 60L) return "hace $minutos min"
+    val horas = minutos / 60L
+    if (horas < 24L) return "hace $horas h"
+    val dias = horas / 24L
+    if (dias < 30L) return "hace $dias días"
+    val meses = dias / 30L
+    return if (meses < 12L) "hace $meses meses" else "hace más de 1 año"
 }

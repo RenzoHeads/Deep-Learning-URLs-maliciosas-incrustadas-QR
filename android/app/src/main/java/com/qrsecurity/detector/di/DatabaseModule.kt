@@ -7,6 +7,7 @@ import com.qrsecurity.detector.datos.local.dao.EscaneoDao
 import com.qrsecurity.detector.datos.local.dao.PendingOpDao
 import com.qrsecurity.detector.datos.local.dao.SyncStateDao
 import com.qrsecurity.detector.datos.local.dao.UrlBloqueadaDao
+import com.qrsecurity.detector.datos.local.dao.UrlCatalogoDao
 import com.qrsecurity.detector.BuildConfig
 import android.content.Context
 import androidx.room.Room
@@ -47,7 +48,8 @@ object DatabaseModule {
         )
             .addMigrations(
                 BaseDatosSeguridad.MIGRATION_1_2,
-                BaseDatosSeguridad.MIGRATION_2_3
+                BaseDatosSeguridad.MIGRATION_2_3,
+                BaseDatosSeguridad.MIGRATION_3_4
             )
             .also { builder ->
                 if (BuildConfig.DEBUG) {
@@ -74,4 +76,7 @@ object DatabaseModule {
 
     @Provides
     fun provideSyncStateDao(db: BaseDatosSeguridad): SyncStateDao = db.syncStateDao()
+
+    @Provides
+    fun provideUrlCatalogoDao(db: BaseDatosSeguridad): UrlCatalogoDao = db.urlCatalogoDao()
 }

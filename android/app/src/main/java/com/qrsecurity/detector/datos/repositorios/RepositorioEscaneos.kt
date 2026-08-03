@@ -7,6 +7,8 @@ import com.qrsecurity.detector.datos.local.BaseDatosSeguridad
 import com.qrsecurity.detector.datos.local.entidades.EscaneoEntity
 import com.qrsecurity.detector.datos.local.entidades.PendingOpEntity
 import com.qrsecurity.detector.datos.local.entidades.SyncStateEntity
+import com.qrsecurity.detector.datos.local.entidades.UrlCatalogoEntity
+import com.qrsecurity.detector.datos.local.sha256Hex
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -81,12 +83,39 @@ class RepositorioEscaneos(
     fun observarUltimos7Dias(): Flow<Int> =
         db.escaneoDao().observarUltimos7Dias()
 
+    // ── Dedup: cache maestro urls_catalogo (lookup O(log n) por urlHash) ──
+
+    /**
+     * Busca una URL en el cache maestro `urls_catalogo` para deduplicación.
+     *
+     * Devuelve la entrada con el último estado denormalizado de la URL, o null
+     * si la URL nunca fue escaneada (no está en el catalog). Usado por
+     * [com.qrsecurity.detector.pipeline.Pipeline.analizar] como early-exit:
+     * si existe, el pipeline emite [com.qrsecurity.detector.pipeline.Pipeline.Estado.UrlDuplicada]
+     * y pregunta al usuario si desea reescanear, en vez de re-ejecutar inferencia.
+     *
+     * La clave es `SHA-256(urlLimpia)` hex ([sha256Hex]) — la normalización
+     * estructural de la URL (esquema+host lowercase, sin `/` final redundante)
+     * se aplica en el pipeline antes de llegar aquí, asi que dos `urlLimpia`
+     * distintas producen dos hashes distintos (no hay false-duplicate).
+     */
+    suspend fun buscarUrlCatalogo(urlLimpia: String): UrlCatalogoEntity? =
+        withContext(ioDispatcher) {
+            db.urlCatalogoDao().buscarPorHash(sha256Hex(urlLimpia))
+        }
+
     // ── Writes (offline-first: local + outbox) ──
 
     /**
      * Registra un escaneo localmente. NO llama al backend.
      * Genera un UUID client, inserta con `dirty=true`, y encola un op CREATE
      * en `pending_ops` para que el SyncWorker lo envie cuando haya red.
+     *
+     * Además, en la MISMA transaccion, hace UPSERT del cache maestro
+     * `urls_catalogo` con el último estado denormalizado del escaneo e
+     * incrementa `vecesEscaneada` (ver dedup cache+log arriba). El log
+     * `escaneos` queda append-only: reescaneos INSERTAN un nuevo row, no
+     * sobrescriben — el historial completo se preserva.
      *
      * @return el id local asignado (UUID).
      */
@@ -125,9 +154,32 @@ class RepositorioEscaneos(
 
         // M-28 — transaccion atomica suspendida (sin runBlocking): el outbox
         // y el row local se commit juntos o no se commit ninguno.
+        //
+        // Dedup (cache + log): dentro de ESTA misma transaccion, tras insertar
+        // el escaneo en el log append-only `escaneos`, hacemos UPSERT del cache
+        // maestro `urls_catalogo`. Atomicidad: cache y log siempre consistentes
+        // — o ambos cambios commit, o ninguno. El UPSERT refleja el ultimo
+        // estado denormalizado del escaneo y incrementa `vecesEscaneada`. Una
+        // nueva URL no escaneada antes → INSERT con veces=1; un reescaneo →
+        // REPLACE con ultimo estado + veces+1 (el log `escaneos` conserva
+        // todos los escaneos previos — append-only, preserva evidencia
+        // historica para DenunciaScreen).
         db.withTransaction {
             db.escaneoDao().insertar(entidad)
             db.pendingOpDao().insertar(op)
+            // ── UPSERT cache maestro urls_catalogo (misma tx) ──
+            val urlHash = sha256Hex(entidad.urlLimpia)
+            val existente = db.urlCatalogoDao().buscarPorHash(urlHash)
+            db.urlCatalogoDao().upsert(
+                UrlCatalogoEntity(
+                    urlHash = urlHash,
+                    urlLimpia = entidad.urlLimpia,
+                    ultimoNivelAlerta = entidad.nivelAlerta,
+                    ultimaProbabilidad = entidad.probabilidad,
+                    ultimoEscaneoMillis = entidad.creadoEnMillis,
+                    vecesEscaneada = (existente?.vecesEscaneada ?: 0) + 1
+                )
+            )
             // A-02/M-22 — actualiza atomicamente el timestamp de sync_state.
             // Obtener primero el estado actual puede devolver null (primera
             // vez que se toca la tabla); sembramos la fila y luego actualizamos.

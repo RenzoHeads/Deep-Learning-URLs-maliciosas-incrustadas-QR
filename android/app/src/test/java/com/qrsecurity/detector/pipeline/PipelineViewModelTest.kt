@@ -78,7 +78,10 @@ class PipelineViewModelTest {
         val repoEscaneos = com.qrsecurity.detector.datos.repositorios.RepositorioEscaneos(db, backend, json, testDispatcher)
         val mediadorSync = com.qrsecurity.detector.datos.sync.MediadorSincronizacion(app)
         val pipeline = com.qrsecurity.detector.pipeline.Pipeline(app, db, backend, json, repoEscaneos, mediadorSync)
-        viewModel = PipelineViewModel(pipeline)
+        // PipelineViewModel requiere SavedStateHandle (Hilt lo inyecta en prod;
+        // en test pasamos uno vacío — no usamos resultadoCacheado aquí).
+        val savedState = androidx.lifecycle.SavedStateHandle()
+        viewModel = PipelineViewModel(pipeline, savedState)
     }
 
     @After
