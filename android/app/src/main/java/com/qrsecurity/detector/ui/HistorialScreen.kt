@@ -85,11 +85,17 @@ private object ConstantesHistorial {
 
 /**
  * Estadisticas del historial provistas por el backend (`GET /estadisticas`).
+ *
+ * Bug 3 fix: los campos son `Int?` (nullable). `null` significa "cargando"
+ * — Room no ha emitido el conteo todavia. La UI distingue null de 0:
+ *  - null → mostrar placeholder (guion "-") en la tarjeta de stats
+ *  - 0    → mostrar "0" (realmente cero URLs)
+ *  - N>0  → mostrar "N"
  */
 data class EstadisticasHistorial(
-    val totalEscaneos: Int,
-    val amenazas: Int,
-    val ultimos7Dias: Int
+    val totalEscaneos: Int?,
+    val amenazas: Int?,
+    val ultimos7Dias: Int?
 )
 
 /**
@@ -171,10 +177,16 @@ fun PantallaHistorial(
                     val aEliminar = escaneo
                     scope.launch {
                         try {
-                            repoEscaneos.eliminarLocal(aEliminar.id)
+                            // Bug 2 fix: cascade delete — al eliminar una URL
+                            // del historial, se eliminan tambien todos sus
+                            // reescaneos (versiones anteriores). La operacion
+                            // es atomica: filas synced encolan DELETEs en
+                            // pending_ops para el backend; filas dirty se
+                            // borran local.
+                            repoEscaneos.eliminarLocalPorUrlLimpia(aEliminar.urlLimpia)
                             mediadorSync.dispararSyncUnica()
                             escaneoEliminar = null
-                            onMensaje(TipoMensaje.EXITO, "Escaneo eliminado")
+                            onMensaje(TipoMensaje.EXITO, "URL y reescaneos eliminados")
                         } catch (e: Exception) {
                             onMensaje(TipoMensaje.ERROR, "No se pudo eliminar: ${e.message ?: "error"}")
                         }
@@ -233,13 +245,30 @@ private fun CabeceraHistorial() {
 
 @Composable
 private fun StatsRowHistorial(estadisticas: EstadisticasHistorial) {
+    // Bug 3 fix: null → "-" placeholder (cargando), no parpadeo de "0".
+    // Mostrar "0" solo cuando Room confirma que realmente hay 0 URLs.
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(Espaciado.sm)
     ) {
-        TarjetaEstadistica("Total", estadisticas.totalEscaneos.toString(), Modifier.weight(1f), CyberCyan)
-        TarjetaEstadistica("Amenazas", estadisticas.amenazas.toString(), Modifier.weight(1f), CyberRojo)
-        TarjetaEstadistica("7 dias", estadisticas.ultimos7Dias.toString(), Modifier.weight(1f), CyberTextoSecundario)
+        TarjetaEstadistica(
+            "Total",
+            estadisticas.totalEscaneos?.toString() ?: "—",
+            Modifier.weight(1f),
+            if (estadisticas.totalEscaneos == null) CyberTextoSecundario else CyberCyan
+        )
+        TarjetaEstadistica(
+            "Amenazas",
+            estadisticas.amenazas?.toString() ?: "—",
+            Modifier.weight(1f),
+            if (estadisticas.amenazas == null) CyberTextoSecundario else CyberRojo
+        )
+        TarjetaEstadistica(
+            "7 dias",
+            estadisticas.ultimos7Dias?.toString() ?: "—",
+            Modifier.weight(1f),
+            CyberTextoSecundario
+        )
     }
     Spacer(modifier = Modifier.height(Espaciado.lg))
 }
@@ -267,12 +296,14 @@ private fun FiltrosHistorial(
 private fun ContenidoHistorial(
     lista: List<EscaneoEntity>,
     syncEnCurso: Boolean,
-    totalEscaneos: Int,
+    // Bug 3 fix: Int? — null mientras Room emite el conteo (transitorio con Eagerly).
+    totalEscaneos: Int?,
     onEliminar: (EscaneoEntity) -> Unit,
     onVerDetalle: (String) -> Unit
 ) {
     if (lista.isEmpty()) {
-        if (syncEnCurso && totalEscaneos == 0) {
+        // null o 0 + sync en curso → skeleton de carga (primer PULL).
+        if (syncEnCurso && (totalEscaneos == null || totalEscaneos == 0)) {
             EstadoCargando()
         } else {
             EstadoVacio(totalEscaneos = totalEscaneos)
@@ -293,9 +324,12 @@ private fun DialogoConfirmacionEliminar(
     onCancelar: () -> Unit
 ) {
     val urlTruncada = escaneo.urlLimpia.take(60) + if (escaneo.urlLimpia.length > 60) "..." else ""
+    // Bug 2 fix: el dialog now advierte que se eliminaran tambien los reescaneos.
     DialogoConfirmacion(
-        titulo = "Eliminar escaneo",
-        mensaje = "¿Estas seguro de que quieres eliminar el escaneo de \"$urlTruncada\"? Esta accion se sincronizara con el servidor.",
+        titulo = "Eliminar URL",
+        mensaje = "¿Estas seguro de que quieres eliminar \"$urlTruncada\"? " +
+            "Se eliminaran tambien todos sus reescaneos (versiones anteriores). " +
+            "Esta accion se sincronizara con el servidor.",
         textoConfirmar = "Eliminar",
         colorConfirmar = CyberRojo,
         onConfirmar = onConfirmar,
@@ -304,7 +338,9 @@ private fun DialogoConfirmacionEliminar(
 }
 
 @Composable
-private fun EstadoVacio(totalEscaneos: Int) {
+private fun EstadoVacio(totalEscaneos: Int?) {
+    // Bug 3 fix: null → tratar como "posiblemente vacio" (transitorio con Eagerly).
+    val esCero = totalEscaneos == null || totalEscaneos == 0
     Column(
         modifier = Modifier.fillMaxSize(),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -318,7 +354,7 @@ private fun EstadoVacio(totalEscaneos: Int) {
         )
         Spacer(modifier = Modifier.height(Espaciado.lg))
         Text(
-            text = if (totalEscaneos == 0) "Aun no hay escaneos"
+            text = if (esCero) "Aun no hay escaneos"
                    else "No hay entradas para este filtro",
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
@@ -326,7 +362,7 @@ private fun EstadoVacio(totalEscaneos: Int) {
         )
         Spacer(modifier = Modifier.height(Espaciado.xs))
         Text(
-            text = if (totalEscaneos == 0) "Escanea un codigo QR para comenzar"
+            text = if (esCero) "Escanea un codigo QR para comenzar"
                    else "Prueba con otro filtro",
             style = MaterialTheme.typography.bodyMedium,
             color = CyberTextoSecundario,

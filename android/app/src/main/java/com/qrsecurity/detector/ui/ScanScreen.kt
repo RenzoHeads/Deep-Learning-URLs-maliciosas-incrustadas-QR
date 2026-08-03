@@ -33,6 +33,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -87,7 +88,13 @@ import com.qrsecurity.detector.ui.theme.TamanosToque
 fun PantallaEscanear(
     onQrDetectado: (String) -> Unit,
     modifier: Modifier = Modifier,
-    onMensaje: (TipoMensaje, String) -> Unit = { _, _ -> }
+    onMensaje: (TipoMensaje, String) -> Unit = { _, _ -> },
+    // Bug 1 fix: pausa la camara fisicamente cuando el dialogo de
+    // deduplicacion ("URL ya escaneada") esta visible. Antes la camara
+    // seguia corriendo bajo el modal, causando el fallo visual de
+    // animacion que el usuario reporto. El flag lo provee NavGuardian
+    // basandose en `estadoPipeline is UrlDuplicada`.
+    pausaCamara: Boolean = false
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -202,7 +209,8 @@ fun PantallaEscanear(
                 context = context,
                 lifecycleOwner = lifecycleOwner,
                 onQrDetectado = onQrDetectado,
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier.fillMaxSize(),
+                pausaCamara = pausaCamara
             )
         } else {
             PantallaSolicitudPermisoCyberSentinel(
@@ -233,7 +241,14 @@ private fun VistaPreviaCamaraCyberSentinel(
     context: android.content.Context,
     lifecycleOwner: androidx.lifecycle.LifecycleOwner,
     onQrDetectado: (String) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    // Bug 1 fix: cuando true, pausa fisicamente la camara (detener el
+    // executor del analizador + unbind de CameraX) para que el preview
+    // se congele y el scanner deje de procesar frames mientras el
+    // dialogo de deduplicacion esta visible. Cuando vuelve a false,
+    // reanuda la camara con `iniciar()`. El flag lo controla
+    // `PantallaEscanear` via `estadoPipeline is UrlDuplicada`.
+    pausaCamara: Boolean = false
 ) {
     val previewView = remember { PreviewView(context) }
     // H1 fix: NO capturar el callback en el ctor de ModuloCamara.
@@ -257,6 +272,16 @@ private fun VistaPreviaCamaraCyberSentinel(
         moduloCamara.setOnQrDetectado(onQrDetectado)
     }
 
+    // Bug 1 fix: rememberUpdatedState para que el LifecycleEventObserver
+    // del DisposableEffect de abajo vea siempre el valor mas reciente de
+    // pausaCamara, incluso aunque el DisposableEffect solo se re-crea cuando
+    // cambian lifecycleOwner o moduloCamara (no en cada recomposition).
+    // Sin esto, si el usuario backgroundea la app con el dialogo de
+    // deduplicacion visible (pausaCamara=true) y luego vuelve, el ON_RESUME
+    // llamaria iniciar() sin ver que pausaCamara sigue true y reiniciaria
+    // la camara bajo el modal — exactamente el fallo visual que Bug 1 arregla.
+    val pausaCamaraActual by rememberUpdatedState(pausaCamara)
+
     // Bug A13 fix: gatear el arranque de la camara en el evento ON_RESUME
     // del Lifecycle del propietario de esta pantalla (no en la entrada en
     // composicion), y verificar ademas que el permiso CAMERA siga concedido
@@ -276,7 +301,12 @@ private fun VistaPreviaCamaraCyberSentinel(
                             context,
                             Manifest.permission.CAMERA
                         ) == PackageManager.PERMISSION_GRANTED
-                    if (tienePermiso) moduloCamara.iniciar()
+                    // Bug 1 fix: solo iniciar la camara si el dialogo de
+                    // deduplicacion NO esta visible. Si pausaCamaraActual
+                    // es true, el LaunchedEffect(pausaCamara) de abajo ya
+                    // la mantiene pausada; el ON_RESUME no debe sobreescribir
+                    // eso.
+                    if (tienePermiso && !pausaCamaraActual) moduloCamara.iniciar()
                 }
                 Lifecycle.Event.ON_PAUSE -> moduloCamara.detener()
                 else -> { /* no-op */ }
@@ -292,6 +322,44 @@ private fun VistaPreviaCamaraCyberSentinel(
             // closed client" al volver de ON_PAUSE.
             moduloCamara.detener()
             moduloCamara.liberarEscaner()
+        }
+    }
+
+    // Bug 1 fix: pausar/reanudar la camara fisicamente cuando el dialogo
+    // de deduplicacion ("URL ya escaneada") aparece/desaparece. Antes la
+    // camara seguia corriendo bajo el modal — el preview seguia activo,
+    // el scanner ML Kit seguia procesando frames, y el callback
+    // onQrDetectado seguia disparandose (ahora bloqueado por el gate en
+    // NavGuardian, pero el fallo visual del preview activo permanecia).
+    //
+    // Cuando pausaCamara pasa a true (dialogo visible): detener() pausa
+    // el executor + unbind de CameraX → el preview se congela y el
+    // scanner deja de procesar.
+    //
+    // Cuando pausaCamara vuelve a false (dialogo cerrado): iniciar()
+    // re-vincula CameraX con un nuevo executor → el preview y el scanner
+    // reanudan normalmente.
+    //
+    // Solo actuar si el lifecycle esta al menos STARTED — si la pantalla
+    // esta en ON_PAUSE (usuario backgrounded la app), el DisposableEffect
+    // de arriba ya detuvo la camara; no duplicar el detener() ni intentar
+    // iniciar() con la actividad en pausa.
+    LaunchedEffect(pausaCamara) {
+        if (pausaCamara) {
+            moduloCamara.detener()
+        } else {
+            val estaResumido =
+                lifecycleOwner.lifecycle.currentState.isAtLeast(
+                    androidx.lifecycle.Lifecycle.State.STARTED
+                )
+            val tienePermiso =
+                ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.CAMERA
+                ) == PackageManager.PERMISSION_GRANTED
+            if (estaResumido && tienePermiso) {
+                moduloCamara.iniciar()
+            }
         }
     }
 

@@ -102,25 +102,42 @@ open class MediadorSincronizacion @Inject constructor(
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 10, TimeUnit.SECONDS)
             .build()
 
-        // M12 fix (revisado) — APPEND: el worker es idempotente (LWW + idempotency
-        // en pending_ops via re-key), asi que encolar multiples veces no duplica
-        // trabajo. APPEND encadena el nuevo request DESPUES del que ya esta en
-        // cola o corriendo — el segundo corre cuando el primero termina.
+        // M12 fix (revisado) — APPEND_OR_REPLACE: el worker es idempotente
+        // (LWW + idempotency en pending_ops via re-key), asi que encolar
+        // multiples veces no duplica trabajo.
         //
-        // Bug critico corregido: antes usabamos KEEP, que DESCARTA el nuevo
-        // request si ya hay uno en cola/corriendo. Cuando el worker anterior
-        // terminaba con Result.retry() (backoff exponencial 10s, 20s, 40s...),
-        // WorkManager esperaba el backoff y durante ese espera todos los
-        // nuevos disparos (tras bloquear una URL, al volver la red) eran
-        // descartados. La cola podia quedar bloqueada por minutos u horas
-        // durante un retry, sin que ningun nuevo op se procesara.
+        // APPEND_OR_REPLACE vs APPEND vs KEEP:
         //
-        // APPEND garantiza que cada nuevo disparo encole un worker fresh
-        // detras del anterior. El worker es idempotente: si la cola esta vacia,
-        // el segundo worker no hace nada (minPendingId() devuelve null → break).
+        //  - KEEP descarta el nuevo request si ya hay uno en cola/corriendo.
+        //    Cuando el worker anterior terminaba con Result.retry() (backoff
+        //    exponencial 10s, 20s, 40s...), WorkManager esperaba el backoff y
+        //    durante ese espera todos los nuevos disparos (tras bloquear una
+        //    URL, al volver la red) eran descartados. La cola podia quedar
+        //    bloqueada por minutos u horas durante un retry, sin que ningun
+        //    nuevo op se procesara. KEEP descartaba trabajo.
+        //
+        //  - APPEND encadena el nuevo request DESPUES del que ya esta en cola
+        //    o corriendo. Pero tiene un behavior sutil y destructivo: si el
+        //    padre esta en estado terminal CANCELLED o FAILED, el hijo HEREDA
+        //    ese estado — el nuevo work NUNCA se ejecuta. Eso rompia el flujo
+        //    logout+login: LogoutCoordinator.cancelarTodo() pone el SyncWorker
+        //    en CANCELLED, y el primer dispararSyncUnica() del login encadenaba
+        //    detras del work cancelado → Result instantaneo sin ejecucion.
+        //    El usuario veia la app vacia hasta reiniciar (WorkManager purga
+        //    chains terminales al cerrar el proceso y el siguiente
+        //    enqueueUniqueWork ya encontraba la chain inexistente → fresh).
+        //
+        //  - APPEND_OR_REPLACE (WorkManager 2.8.0+): encadena tras el work
+        //    en curso si esta RUNNING/ENQUEUED (no duplica trabajo) Y, si el
+        //    padre era CANCELLED o FAILED, REEMPLAZA la chain con un work fresh
+        //    — exactamente el post-logout en el que APPEND fallaba.
+        //
+        // Como el worker es idempotente (si la cola esta vacia no hace nada:
+        // minPendingId() devuelve null → break), reemplazar un worker en curso
+        // no causa duplicacion ni side-effects.
         wm.enqueueUniqueWork(
             SyncWorker.NOMBRE_TRABAJO,
-            ExistingWorkPolicy.APPEND,
+            ExistingWorkPolicy.APPEND_OR_REPLACE,
             request
         )
 

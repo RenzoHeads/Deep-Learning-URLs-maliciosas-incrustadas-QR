@@ -403,17 +403,30 @@ private fun NavGuardianRutas(
         composable(Rutas.ESCANEAR) {
             PantallaEscanear(
                 onQrDetectado = { payload ->
-                    // Bug G-1 fix: usar `pipelineViewModel.analizar()` (no
-                    // `pipeline.analizar` directo). El ViewModel expone
-                    // `analizar()` con gestion de `scanJob.cancelAndJoin()`
-                    // para cancelar scans en curso antes de empezar el nuevo
-                    // — evitando races de estado concurrente y navegacion
-                    // zombie tras rotacion. Antes el UI bypassaba el
-                    // discipline del VM y llamaba directo a Pipeline, lo que
-                    // dejaba el scanJob/cancelAndJoin del VM como dead code.
-                    scope.launch { pipelineViewModel.analizar(payload) }
+                    // Bug 1 fix: ignorar nuevas detecciones QR mientras el
+                    // dialogo de deduplicacion ("URL ya escaneada") esta
+                    // visible. Sin este gate, la camara sigue escaneando,
+                    // detecta otro QR (o el mismo), dispara un nuevo
+                    // `pipeline.analizar()` que cambia el estado del
+                    // pipeline y sobreescribe el dialogo — causando el
+                    // fallo visual de animacion de aparicion que el usuario
+                    // reporto ("se cae porque se sobreescribe con otro tab
+                    // preguntando"). Con el gate, el dialogo se queda
+                    // estable; cuando el usuario confirma o cancela, el
+                    // estado deja de ser UrlDuplicada y las nuevas
+                    // detecciones se procesan normalmente.
+                    if (estadoPipeline !is Pipeline.Estado.UrlDuplicada) {
+                        scope.launch { pipelineViewModel.analizar(payload) }
+                    }
                 },
-                onMensaje = mostrarMensaje
+                onMensaje = mostrarMensaje,
+                // Bug 1 fix: pausar fisicamente la camara (congelar preview
+                // + detener scanner) mientras el dialogo de deduplicacion
+                // esta visible. Complementa el gate de onQrDetectado de
+                // arriba: el gate evita que nuevas detecciones disparen
+                // analizar(), y este flag congela el preview para que el
+                // usuario no vea la camara moviendose bajo el modal.
+                pausaCamara = estadoPipeline is Pipeline.Estado.UrlDuplicada
             )
         }
 
@@ -515,6 +528,12 @@ private fun NavGuardianRutas(
                 onDenunciar = { url ->
                     val urlCodificada = URLEncoder.encode(url, "UTF-8")
                     navController.navigate("denunciar?url=$urlCodificada")
+                },
+                // Bug 2 fix: navegar al detalle de un reescaneo (version
+                // anterior de la misma URL). Reusa la misma ruta
+                // `detalle_escaneo/{id}` con el id del reescaneo.
+                onVerDetalle = { idReescaneo ->
+                    navController.navigate("detalle_escaneo/$idReescaneo")
                 },
                 onMensaje = mostrarMensaje
             )
@@ -723,6 +742,8 @@ private fun DetalleEscaneoContainer(
     viewModel: DetalleEscaneoViewModel,
     onVolver: () -> Unit,
     onDenunciar: (String) -> Unit,
+    // Bug 2 fix: callback para navegar al detalle de un reescaneo.
+    onVerDetalle: (String) -> Unit,
     onMensaje: (TipoMensaje, String) -> Unit
 ) {
     // Cargar escaneo al entrar, una sola vez por id (patron NowInAndroid UDF).
@@ -772,6 +793,9 @@ private fun DetalleEscaneoContainer(
             PantallaDetalleEscaneo(
                 escaneo = escaneo,
                 urlBloqueada = estado.urlBloqueada,
+                esUltimaVersion = estado.esUltimaVersion,
+                reescaneos = estado.reescaneos,
+                totalReescaneos = estado.totalReescaneos,
                 onVolver = onVolver,
                 onBloquear = {
                     viewModel.onAction(
@@ -782,6 +806,15 @@ private fun DetalleEscaneoContainer(
                     )
                 },
                 onDenunciar = onDenunciar,
+                // Bug 2 fix: navegar al detalle de un reescaneo (version
+                // anterior). El NavController usa popUpTo(ESCANEAR) sin
+                // inclusive, asi que el back stack crece con cada
+                // reescaneo visitado — el usuario puede ir atras uno por
+                // uno hasta llegar al detalle original.
+                onVerDetalle = onVerDetalle,
+                onCargarMasReescaneos = {
+                    viewModel.onAction(DetalleEscaneoAction.CargarMasReescaneos)
+                },
                 onMensaje = onMensaje
             )
         }

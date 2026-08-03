@@ -4,6 +4,7 @@ import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -21,7 +22,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Report
 import androidx.compose.material.icons.filled.Share
@@ -88,9 +91,38 @@ import java.time.format.DateTimeFormatter
 fun PantallaDetalleEscaneo(
     escaneo: EscaneoEntity,
     urlBloqueada: Boolean = false,
+    /**
+     * Bug 2 fix: true si este escaneo es la version mas reciente de su
+     * `urlLimpia`. Las acciones (Abrir, Copiar, Compartir, Bloquear,
+     * Denunciar) solo se muestran en la ultima version; las versiones
+     * anteriores (reescaneos) son "solo detalles".
+     */
+    esUltimaVersion: Boolean = true,
+    /**
+     * Bug 2 fix: reescaneos (versiones anteriores de la misma URL),
+     * paginados. Se muestran al final de la pantalla; tocar uno navega
+     * al detalle de ese reescaneo (donde esUltimaVersion=false).
+     */
+    reescaneos: List<EscaneoEntity> = emptyList(),
+    /**
+     * Bug 2 fix: total de reescaneos (excluyendo el escaneo actual). Si
+     * [reescaneos].size < [totalReescaneos] se muestra "Ver mas".
+     */
+    totalReescaneos: Int = 0,
     onVolver: () -> Unit,
     onBloquear: () -> Unit = {},
     onDenunciar: (String) -> Unit = {},
+    /**
+     * Bug 2 fix: callback para navegar al detalle de un reescaneo.
+     * Tocar una tarjeta de reescaneo dispara este callback con el `id`
+     * del reescaneo, que se navega via `detalle_escaneo/{id}`.
+     */
+    onVerDetalle: (String) -> Unit = {},
+    /**
+     * Bug 2 fix: callback para cargar mas reescaneos (siguiente pagina).
+     * Disparado por el boton "Ver mas" en la seccion de reescaneos.
+     */
+    onCargarMasReescaneos: () -> Unit = {},
     onMensaje: (TipoMensaje, String) -> Unit = { _, _ -> }
 ) {
     val context = LocalContext.current
@@ -100,7 +132,9 @@ fun PantallaDetalleEscaneo(
     val veredicto = remember(escaneo.esMalicioso, escaneo.nivelAlerta) {
         calcularVeredicto(escaneo)
     }
-    val requiereConfirmacion = veredicto.esMalicioso && !urlBloqueada
+    // Bug 2 fix: las acciones solo aparecen en la ULTIMA version.
+    // Las versiones anteriores son "solo detalles".
+    val requiereAccion = esUltimaVersion && veredicto.esMalicioso && !urlBloqueada
 
     Column(
         modifier = Modifier
@@ -136,20 +170,29 @@ fun PantallaDetalleEscaneo(
             BadgeUrlBloqueada()
         }
 
+        // Bug 2 fix: si NO es la ultima version, mostrar un badge indicando
+        // que es una version anterior (solo lectura, sin acciones).
+        if (!esUltimaVersion) {
+            BadgeVersionAnterior()
+        }
+
         TarjetaDatosEscaneo(escaneo = escaneo, veredicto = veredicto)
 
-        if (requiereConfirmacion) {
+        // Bug 2 fix: solo las acciones aparecen en la ULTIMA version.
+        // En las versiones anteriores (reescaneos vistos desde el detalle
+        // principal), el usuario pidio "solo detalles, no acciones".
+        if (requiereAccion) {
             SeccionBloquearDenunciar(
                 onBloquear = onBloquear,
                 onDenunciar = { onDenunciar(escaneo.urlLimpia) }
             )
         }
 
-        if (requiereConfirmacion && !procederConfirmado) {
+        if (requiereAccion && !procederConfirmado) {
             CardAdvertenciaMalicioso(onProceder = { procederConfirmado = true })
         }
 
-        val mostrarAcciones = !requiereConfirmacion || procederConfirmado
+        val mostrarAcciones = esUltimaVersion && (!requiereAccion || procederConfirmado)
         if (mostrarAcciones) {
             SeccionAccionesDetalle(
                 urlOriginal = escaneo.urlOriginal,
@@ -157,6 +200,21 @@ fun PantallaDetalleEscaneo(
                 urlBloqueada = urlBloqueada,
                 context = context,
                 onMensaje = onMensaje
+            )
+        }
+
+        // ── Bug 2 fix: Seccion de reescaneos (versiones anteriores) ──
+        //
+        // Muestra los reescaneos paginados. Solo aparecen si el escaneo
+        // actual ES la ultima version (no mostramos reescaneos de
+        // reescaneos — evita recursion visual confusa). Tocar un
+        // reescaneo navega a su detalle (esUltimaVersion=false).
+        if (esUltimaVersion && reescaneos.isNotEmpty()) {
+            SeccionReescaneos(
+                reescaneos = reescaneos,
+                totalReescaneos = totalReescaneos,
+                onVerDetalle = onVerDetalle,
+                onCargarMas = onCargarMasReescaneos
             )
         }
     }
@@ -213,6 +271,182 @@ private fun BadgeUrlBloqueada() {
             style = MaterialTheme.typography.bodyMedium,
             fontWeight = FontWeight.Medium,
             color = CyberRojo
+        )
+    }
+}
+
+/**
+ * Bug 2 fix: badge que aparece cuando el usuario esta viendo una
+ * **version anterior** (reescaneo) de una URL. Indica que es solo lectura
+ * — sin botones de accion (Abrir/Copiar/Compartir/Bloquear/Denunciar).
+ * Las acciones solo figuran en la cartilla de la ultima version.
+ */
+@Composable
+private fun BadgeVersionAnterior() {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(RadioBorde.lg))
+            .background(CyberAmbar.copy(alpha = 0.15f))
+            .padding(horizontal = Espaciado.lg, vertical = Espaciado.md),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Espaciado.sm)
+    ) {
+        Icon(
+            imageVector = Icons.Filled.History,
+            contentDescription = "Version anterior",
+            tint = CyberAmbar,
+            modifier = Modifier.size(Espaciado.xl)
+        )
+        Text(
+            text = "Version anterior — solo detalles. Las acciones se " +
+                "muestran en la version mas reciente de esta URL.",
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+            color = CyberAmbar
+        )
+    }
+}
+
+/**
+ * Bug 2 fix: seccion de reescaneos (versiones anteriores de la misma URL).
+ *
+ * Muestra los reescaneos como tarjetas compactas, paginadas. Tocar una
+ * tarjeta navega al detalle de ese reescaneo (donde
+ * [DetalleEscaneoUiState.Cargado.esUltimaVersion] = false).
+ *
+ * Si hay mas reescaneos por cargar ([reescaneos].size < [totalReescaneos]),
+ * muestra un boton "Ver mas" que dispara [onCargarMas].
+ *
+ * @param reescaneos Lista de reescaneos ya cargados (acumulada, paginada).
+ * @param totalReescaneos Total de reescaneos (excluyendo el escaneo actual).
+ * @param onVerDetalle Llamado al tocar una tarjeta → navega al detalle.
+ * @param onCargarMas Llamado al pulsar "Ver mas" → carga siguiente pagina.
+ */
+@Composable
+private fun SeccionReescaneos(
+    reescaneos: List<EscaneoEntity>,
+    totalReescaneos: Int,
+    onVerDetalle: (String) -> Unit,
+    onCargarMas: () -> Unit
+) {
+    val hayMas = reescaneos.size < totalReescaneos
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("seccion_reescaneos"),
+        shape = RoundedCornerShape(RadioBorde.xxl),
+        colors = CardDefaults.cardColors(containerColor = CyberGlass),
+        border = BorderStroke(Elevacion.sutil, CyberGlassBorde)
+    ) {
+        Column(
+            modifier = Modifier.padding(Espaciado.xl),
+            verticalArrangement = Arrangement.spacedBy(Espaciado.md)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Espaciado.sm)
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.History,
+                    contentDescription = null,
+                    tint = CyberTextoSecundario,
+                    modifier = Modifier.size(TamanosIcono.estandar)
+                )
+                Text(
+                    text = "Otras versiones de escaneo",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = CyberTextoPrincipal
+                )
+                Spacer(modifier = Modifier.width(Espaciado.sm))
+                Text(
+                    text = "($totalReescaneos)",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = CyberTextoSecundario
+                )
+            }
+
+            reescaneos.forEach { reescaneo ->
+                TarjetaReescaneo(reescaneo = reescaneo, onVerDetalle = onVerDetalle)
+            }
+
+            if (hayMas) {
+                OutlinedButton(
+                    onClick = onCargarMas,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("btn_ver_mas_reescaneos")
+                ) {
+                    Text(
+                        text = "Ver mas (${totalReescaneos - reescaneos.size} restantes)",
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Bug 2 fix: tarjeta compacta de un reescaneo (version anterior).
+ * Muestra URL, fecha y nivel de alerta. Tocar navega al detalle.
+ */
+@Composable
+private fun TarjetaReescaneo(
+    reescaneo: EscaneoEntity,
+    onVerDetalle: (String) -> Unit
+) {
+    val esMalicioso = reescaneo.esMalicioso
+    val colorIcono = if (esMalicioso) CyberRojo else CyberVerdeAlertaClaro
+    val icono = if (esMalicioso) Icons.Filled.Warning else Icons.Filled.CheckCircle
+
+    val fechaStr = remember(reescaneo.creadoEnMillis) {
+        Instant.ofEpochMilli(reescaneo.creadoEnMillis)
+            .atZone(ZoneId.systemDefault())
+            .toLocalDateTime()
+            .format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(RadioBorde.lg))
+            .background(CyberGlass.copy(alpha = 0.5f))
+            .clickable { onVerDetalle(reescaneo.id) }
+            .padding(Espaciado.md),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Espaciado.md)
+    ) {
+        Icon(
+            imageVector = icono,
+            contentDescription = null,
+            tint = colorIcono,
+            modifier = Modifier.size(TamanosIcono.estandar)
+        )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = reescaneo.urlLimpia,
+                style = MaterialTheme.typography.bodyMedium,
+                color = CyberTextoPrincipal,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = "$fechaStr • ${reescaneo.nivelAlerta.uppercase()} • " +
+                    "${(reescaneo.probabilidad * 100).toInt()}%",
+                style = MaterialTheme.typography.bodySmall,
+                color = CyberTextoSecundario,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        Icon(
+            imageVector = Icons.Filled.ChevronRight,
+            contentDescription = "Ver detalle",
+            tint = CyberTextoSecundario,
+            modifier = Modifier.size(TamanosIcono.estandar)
         )
     }
 }

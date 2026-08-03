@@ -12,6 +12,7 @@ import com.qrsecurity.detector.datos.local.sha256Hex
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -60,14 +61,79 @@ class RepositorioEscaneos(
     private val LIMITE_PAGINA = 200
 
     // ── Observacion reactiva (UI usa estos Flows) ──
+    //
+    // Bug 2 fix: observarTodos/Seguros/Maliciosos ahora devuelven la ULTIMA
+    // version de cada URL (deduplicado). Los reescaneos no aparecen en el
+    // historial; viven en la pantalla de Detalle via [observarReescaneos].
 
-    fun observarTodos(): Flow<List<EscaneoEntity>> = db.escaneoDao().observarTodos()
+    fun observarTodos(): Flow<List<EscaneoEntity>> = db.escaneoDao().observarTodosUnicos()
 
-    fun observarSeguros(): Flow<List<EscaneoEntity>> = db.escaneoDao().observarSeguros()
+    fun observarSeguros(): Flow<List<EscaneoEntity>> = db.escaneoDao().observarSegurosUnicos()
 
-    fun observarMaliciosos(): Flow<List<EscaneoEntity>> = db.escaneoDao().observarMaliciosos()
+    fun observarMaliciosos(): Flow<List<EscaneoEntity>> = db.escaneoDao().observarMaliciososUnicos()
 
     fun observarDirty(): Flow<List<EscaneoEntity>> = db.escaneoDao().observarDirty()
+
+    // ── Reescaneos (versiones anteriores de una URL) ──
+    //
+    // Bug 2 fix: la pantalla de Detalle muestra los reescaneos paginados
+    // (5 por pagina). [observarReescaneos] devuelve los reescaneos de una
+    // URL excepto la fila [idActual] que el usuario esta viendo.
+    // [observarTotalReescaneos] cuenta el total para saber si hay mas.
+
+    fun observarReescaneos(
+        urlLimpia: String,
+        idActual: String,
+        limite: Int,
+        offset: Int
+    ): Flow<List<EscaneoEntity>> =
+        db.escaneoDao().observarReescaneos(urlLimpia, idActual, limite, offset)
+
+    fun observarTotalReescaneos(urlLimpia: String, idActual: String): Flow<Int> =
+        db.escaneoDao().observarTotalReescaneos(urlLimpia, idActual)
+
+    // ── Snapshot suspend (no Flow) para carga inicial y paginacion ──
+    //
+    // Bug 2 fix: la pantalla de Detalle necesita una snapshot puntual de
+    // reescaneos (no reactiva — si Room cambia mientras el usuario navega,
+    // no queremos re-emitir y re-ordenar la lista bajo sus ojos). Estos
+    // metodos son `suspend` y devuelven `List` / `Int` puntuales.
+
+    /**
+     * Snapshot puntual (no Flow) de reescaneos para carga inicial y
+     * paginacion. Devuelve hasta [limite] reescaneos empezando en [offset],
+     * excluyendo [idActual], ordenados por `creadoEnMillis DESC`.
+     */
+    suspend fun observarReescaneosSnapshot(
+        urlLimpia: String,
+        idActual: String,
+        limite: Int,
+        offset: Int
+    ): List<EscaneoEntity> = withContext(ioDispatcher) {
+        // Re-usamos el Flow del DAO con first() para obtener la snapshot.
+        db.escaneoDao().observarReescaneos(urlLimpia, idActual, limite, offset)
+            .first()
+    }
+
+    /**
+     * Snapshot puntual (no Flow) del total de reescaneos de una URL,
+     * excluyendo [idActual]. Usado por DetalleEscaneoViewModel al cargar
+     * el escaneo para saber si hay mas reescaneos por paginar.
+     */
+    suspend fun contarReescaneosSnapshot(urlLimpia: String, idActual: String): Int =
+        withContext(ioDispatcher) {
+            db.escaneoDao().observarTotalReescaneos(urlLimpia, idActual).first()
+        }
+
+    /**
+     * Comprueba si el escaneo [id] es la version mas reciente de su
+     * `urlLimpia`. Usado por DetalleEscaneoViewModel para decidir si
+     * mostrar los botones de accion (solo en la ultima version).
+     */
+    suspend fun esUltimaVersion(id: String): Boolean = withContext(ioDispatcher) {
+        val escaneo = db.escaneoDao().obtenerPorId(id) ?: return@withContext true
+        db.escaneoDao().esUltimaVersion(escaneo.urlLimpia, escaneo.creadoEnMillis, id)
+    }
 
     /**
      * Obtiene un escaneo por id (para pantalla de detalle desde historial).
@@ -76,12 +142,14 @@ class RepositorioEscaneos(
     suspend fun obtenerPorId(id: String): EscaneoEntity? =
         withContext(ioDispatcher) { db.escaneoDao().obtenerPorId(id) }
 
-    fun observarTotal(): Flow<Int> = db.escaneoDao().observarTotal()
+    // Bug 3 fix: stats cuentan URLs unicas (DISTINCT urlLimpia), no filas.
+    // Un reescaneo de una URL ya contada NO incrementa el contador.
+    fun observarTotal(): Flow<Int> = db.escaneoDao().observarTotalUnicos()
 
-    fun observarAmenazas(): Flow<Int> = db.escaneoDao().observarAmenazas()
+    fun observarAmenazas(): Flow<Int> = db.escaneoDao().observarAmenazasUnicas()
 
     fun observarUltimos7Dias(): Flow<Int> =
-        db.escaneoDao().observarUltimos7Dias()
+        db.escaneoDao().observarUltimos7DiasUnicos()
 
     // ── Dedup: cache maestro urls_catalogo (lookup O(log n) por urlHash) ──
 
@@ -240,6 +308,55 @@ class RepositorioEscaneos(
                 )
                 db.escaneoDao().eliminarPorId(id)
                 db.pendingOpDao().insertar(op)
+            }
+        }
+    }
+
+    // ── Cascade delete por URL (Bug 2 fix) ──
+    //
+    // Al eliminar la version mas reciente de una URL del historial, se
+    // eliminan tambien todos sus reescaneos (versiones anteriores). El
+    // usuario pidio "si se elimina la URL, se eliminaran todos sus
+    // reescaneos". Esta operacion:
+    //  1. Lista todos los ids de filas con `urlLimpia` (= urlLimpia).
+    //  2. Para cada fila, determina si era dirty o synced.
+    //  3. Filas dirty: borra el pending_op CREATE + la fila local.
+    //  4. Filas synced: encola DELETE + borra la fila local.
+    //  5. Todo atomico en una transaccion Room.
+
+    /**
+     * Elimina TODOS los escaneos (ultima version + reescaneos) de una URL
+     * dada, atomicamente. Las filas synced encolan DELETEs en pending_ops
+     * para que el backend las borre; las filas dirty solo se borran local
+     * (nunca llegaron al backend). Llamado cuando el usuario elimina una
+     * URL del historial (Bug 2 fix: cascada por `urlLimpia`).
+     */
+    suspend fun eliminarLocalPorUrlLimpia(urlLimpia: String) = withContext(ioDispatcher) {
+        db.withTransaction {
+            val ids = db.escaneoDao().idsPorUrlLimpia(urlLimpia)
+            for (id in ids) {
+                val fila = db.escaneoDao().obtenerPorId(id)
+                if (fila != null && fila.dirty) {
+                    val opCreate = db.pendingOpDao().findExisting(
+                        tabla = "escaneos",
+                        idLocal = id,
+                        tipoOperacion = "CREATE"
+                    )
+                    if (opCreate != null) {
+                        db.pendingOpDao().borrarPorId(opCreate.id)
+                    }
+                    db.escaneoDao().eliminarPorId(id)
+                } else {
+                    val op = PendingOpEntity(
+                        tabla = "escaneos",
+                        tipoOperacion = "DELETE",
+                        idLocal = id,
+                        payloadJson = null,
+                        creadoEnMillis = System.currentTimeMillis()
+                    )
+                    db.escaneoDao().eliminarPorId(id)
+                    db.pendingOpDao().insertar(op)
+                }
             }
         }
     }
