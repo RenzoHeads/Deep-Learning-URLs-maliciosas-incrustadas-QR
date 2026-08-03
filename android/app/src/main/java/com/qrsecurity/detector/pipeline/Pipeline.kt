@@ -262,20 +262,62 @@ class Pipeline @Inject constructor(
     /**
      * ¿Todas las URLs del QR ya tienen entrada en el cache maestro `urls_catalogo`?
      *
+     * Dedup en dos fases (offline-first + cross-device):
+     *
+     * **Phase 1 — Cache local Room (offline-first):** consulta
+     * [RepositorioEscaneos.buscarUrlCatalogo] por cada URL limpia. Si todas
+     * tienen entrada local → duplicada. Costo O(log n) por PK `url_hash`.
+     *
+     * **Phase 2 — Cache backend Neon (cross-device):** si Phase 1 reporta
+     * al menos una URL sin cache local, consulta [ClienteBackend.existeUrl]
+     * para esas URLs faltantes. Si TODAS existen en el cache del backend
+     * (escaneadas por otro dispositivo del mismo usuario — `urls_catalogo`
+     * es global), también se considera duplicada. Si la llamada falla (sin
+     * red, sin token, backend caído), se devuelve false — el pipeline
+     * continúa a inferencia normal. El dedup local sigue funcionando
+     * offline; el cross-device es best-effort.
+     *
      * Garantía multi-URL (fix C2): el dedup solo dispara [Estado.UrlDuplicada]
      * cuando TODAS las URLs (primaria + [ResultadoAnalisis.ResultadoUrl.urlsAdicionales])
-     * tienen cache hit. Si al menos una es nueva, hay novedad real y se infiere
-     * normal (la nueva se persiste y pobla el cache para la próxima).
+     * tienen cache hit (local o backend). Si al menos una es nueva, hay
+     * novedad real y se infiere normal.
      *
-     * Devuelve false si la lista de URLs está vacía (defensivo: no debería
-     * ocurrir porque `procesarMultiplesUrls` ya garantizó `resultado != null`,
-     * pero un guard explícito evita emitir `UrlDuplicada` sin datos).
+     * Devuelve false si la lista de URLs está vacía (defensivo).
      */
     private suspend fun esUrlDuplicada(resultado: ResultadoAnalisis.ResultadoUrl): Boolean {
         val urlsLimpia = urlsLimpiasDelResultado(resultado)
         if (urlsLimpia.isEmpty()) return false
-        // Todas con cache hit → duplicada.
-        return urlsLimpia.all { repoEscaneos.buscarUrlCatalogo(it) != null }
+        // Phase 1: local cache (offline-first, O(log n) por PK url_hash).
+        val urlsConCacheLocal = urlsLimpia.filter {
+            repoEscaneos.buscarUrlCatalogo(it) != null
+        }
+        if (urlsConCacheLocal.size == urlsLimpia.size) return true
+        // Phase 2: cross-device — consultar backend para URLs sin cache local.
+        val urlsSinCacheLocal = urlsLimpia.filterNot { it in urlsConCacheLocal }
+        return verificarUrlsEnBackendDedup(urlsSinCacheLocal)
+    }
+
+    /**
+     * Phase 2 del dedup cross-device: consulta el backend
+     * [ClienteBackend.existeUrl] para URLs que no estaban en el cache local
+     * Room. Si TODAS existen en el cache maestro del backend, se considera
+     * duplicada.
+     *
+     * Offline-first: si la llamada falla (sin red, sin token, backend caído),
+     * se devuelve false — el pipeline continúa a inferencia normal y el
+     * escaneo se persiste localmente (poblando el cache local para futuros
+     * hits Phase 1 sin necesidad de red). El dedup cross-device es
+     * best-effort, no bloqueante.
+     */
+    private suspend fun verificarUrlsEnBackendDedup(urls: List<String>): Boolean {
+        if (urls.isEmpty()) return true
+        return try {
+            urls.all { backend.existeUrl(it).existe }
+        } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
+            // Offline-first: sin red / sin auth → fallback a cache local.
+            false
+        }
     }
 
     /**

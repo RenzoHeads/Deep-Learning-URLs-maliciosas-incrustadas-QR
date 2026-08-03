@@ -107,23 +107,30 @@ async def buscar_url_catalogo(
     Reutiliza la ``conexion`` del caller (ya dentro de un ``pool.acquire()``
     o transacción) — no abre una nueva conexión.
 
+    Security fix (cross-user data leak): ``urls_catalogo`` es una tabla
+    **global** (PK ``url_hash`` único, sin columna ``id_usuario``) — el
+    catálogo es intencionalmente crowd-sourced para que el dedup
+    cross-device funcione. Sin embargo, el ``SELECT`` ahora recupera
+    **solo** las columnas necesarias para la respuesta stripped
+    (``url_hash``, ``url_limpia``, ``ultimo_nivel_alerta``). Las columnas
+    sensibles (``ultima_probabilidad``, ``ultimo_escaneo_millis``,
+    ``veces_escaneada``) no sefetchan — defense in depth: aunque alguien
+    agregue esos campos de vuelta al modelo Pydantic, el SQL no los sirve.
+    Ver [UrlCatalogoRespuesta] para el contrato de respuesta.
+
     Args:
         conexion: Conexión asyncpg activa.
         url_limpia: URL limpia (sin normalizar aquí — el caller normaliza).
 
     Returns:
-        ``dict`` con las columnas de ``urls_catalogo`` si existe la entrada
-        (``url_hash``, ``url_limpia``, ``ultimo_nivel_alerta``,
-        ``ultima_probabilidad``, `` ultimo_escaneo_millis``,
-        ``veces_escaneada``, ``created_at``, ``updated_at``), o ``None`` si
-        la URL no fue escaneada antes.
+        ``dict`` con las columnas no sensibles de ``urls_catalogo``
+        (``url_hash``, ``url_limpia``, ``ultimo_nivel_alerta``) si existe la
+        entrada, o ``None`` si la URL no fue escaneada antes.
     """
     h = hash_url(url_limpia)
     fila = await conexion.fetchrow(
         """
-        SELECT url_hash, url_limpia, ultimo_nivel_alerta,
-               ultima_probabilidad, ultimo_escaneo_millis, veces_escaneada,
-               created_at, updated_at
+        SELECT url_hash, url_limpia, ultimo_nivel_alerta
         FROM urls_catalogo
         WHERE url_hash = $1
         """,

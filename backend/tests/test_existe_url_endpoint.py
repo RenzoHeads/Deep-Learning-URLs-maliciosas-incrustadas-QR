@@ -6,18 +6,19 @@ tocar el log append-only ``historial_escaneos``. El backend computa el
 mismo hash que el cliente Android (``HashingUrls.sha256Hex``).
 
 Casos cubiertos:
-  - URL nunca escaneada → 200 con ``existe=False`` y campos nulos/``0``.
-  - URL ya escaneada → 200 con ``existe=True`` + datos del último escaneo
-    (``ultimo_nivel_alerta``, ``ultima_probabilidad``,
-    ``ultimo_escaneo_millis``, ``veces_escaneada``).
+  - URL nunca escaneada → 200 con ``existe=False`` y campos nulos.
+  - URL ya escaneada → 200 con ``existe=True`` + ``ultimo_nivel_alerta``
+    (veredicto discreto, coarse — necesario para que el cliente decida
+    si reescanear).
   - Re-escanear (POST /escaneos) debe reflejarse en el next GET existe-url.
   - URLs distintas no se confunden (hashes distintos).
+
+Security fix: la respuesta ya NO expone ``ultima_probabilidad``,
+``ultimo_escaneo_millis`` ni ``veces_escaneada`` — esos campos permitían
+cross-user data leak (CWE-639 + CWE-200) porque ``urls_catalogo`` es
+global (sin ``id_usuario``). Los asserts de esos campos se eliminaron.
 """
 from __future__ import annotations
-
-import pytest
-
-from app.base_datos import hash_url
 
 
 def _payload(url_limpia: str = "example.com/foo", nivel: str = "MALICIOSO",
@@ -50,29 +51,23 @@ def _existe_url(client, url_limpia: str) -> dict:
 # GET /escaneos/existe-url
 # ============================================================================
 def test_existe_url_no_escaneada_devuelve_existe_false(client):
-    """URL nunca escaneada → existe=False, campos nulos/0."""
+    """URL nunca escaneada → existe=False, campos nulos."""
     data = _existe_url(client, "nueva.com/path")
     assert data["existe"] is False
     assert data["url_limpia"] is None
     assert data["ultimo_nivel_alerta"] is None
-    assert data["ultima_probabilidad"] is None
-    assert data["ultimo_escaneo_millis"] is None
-    assert data["veces_escaneada"] == 0
 
 
 def test_existe_url_escaneada_devuelve_ultimo_resultado(client):
-    """URL escaneada → existe=True + último nivel + probabilidad + contador."""
+    """URL escaneada → existe=True + url_limpia + ultimo_nivel_alerta."""
     _crear_escaneo(client, _payload(url_limpia="malicious.com/x",
                                     nivel="MALICIOSO", prob=0.95))
     data = _existe_url(client, "malicious.com/x")
     assert data["existe"] is True
     assert data["url_limpia"] == "malicious.com/x"
     assert data["ultimo_nivel_alerta"] == "MALICIOSO"
-    assert data["ultima_probabilidad"] == pytest.approx(0.95)
-    assert data["veces_escaneada"] == 1
-    # ultimo_escaneo_millis es epoch millis (no nulo si fue escaneada).
-    assert data["ultimo_escaneo_millis"] is not None
-    assert isinstance(data["ultimo_escaneo_millis"], int)
+    # Security fix: ultima_probabilidad, ultimo_escaneo_millis y
+    # veces_escaneada ya no se exponen (cross-user data leak fix).
 
 
 def test_existe_url_refleja_reescaneo_con_nuevo_veredicto(client):
@@ -82,14 +77,12 @@ def test_existe_url_refleja_reescaneo_con_nuevo_veredicto(client):
                                     nivel="SEGURO", prob=0.05))
     data1 = _existe_url(client, "flip.com/a")
     assert data1["ultimo_nivel_alerta"] == "SEGURO"
-    assert data1["veces_escaneada"] == 1
     # Re-escaneo: MALICIOSO.
     _crear_escaneo(client, _payload(url_limpia="flip.com/a",
                                     nivel="MALICIOSO", prob=0.95))
     data2 = _existe_url(client, "flip.com/a")
     assert data2["ultimo_nivel_alerta"] == "MALICIOSO"
-    assert data2["ultima_probabilidad"] == pytest.approx(0.95)
-    assert data2["veces_escaneada"] == 2
+    # Security fix: veces_escaneada y ultima_probabilidad no se exponen.
 
 
 def test_existe_url_no_confunde_urls_distintas(client):
@@ -100,17 +93,6 @@ def test_existe_url_no_confunde_urls_distintas(client):
     b = _existe_url(client, "b.com/y")
     assert a["ultimo_nivel_alerta"] == "MALICIOSO"
     assert b["ultimo_nivel_alerta"] == "SEGURO"
-
-
-def test_existe_url_ultimo_escaneo_millis_es_epoch_millis(client):
-    """ultimo_escaneo_millis debe ser int > 0 (millis desde epoch UTC)."""
-    import time
-    antes = int(time.time() * 1000)
-    _crear_escaneo(client, _payload(nivel="MALICIOSO", prob=0.95))
-    data = _existe_url(client, "example.com/foo")
-    despues = int(time.time() * 1000)
-    assert data["ultimo_escaneo_millis"] is not None
-    assert antes <= data["ultimo_escaneo_millis"] <= despues
 
 
 def test_existe_url_consulta_cache_no_log(client, store):

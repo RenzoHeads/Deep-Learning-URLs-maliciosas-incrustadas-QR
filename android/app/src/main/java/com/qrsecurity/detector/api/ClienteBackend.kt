@@ -45,7 +45,7 @@ import java.util.concurrent.TimeUnit
  */
 class ClienteBackend(
     baseUrl: String = BASE_POR_DEFECTO,
-    tokenProvider: () -> String? = { null },
+    private val tokenProvider: () -> String? = { null },
     clienteOkHttp: OkHttpClient? = null
 ) {
 
@@ -319,6 +319,57 @@ class ClienteBackend(
     suspend fun eliminarEscaneo(token: String, idEscaneo: String): Unit = withContext(Dispatchers.IO) {
         delete("$base/escaneos/$idEscaneo", token)
         Unit
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // Dedup cross-device (cache maestro urls_catalogo)
+    // ──────────────────────────────────────────────────────────────
+
+    /**
+     * Respuesta del endpoint ``GET /escaneos/existe-url`` (dedup
+     * cross-device). Solo expone ``existe`` + ``urlLimpia`` +
+     * ``ultimoNivelAlerta`` — los campos sensibles
+     * (``ultimaProbabilidad``, ``ultimoEscaneoMillis``,
+     * ``vecesEscaneada``) fueron stripped del backend (security fix
+     * cross-user data leak, CWE-639 + CWE-200).
+     */
+    @Serializable
+    data class RespuestaExisteUrl(
+        val existe: Boolean,
+        @SerialName("url_limpia") val urlLimpia: String? = null,
+        @SerialName("ultimo_nivel_alerta") val ultimoNivelAlerta: String? = null
+    )
+
+    /**
+     * Verifica si una URL ya fue escaneada antes (cache maestro
+     * ``urls_catalogo`` en el backend) — dedup cross-device.
+     *
+     * Backend: ``GET /escaneos/existe-url?url_limpia=<url>``
+     *
+     * Usa [tokenProvider] (inyectado por Hilt / constructor) para obtener
+     * el token de auth — no se pasa como parámetro. Si el usuario no está
+     * logueado (``tokenProvider()`` devuelve null), lanza
+     * [HttpBackendException] con código 401. El caller (Pipeline) debe
+     * atrapar la excepción y tratarla como offline/sin-auth → fallback a
+     * cache local Room (offline-first).
+     *
+     * Security: el backend solo devuelve ``existe`` + ``ultimoNivelAlerta``
+     * (veredicto discreto, coarse). No expone ``vecesEscaneada``,
+     * ``ultimaProbabilidad`` ni ``ultimoEscaneoMillis`` — esos campos
+     * permitirían cross-user data leak (``urls_catalogo`` es una tabla
+     * global sin ``id_usuario``).
+     *
+     * @throws HttpBackendException 401 si [tokenProvider] devuelve null.
+     * @throws HttpBackendException si el backend responde >4xx.
+     * @throws IOException si no hay red.
+     */
+    suspend fun existeUrl(urlLimpia: String): RespuestaExisteUrl = withContext(Dispatchers.IO) {
+        val token = tokenProvider()
+            ?: throw HttpBackendException(401, "No auth token para existe-url")
+        val url = "$base/escaneos/existe-url?url_limpia=" +
+            java.net.URLEncoder.encode(urlLimpia, "UTF-8")
+        val respuesta = get(url, token)
+        json.decodeFromString(RespuestaExisteUrl.serializer(), respuesta)
     }
 
     // ──────────────────────────────────────────────────────────────

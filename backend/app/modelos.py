@@ -103,14 +103,22 @@ class UrlCatalogoRespuesta(BaseModel):
 
     Representa una entrada del cache maestro ``urls_catalogo``. Si la URL
     no fue escaneada antes, el endpoint devuelve ``existe=False`` y todos
-    los demás campos son ``None``/``0``.
+    los demás campos son ``None``.
+
+    Security fix (cross-user data leak): anteriormente la respuesta incluía
+    ``ultima_probabilidad``, ``ultimo_escaneo_millis`` y ``veces_escaneada``.
+    Como ``urls_catalogo`` es una tabla **global** (PK ``url_hash`` único, sin
+    ``id_usuario``), cualquier usuario autenticado podía consultar metadata de
+    escaneos realizados por *otros* usuarios (CWE-639 + CWE-200). Ahora la
+    respuesta solo expone ``existe`` + ``url_limpia`` (que el caller ya envió)
+    + ``ultimo_nivel_alerta`` (veredicto discreto, coarse, necesario para que
+    el cliente decida si reescanear — propósito original del dedup
+    cross-device). Los campos sensibles se eliminaron del modelo Pydantic
+    **y** del ``SELECT`` SQL en ``buscar_url_catalogo`` (defense in depth).
     """
     existe: bool
     url_limpia: str | None = None
     ultimo_nivel_alerta: str | None = None
-    ultima_probabilidad: float | None = None
-    ultimo_escaneo_millis: int | None = None
-    veces_escaneada: int = 0
 
 
 # ============================================================================
@@ -209,9 +217,14 @@ def fila_a_url_catalogo(fila: asyncpg.Record | None) -> UrlCatalogoRespuesta:
     """Convierte una fila de ``urls_catalogo`` en [UrlCatalogoRespuesta].
 
     Si ``fila`` es ``None`` (la URL no existe en el cache maestro), devuelve
-    una respuesta con ``existe=False`` y todos los campos nulos/``0`` —
-    contrato esperado por el endpoint ``GET /escaneos/existe-url`` y por
-    el cliente Android para saber que debe escanear la URL.
+    una respuesta con ``existe=False`` y todos los campos nulos — contrato
+    esperado por el endpoint ``GET /escaneos/existe-url`` y por el cliente
+    Android para saber que debe escanear la URL.
+
+    Security fix: solo mapea ``url_limpia`` + ``ultimo_nivel_alerta``. Los
+    campos sensibles (``ultima_probabilidad``, ``ultimo_escaneo_millis``,
+    ``veces_escaneada``) ya no se exponen — ver docstring de
+    [UrlCatalogoRespuesta].
     """
     if fila is None:
         return UrlCatalogoRespuesta(existe=False)
@@ -219,7 +232,4 @@ def fila_a_url_catalogo(fila: asyncpg.Record | None) -> UrlCatalogoRespuesta:
         existe=True,
         url_limpia=fila["url_limpia"],
         ultimo_nivel_alerta=fila["ultimo_nivel_alerta"],
-        ultima_probabilidad=fila["ultima_probabilidad"],
-        ultimo_escaneo_millis=fila["ultimo_escaneo_millis"],
-        veces_escaneada=fila["veces_escaneada"],
     )

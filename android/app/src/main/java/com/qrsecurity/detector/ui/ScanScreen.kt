@@ -543,11 +543,14 @@ fun DialogoUrlDuplicada(
                     modifier = Modifier.testTag("texto_url_duplicada")
                 )
 
-                // Veces escaneada (máximo entre las URLs consultadas).
-                val vecesTexto = if (estado.vecesEscaneadaMaxima <= 1) {
-                    "Escaneada 1 vez."
-                } else {
-                    "Escaneada ${estado.vecesEscaneadaMaxima} veces."
+                // Veces escaneada (máximo entre las URLs consultadas con cache local).
+                // vecesEscaneadaMaxima=0 → cross-device hit (encontrada en backend,
+                // no en cache local). El count exacto no se expone por privacy (security
+                // fix cross-user leak). Mostrar mensaje genérico sin count.
+                val vecesTexto = when {
+                    estado.vecesEscaneadaMaxima == 0 -> "Esta URL ya fue escaneada antes."
+                    estado.vecesEscaneadaMaxima == 1 -> "Escaneada 1 vez."
+                    else -> "Escaneada ${estado.vecesEscaneadaMaxima} veces."
                 }
                 Spacer(modifier = Modifier.height(Espaciado.xs))
                 Text(
