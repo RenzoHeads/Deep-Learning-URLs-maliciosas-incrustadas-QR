@@ -111,6 +111,11 @@ object Rutas {
     // Bug DETAIL-1 fix: ruta con argumento id para pantalla de detalle.
     const val DETALLE_ESCANEO = "detalle_escaneo/{id}"
     const val BLOQUEADAS = "bloqueadas"
+    // Bug 2 fix: ruta para la pagina de reescaneos (versiones anteriores
+    // de una URL). Recibe urlLimpia (URL limpia codificada) e idActual
+    // (id del escaneo principal — la version mas reciente — que se excluye
+    // de la lista).
+    const val REESCANEOS = "reescaneos?urlLimpia={urlLimpia}&idActual={idActual}"
     // Ruta con argumento opcional: denunciar?url=<encoded>
     const val DENUNCIAR = "denunciar?url={url}"
     const val ACERCA = "acerca"
@@ -359,31 +364,22 @@ private fun NavGuardianRutas(
         popExitTransition = { ExitTransition.None }
     ) {
         // ── Login (pantalla inicial si no hay sesion) ──
-        // Bug A11 fix + fix onboarding-nueva-cuenta: tras login/registro
-        // exitoso, decidir destino segun si es nuevo registro o login
-        // existente.
-        //
-        // - Nuevo registro (esNuevoRegistro=true): SIEMPRE va a
-        //   ONBOARDING. El usuario es nuevo y necesita el tour inicial.
-        //   Antes, el flag global `onboarding_completado` persistia de
-        //   sesiones de otros usuarios anteriores, asi que el onboarding
-        //   nunca aparecia al crear una cuenta nueva — el usuario nuevo
-        //   veia directamente Escanear sin explicacion.
-        //
-        // - Login existente (esNuevoRegistro=false): si el flag global
-        //   `onboarding_completado` esta en true (el usuario ya paso el
-        //   onboarding en algun momento), va directo a ESCANEAR. Si no,
-        //   va a ONBOARDING.
+        // Bug 3 fix: onboarding SOLO para cuentas nuevas (registro).
+        // Antes, el flag global `onboarding_completado` (SharedPreferences)
+        // se borraba al desinstalar la app. Al reinstalar y loguear con una
+        // cuenta existente, el flag estaba en false → mostraba onboarding
+        // como si la cuenta fuera nueva.
+        // SOLUCION: el onboarding se muestra SOLO cuando
+        // `esNuevoRegistro = true` (registro de cuenta genuinamente nueva).
+        // Un login existente (`esNuevoRegistro = false`) SIEMPRE va a
+        // ESCANEAR — la cuenta ya existe, el usuario ya conoce la app.
         composable(Rutas.LOGIN) {
             PantallaLogin(
                 onExito = { esNuevoRegistro ->
                     val destino = if (esNuevoRegistro) {
                         Rutas.ONBOARDING
                     } else {
-                        val onboardingDone = context
-                            .getSharedPreferences(PREFS_QR_GUARDIAN, android.content.Context.MODE_PRIVATE)
-                            .getBoolean(CLAVE_ONBOARDING_COMPLETADO, false)
-                        if (onboardingDone) Rutas.ESCANEAR else Rutas.ONBOARDING
+                        Rutas.ESCANEAR
                     }
                     navController.navigate(destino) {
                         popUpTo(Rutas.LOGIN) { inclusive = true }
@@ -488,6 +484,13 @@ private fun NavGuardianRutas(
                         }
                     },
                     onVerBloqueadas = {
+                        // Bug 1 fix: limpiar el estado del pipeline antes de
+                        // navegar a BLOQUEADAS. Sin esto, estadoPipeline
+                        // retiene el ResultadoListo stale, y al volver a
+                        // ESCANEAR (nav bar o FAB), el LaunchedEffect
+                        // re-navega a RESULTADO_MALICIOSO — bloqueando al
+                        // usuario en la pantalla de resultado.
+                        pipelineViewModel.reiniciar()
                         navController.navigate(Rutas.BLOQUEADAS) {
                             popUpTo(Rutas.RESULTADO_MALICIOSO) {
                                 inclusive = true
@@ -506,6 +509,10 @@ private fun NavGuardianRutas(
             PantallaHistorial(
                 datosViewModel = datosViewModel,
                 onEscanear = {
+                    // Bug 1 fix: limpiar estado stale del pipeline antes de
+                    // navegar a ESCANEAR (defense-in-depth, mismo patron
+                    // que BLOQUEADAS).
+                    pipelineViewModel.reiniciar()
                     navController.navigate(Rutas.ESCANEAR) {
                         popUpTo(Rutas.ESCANEAR) { inclusive = true }
                     }
@@ -543,7 +550,53 @@ private fun NavGuardianRutas(
                 onVerDetalle = { idReescaneo ->
                     navController.navigate("detalle_escaneo/$idReescaneo")
                 },
+                // Bug 2 fix: navegar a la pagina de reescaneos (versiones
+                // anteriores de la misma URL). Pasa urlLimpia + idActual
+                // como argumentos codificados en la ruta.
+                onVerReescaneos = { urlLimpia, idActual ->
+                    val urlCodificada = URLEncoder.encode(urlLimpia, "UTF-8")
+                    navController.navigate(
+                        "reescaneos?urlLimpia=$urlCodificada&idActual=$idActual"
+                    )
+                },
                 onMensaje = mostrarMensaje
+            )
+        }
+
+        // ── Bug 2 fix: Reescaneos (pagina nueva) ──
+        // Lista las versiones anteriores de una URL en su propia pagina
+        // (no dentro de DetalleEscaneoScreen). Sigue el mismo patron
+        // offline-first + sync pull incremental que el Historial.
+        composable(
+            route = Rutas.REESCANEOS,
+            arguments = listOf(
+                navArgument("urlLimpia") {
+                    type = NavType.StringType
+                    defaultValue = ""
+                },
+                navArgument("idActual") {
+                    type = NavType.StringType
+                    defaultValue = ""
+                }
+            )
+        ) { entryReescaneos ->
+            val urlCodificada = entryReescaneos.arguments?.getString("urlLimpia") ?: ""
+            val urlLimpia = runCatching { URLDecoder.decode(urlCodificada, "UTF-8") }
+                .getOrDefault(if (urlCodificada.isEmpty()) "" else urlCodificada)
+            val idActual = entryReescaneos.arguments?.getString("idActual") ?: ""
+            PantallaReescaneos(
+                urlLimpia = urlLimpia,
+                idActual = idActual,
+                onVolver = { navController.popBackStack() },
+                onVerDetalle = { idReescaneo ->
+                    navController.navigate("detalle_escaneo/$idReescaneo")
+                },
+                onEscanear = {
+                    pipelineViewModel.reiniciar()
+                    navController.navigate(Rutas.ESCANEAR) {
+                        popUpTo(Rutas.ESCANEAR) { inclusive = true }
+                    }
+                }
             )
         }
 
@@ -552,6 +605,12 @@ private fun NavGuardianRutas(
             PantallaBloqueadas(
                 datosViewModel = datosViewModel,
                 onEscanear = {
+                    // Bug 1 fix: limpiar estado stale del pipeline antes de
+                    // navegar a ESCANEAR. Defense-in-depth: aunque
+                    // onVerBloqueadas ya llama reiniciar() al salir de
+                    // RESULTADO_MALICIOSO, esto cubre cualquier otro path
+                    // que dejara estadoPipeline en ResultadoListo stale.
+                    pipelineViewModel.reiniciar()
                     navController.navigate(Rutas.ESCANEAR) {
                         popUpTo(Rutas.ESCANEAR) { inclusive = true }
                     }
@@ -752,6 +811,9 @@ private fun DetalleEscaneoContainer(
     onDenunciar: (String) -> Unit,
     // Bug 2 fix: callback para navegar al detalle de un reescaneo.
     onVerDetalle: (String) -> Unit,
+    // Bug 2 fix: callback para navegar a la pagina de reescaneos (versiones
+    // anteriores de la misma URL). Recibe urlLimpia + idActual.
+    onVerReescaneos: (String, String) -> Unit,
     onMensaje: (TipoMensaje, String) -> Unit
 ) {
     // Cargar escaneo al entrar, una sola vez por id (patron NowInAndroid UDF).
@@ -802,7 +864,10 @@ private fun DetalleEscaneoContainer(
                 escaneo = escaneo,
                 urlBloqueada = estado.urlBloqueada,
                 esUltimaVersion = estado.esUltimaVersion,
-                reescaneos = estado.reescaneos,
+                // Bug 2 fix: el total de reescaneos se pasa para que la
+                // pantalla de detalle muestre "Ver reescaneos (N)" si N > 0.
+                // La lista de reescaneos ya NO se renderiza aqui — vive en
+                // su propia pagina (PantallaReescaneos).
                 totalReescaneos = estado.totalReescaneos,
                 onVolver = onVolver,
                 onBloquear = {
@@ -820,8 +885,11 @@ private fun DetalleEscaneoContainer(
                 // reescaneo visitado — el usuario puede ir atras uno por
                 // uno hasta llegar al detalle original.
                 onVerDetalle = onVerDetalle,
-                onCargarMasReescaneos = {
-                    viewModel.onAction(DetalleEscaneoAction.CargarMasReescaneos)
+                // Bug 2 fix: navegar a la pagina nueva de reescaneos.
+                // Pasa urlLimpia + idActual (el escaneo actual) para que
+                // PantallaReescaneos sepa que versiones anteriores listar.
+                onVerReescaneos = {
+                    onVerReescaneos(escaneo.urlLimpia, escaneo.id)
                 },
                 onMensaje = onMensaje
             )
