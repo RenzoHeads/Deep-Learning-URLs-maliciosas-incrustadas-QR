@@ -34,7 +34,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -60,21 +63,30 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
 /**
- * Bug 2 fix: Pantalla de Reescaneos — pagina nueva (no dentro de
- * DetalleEscaneoScreen) que lista las versiones anteriores de una URL.
+ * Bug 2 fix (optimizacion cache): Pantalla de Reescaneos — pagina nueva
+ * (no dentro de DetalleEscaneoScreen) que lista las versiones anteriores
+ * de una URL.
  *
- * Sigue la misma logica que [PantallaHistorial]:
- *  - Offline-first: Room es la fuente de verdad.
- *  - Sync pull incremental: al montar la pantalla, dispara un sync
- *    one-shot para traer del backend cualquier reescaneo nuevo (hecho
- *    en [ReescaneosViewModel.cargarReescaneos]).
- *  - Paginacion local: la lista carga de a [ReescaneosViewModel].
- *    `tamanoPagina` items. El boton "Ver mas" dispara
- *    [ReescaneosAction.CargarMas] que lee la siguiente pagina desde
- *    Room (no del backend — el sync ya pobla Room).
- *  - Reactivo: si el sync inserta nuevos reescaneos en Room, el Flow
- *    del total re-emite y la UI actualiza el contador + refresca la
- *    pagina actual.
+ * **Patron reactivo** (igual que [PantallaHistorial]):
+ *  - Room es la fuente de verdad. El Flow `reescaneos` del ViewModel se
+ *    suscribe via `stateIn(WhileSubscribed(5_000), emptyList())` — Room
+ *    emite la lista cacheada en <1ms, **sin spinner de carga**.
+ *  - Al navegar fuera y volver (nav bar), el Flow sigue vivo (mientras
+ *    haya suscriptores activos o dentro del window de 5s), asi que la UI
+ *    muestra los datos cacheados instantaneamente — **no vuelve a
+ *    consultar**. Esta es la optimizacion pedida: las pantallas ya
+ *    cargadas se cachean como el historial.
+ *  - Sync pull incremental es **fire-and-forget**: corre en background
+ *    sin bloquear la UI. Si inserta nuevos reescaneos en Room, el Flow
+ *    re-emite automaticamente y la UI se actualiza sin que el usuario
+ *    haga nada.
+ *  - **Paginacion en la UI**: se cargan TODOS los reescaneos via Flow
+ *    (como el historial carga todas las URLs), y la UI muestra solo los
+ *    primeros [visibleCount] via `LazyColumn.take(visibleCount)`.
+ *    `LazyColumn` virtualiza, asi que cargar 1000 items es igual de
+ *    eficiente que 10. El boton "Ver mas" aumenta [visibleCount] en
+ *    [PAGINA_UI] (10). [visibleCount] se preserva al rotar/recrear via
+ *    `rememberSaveable`.
  *
  * @param urlLimpia URL limpia cuyo historial de versiones se muestra.
  * @param idActual Id del escaneo "principal" (la version mas reciente)
@@ -95,16 +107,31 @@ fun PantallaReescaneos(
     onEscanear: () -> Unit,
     viewModel: ReescaneosViewModel = hiltViewModel()
 ) {
-    // Cargar reescaneos al montar la pantalla, una sola vez por
-    // (urlLimpia, idActual). El ViewModel ignora llamadas duplicadas
-    // para la misma URL+id.
+    // Establecer coordenadas en el ViewModel al montar la pantalla (una
+    // sola vez por (urlLimpia, idActual)). El ViewModel usa flatMapLatest:
+    // al cambiar las coordenadas, cancela el Flow viejo y subscribe el
+    // nuevo — sin re-carga manual ni spinner.
     LaunchedEffect(urlLimpia, idActual) {
         viewModel.cargarReescaneos(urlLimpia, idActual)
     }
 
-    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val lista by viewModel.reescaneos.collectAsStateWithLifecycle()
     val totalReescaneos by viewModel.totalReescaneos.collectAsStateWithLifecycle()
     val syncEnCurso by viewModel.syncEnCurso.collectAsStateWithLifecycle()
+
+    // ── Paginacion UI (patron "Ver mas") ──
+    // visibleCount se reinicia cuando cambia urlLimpia (el usuario ve los
+    // reescaneos de otra URL). Se preserva al rotar/recrearse la Activity
+    // via rememberSaveable — al volver de la nav bar, el usuario ve el
+    // mismo numero de items que antes de irse.
+    var visibleCount by rememberSaveable(urlLimpia) { mutableIntStateOf(PAGINA_UI) }
+
+    // Asegurar que visibleCount nunca excede el total disponible.
+    LaunchedEffect(lista.size) {
+        if (visibleCount > lista.size) {
+            visibleCount = lista.size.coerceAtLeast(PAGINA_UI)
+        }
+    }
 
     Box(modifier = Modifier.fillMaxSize().background(CyberFondo)) {
         Column(
@@ -150,118 +177,102 @@ fun PantallaReescaneos(
                 modifier = Modifier.padding(start = Espaciado.lg, end = Espaciado.lg, bottom = Espaciado.sm)
             )
 
-            // ── Contenido segun estado ──
-            when (val estado = uiState) {
-                ReescaneosUiState.Cargando -> {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(Espaciado.md)
-                        ) {
-                            CircularProgressIndicator(
-                                color = CyberCyan,
-                                strokeWidth = Elevacion.flotante
-                            )
-                            Text(
-                                text = "Cargando versiones...",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = CyberTextoSecundario
-                            )
-                        }
-                    }
+            // ── Contenido reactivo (sin spinner de carga) ──
+            // Room emite la lista cacheada en <1ms. Si esta vacio y el sync
+            // esta corriendo, mostramos un banner sutil (no bloqueante). Si
+            // esta vacio y no hay sync, mostramos empty state.
+            if (lista.isEmpty() && !syncEnCurso) {
+                // ── Empty state ──
+                Column(
+                    modifier = Modifier.fillMaxSize(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.History,
+                        contentDescription = null,
+                        tint = CyberCyan.copy(alpha = 0.3f),
+                        modifier = Modifier.size(TamanosIcono.grande)
+                    )
+                    Spacer(modifier = Modifier.height(Espaciado.lg))
+                    Text(
+                        text = "No hay otras versiones",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = CyberTextoPrincipal
+                    )
+                    Spacer(modifier = Modifier.height(Espaciado.xs))
+                    Text(
+                        text = "Esta URL solo ha sido escaneada una vez.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = CyberTextoSecundario,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
                 }
-                ReescaneosUiState.NoAplica -> {
-                    // No-op: estado intermedio.
-                }
-                is ReescaneosUiState.Cargado -> {
-                    val lista = estado.reescaneos
-                    if (lista.isEmpty() && !syncEnCurso) {
-                        // ── Empty state ──
-                        Column(
-                            modifier = Modifier.fillMaxSize(),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.History,
-                                contentDescription = null,
-                                tint = CyberCyan.copy(alpha = 0.3f),
-                                modifier = Modifier.size(TamanosIcono.grande)
-                            )
-                            Spacer(modifier = Modifier.height(Espaciado.lg))
-                            Text(
-                                text = "No hay otras versiones",
-                                style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.Bold,
-                                color = CyberTextoPrincipal
-                            )
-                            Spacer(modifier = Modifier.height(Espaciado.xs))
-                            Text(
-                                text = "Esta URL solo ha sido escaneada una vez.",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = CyberTextoSecundario,
-                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                            )
-                        }
-                    } else {
-                        // ── Lista de reescaneos paginada ──
-                        LazyColumn(
-                            modifier = Modifier.fillMaxSize(),
-                            verticalArrangement = Arrangement.spacedBy(Espaciado.sm),
-                            contentPadding = PaddingValues(bottom = Espaciado.gigante)
-                        ) {
-                            if (syncEnCurso && lista.isEmpty()) {
-                                item {
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(Espaciado.md),
-                                        horizontalArrangement = Arrangement.Center,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        CircularProgressIndicator(
-                                            modifier = Modifier.size(Espaciado.xl),
-                                            color = CyberCyan,
-                                            strokeWidth = Elevacion.flotante
-                                        )
-                                        Spacer(modifier = Modifier.width(Espaciado.md))
-                                        Text(
-                                            text = "Sincronizando...",
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            color = CyberTextoSecundario
-                                        )
-                                    }
-                                }
-                            }
-                            items(lista, key = { it.id }) { reescaneo ->
-                                TarjetaReescaneoPublica(
-                                    reescaneo = reescaneo,
-                                    onVerDetalle = onVerDetalle
+            } else {
+                // ── Lista de reescaneos reactiva ──
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    verticalArrangement = Arrangement.spacedBy(Espaciado.sm),
+                    contentPadding = PaddingValues(bottom = Espaciado.gigante)
+                ) {
+                    // Banner sutil de sync (NO bloqueante — la lista ya
+                    // esta visible con datos cacheados).
+                    if (syncEnCurso) {
+                        item {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = Espaciado.sm),
+                                horizontalArrangement = Arrangement.Center,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(Espaciado.xl),
+                                    color = CyberCyan,
+                                    strokeWidth = Elevacion.flotante
+                                )
+                                Spacer(modifier = Modifier.width(Espaciado.md))
+                                Text(
+                                    text = "Sincronizando...",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = CyberTextoSecundario
                                 )
                             }
-                            // ── Boton "Ver mas" (paginacion local) ──
-                            val hayMas = lista.size < totalReescaneos
-                            if (hayMas) {
-                                item {
-                                    OutlinedButton(
-                                        onClick = {
-                                            viewModel.onAction(ReescaneosAction.CargarMas)
-                                        },
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(top = Espaciado.md),
-                                        shape = RoundedCornerShape(RadioBorde.lg)
-                                    ) {
-                                        Text(
-                                            text = "Ver mas (${totalReescaneos - lista.size} restantes)",
-                                            color = CyberCyan,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                }
+                        }
+                    }
+                    // Mostrar solo los primeros `visibleCount` reescaneos.
+                    // LazyColumn virtualiza, asi que aunque `lista` tenga
+                    // 100 items, solo se compondran los visibles + cache.
+                    val visibles = lista.take(visibleCount)
+                    items(visibles, key = { it.id }) { reescaneo ->
+                        TarjetaReescaneoPublica(
+                            reescaneo = reescaneo,
+                            onVerDetalle = onVerDetalle
+                        )
+                    }
+                    // ── Boton "Ver mas" (paginacion UI) ──
+                    // Aumenta visibleCount en PAGINA_UI. El numero de
+                    // "restantes" es totalReescaneos - visibleCount (no
+                    // lista.size, porque lista puede ser menor si el Flow
+                    // todavia no ha emitido todos).
+                    val hayMas = visibleCount < totalReescaneos
+                    if (hayMas) {
+                        item {
+                            OutlinedButton(
+                                onClick = {
+                                    visibleCount += PAGINA_UI
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = Espaciado.md),
+                                shape = RoundedCornerShape(RadioBorde.lg)
+                            ) {
+                                Text(
+                                    text = "Ver mas (${totalReescaneos - visibleCount} restantes)",
+                                    color = CyberCyan,
+                                    fontWeight = FontWeight.Bold
+                                )
                             }
                         }
                     }
@@ -282,6 +293,12 @@ fun PantallaReescaneos(
         }
     }
 }
+
+/**
+ * Tamano de pagina visual (paginacion en UI). Igual que el historial.
+ * Aumentar en bloques de PAGINA_UI cuando el usuario presiona "Ver mas".
+ */
+private const val PAGINA_UI = 10
 
 /**
  * Tarjeta publica de un reescaneo (version anterior de una URL).
@@ -348,5 +365,3 @@ private fun TarjetaReescaneoPublica(
         )
     }
 }
-
-

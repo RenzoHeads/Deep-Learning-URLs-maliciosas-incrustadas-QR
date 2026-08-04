@@ -118,6 +118,34 @@ interface EscaneoDao {
     ): Flow<List<EscaneoEntity>>
 
     /**
+     * Reescaneos de una URL (versiones anteriores) — TODOS, sin paginar.
+     *
+     * Igual que [observarReescaneos] pero sin `LIMIT`/`OFFSET` — devuelve
+     * todas las filas con `urlLimpia = :urlLimpia` excepto [idActual],
+     * ordenadas por `creadoEnMillis DESC`. Usado por la pantalla de
+     * Reescaneos bajo el patron reactivo (como [observarTodosUnicos] para
+     * el historial): Room emite la lista cacheada en <1ms y re-emite si
+     * la tabla cambia; la UI virtualiza con `LazyColumn`.
+     *
+     * El numero de reescaneos de una sola URL esta acotado por las veces
+     * que el usuario re-escaneo esa URL, asi que cargar todos sin paginar
+     * es mas barato que el historial (que carga todas las URLs unicas).
+     */
+    @Query(
+        "SELECT * FROM escaneos " +
+            "WHERE urlLimpia = :urlLimpia " +
+            "AND id != :idActual " +
+            "AND id NOT IN (" +
+                "SELECT idLocal FROM pending_ops " +
+                "WHERE tabla = 'escaneos' AND tipoOperacion = 'DELETE' AND fallida = 0" +
+            ") ORDER BY creadoEnMillis DESC, id DESC"
+    )
+    fun observarReescaneosTodos(
+        urlLimpia: String,
+        idActual: String
+    ): Flow<List<EscaneoEntity>>
+
+    /**
      * Cuenta el total de reescaneos (versiones distintas) de una URL,
      * excluyendo la fila [idActual]. Usado por la paginacion para saber si
      * hay mas reescaneos por cargar.

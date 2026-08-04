@@ -89,6 +89,24 @@ class RepositorioEscaneos(
     ): Flow<List<EscaneoEntity>> =
         db.escaneoDao().observarReescaneos(urlLimpia, idActual, limite, offset)
 
+    /**
+     * Devuelve el Flow reactivo con TODOS los reescaneos de [urlLimpia]
+     * (excluyendo [idActual]), sin paginar. Mirror de [observarTodos] para
+     * el historial: Room re-emite automaticamente al cambiar la tabla, asi
+     * que la UI que colecta este Flow nunca necesita volver a consultar al
+     * volver a la pagina (cache automatico).
+     *
+     * Usado por [com.qrsecurity.detector.ui.ReescaneosViewModel] bajo el
+     * patron reactivo (igual que [DatosTabsViewModel.historialTodos] para
+     * el historial): `stateIn(WhileSubscribed(5_000), emptyList())` —
+     * sin spinner `Cargando`, Room emite la lista cacheada en <1ms.
+     */
+    fun observarReescaneosTodos(
+        urlLimpia: String,
+        idActual: String
+    ): Flow<List<EscaneoEntity>> =
+        db.escaneoDao().observarReescaneosTodos(urlLimpia, idActual)
+
     fun observarTotalReescaneos(urlLimpia: String, idActual: String): Flow<Int> =
         db.escaneoDao().observarTotalReescaneos(urlLimpia, idActual)
 
