@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -135,6 +136,13 @@ fun PantallaReescaneos(
         }
     }
 
+    // Preservar scroll position al volver de DetalleEscaneo — sin esto,
+    // el LazyColumn vuelve al principio cuando se restaura la composicion.
+    // Key por urlLimpia: cada URL tiene su propio scroll position.
+    val listState = rememberSaveable(urlLimpia, saver = LazyListState.Saver) {
+        LazyListState()
+    }
+
     Box(modifier = Modifier.fillMaxSize().background(CyberFondo)) {
         Column(
             modifier = Modifier.fillMaxSize().padding(horizontal = Espaciado.lg)
@@ -214,6 +222,7 @@ fun PantallaReescaneos(
             } else {
                 // ── Lista de reescaneos reactiva ──
                 LazyColumn(
+                    state = listState,
                     modifier = Modifier.fillMaxSize(),
                     verticalArrangement = Arrangement.spacedBy(Espaciado.sm),
                     contentPadding = PaddingValues(bottom = Espaciado.gigante)
