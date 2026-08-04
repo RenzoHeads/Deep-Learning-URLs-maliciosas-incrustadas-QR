@@ -44,7 +44,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.qrsecurity.detector.datos.local.entidades.EscaneoEntity
 import com.qrsecurity.detector.ui.theme.CyberCyan
@@ -105,7 +104,10 @@ fun PantallaReescaneos(
     onVolver: () -> Unit,
     onVerDetalle: (String) -> Unit,
     onEscanear: () -> Unit,
-    viewModel: ReescaneosViewModel = hiltViewModel()
+    // Bug 2 cache fix: el viewModel viene del padre (NavGuardian), no de
+    // hiltViewModel() scoped al entry de la ruta. Asi persiste al navegar
+    // fuera y volver — el StateFlow retiene la lista cacheada.
+    viewModel: ReescaneosViewModel
 ) {
     // Establecer coordenadas en el ViewModel al montar la pantalla (una
     // sola vez por (urlLimpia, idActual)). El ViewModel usa flatMapLatest:

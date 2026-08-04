@@ -88,6 +88,10 @@ import java.net.URLDecoder
 private data class NavGuardianViewModels(
     val pipelineViewModel: PipelineViewModel,
     val datosViewModel: DatosTabsViewModel,
+    // Bug 2 cache fix: ReescaneosViewModel vive a nivel NavGuardian (igual
+    // que datosViewModel) para que persista al navegar fuera y volver —
+    // el StateFlow retiene la lista y el guard de sync no se reinicia.
+    val reescaneosViewModel: ReescaneosViewModel,
     val sessionViewModel: SessionViewModel,
     val estadoPipeline: Pipeline.Estado,
     val analizando: Boolean
@@ -162,6 +166,14 @@ fun NavGuardian() {
     // ViewModelStoreOwner y por ende su propia instancia del VM — los
     // Flows se re-inician al cambiar de tab y el spinner vuelve.
     val datosViewModel: DatosTabsViewModel = hiltViewModel()
+
+    // Bug 2 cache fix: ReescaneosViewModel vive a nivel NavGuardian.
+    // Si se crea dentro del composable(REESCANEOS), se destruye al
+    // presionar volver y se recrea al re-entrar — reiniciando el sync
+    // y re-leyendo Room. A nivel NavGuardian persiste: el StateFlow
+    // retiene la lista cacheada y el guard `cargarReescaneos` evita
+    // re-disparar sync para la misma URL+id.
+    val reescaneosViewModel: ReescaneosViewModel = hiltViewModel()
 
     // SessionViewModel — reemplaza el companion bridge estatico de
     // SesionUsuario/LogoutCoordinator. Hilt inyecta las deps @Singleton.
@@ -283,6 +295,7 @@ fun NavGuardian() {
                 viewModels = NavGuardianViewModels(
                     pipelineViewModel = pipelineViewModel,
                     datosViewModel = datosViewModel,
+                    reescaneosViewModel = reescaneosViewModel,
                     sessionViewModel = sessionViewModel,
                     estadoPipeline = estadoPipeline,
                     analizando = analizando
@@ -345,6 +358,7 @@ private fun NavGuardianRutas(
     val mostrarMensaje = contexto.mostrarMensaje
     val pipelineViewModel = viewModels.pipelineViewModel
     val datosViewModel = viewModels.datosViewModel
+    val reescaneosViewModel = viewModels.reescaneosViewModel
     val sessionViewModel = viewModels.sessionViewModel
     val estadoPipeline = viewModels.estadoPipeline
     val analizando = viewModels.analizando
@@ -596,7 +610,8 @@ private fun NavGuardianRutas(
                     navController.navigate(Rutas.ESCANEAR) {
                         popUpTo(Rutas.ESCANEAR) { inclusive = true }
                     }
-                }
+                },
+                viewModel = reescaneosViewModel
             )
         }
 

@@ -59,10 +59,20 @@ class ReescaneosViewModel @Inject constructor(
      * Flow reactivo con TODOS los reescaneos de la URL actual (excluyendo
      * [idActualFlow]). Room re-emite automaticamente al cambiar la tabla.
      *
-     * Mismo patron que [DatosTabsViewModel.historialTodos]:
-     * `stateIn(WhileSubscribed(5_000), emptyList())` — sin spinner, cache
-     * instantaneo. Al volver a la pagina (nav bar), el Flow sigue vivo y
-     * Room emite la lista cacheada en <1ms.
+     * **Eagerly**: el Flow colecta desde que el ViewModel se crea (al
+     * montar NavGuardian) y **nunca se cancela** — el StateFlow siempre
+     * retiene la lista. Al volver a la pantalla (nav bar o back), el
+     * colector obtiene el valor actual del StateFlow **instantaneamente**,
+     * sin re-leer Room ni re-disparar sync. Este es el cache reactivo
+     * pedido: mientras la app este abierta, volver a la pestana ya
+     * cargada no pide nada (ni local ni nube).
+     *
+     * Se diferencia de [DatosTabsViewModel.historialTodos] que usa
+     * `WhileSubscribed(5_000)` porque el historial abarca TODAS las URLs
+     * (potencialmente miles de filas) y conviene cancelar el Flow cuando
+     * nadie observa. Los reescaneos de una sola URL son pocos (1-N veces
+     * que el usuario re-escaneo esa URL), asi que Eagerly es despreciable
+     * en recursos.
      */
     val reescaneos: StateFlow<List<EscaneoEntity>> =
         combine(urlLimpiaFlow, idActualFlow) { url, id -> url to id }
@@ -73,7 +83,7 @@ class ReescaneosViewModel @Inject constructor(
                     flowOf(emptyList())
                 }
             }
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+            .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     /**
      * Flow reactivo del total de reescaneos. Eagerly para que Room emita
