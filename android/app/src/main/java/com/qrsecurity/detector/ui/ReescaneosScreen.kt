@@ -118,9 +118,18 @@ fun PantallaReescaneos(
         viewModel.cargarReescaneos(urlLimpia, idActual)
     }
 
-    val lista by viewModel.reescaneos.collectAsStateWithLifecycle()
-    val totalReescaneos by viewModel.totalReescaneos.collectAsStateWithLifecycle()
+    // Estado reactivo agrupado (etiquetado con `url`/`id`). La UI
+    // correlaciona contra sus propios params para evitar flash de otra
+    // URL cuando el `flatMapLatest` esta cambiando.
+    val estado by viewModel.estadoReescaneos.collectAsStateWithLifecycle()
     val syncEnCurso by viewModel.syncEnCurso.collectAsStateWithLifecycle()
+
+    // Bug flash-Reescaneos fix: la data `estado` puede ser de OTRA URL
+    // mientras `flatMapLatest` switchea (el StateFlow retiene el ultimo
+    // valor etiquetado). Solo renderizamos la lista si la data corresponde
+    // a la (urlLimpia, idActual) actual. Mientras tanto, el chrome (top
+    // bar + URL title) ya esta visible — sin flash de datos ajenos.
+    val datosValidos = estado.url == urlLimpia && estado.id == idActual
 
     // ── Paginacion UI (patron "Ver mas") ──
     // visibleCount se reinicia cuando cambia urlLimpia (el usuario ve los
@@ -130,9 +139,9 @@ fun PantallaReescaneos(
     var visibleCount by rememberSaveable(urlLimpia) { mutableIntStateOf(PAGINA_UI) }
 
     // Asegurar que visibleCount nunca excede el total disponible.
-    LaunchedEffect(lista.size) {
-        if (visibleCount > lista.size) {
-            visibleCount = lista.size.coerceAtLeast(PAGINA_UI)
+    LaunchedEffect(estado.lista.size) {
+        if (visibleCount > estado.lista.size) {
+            visibleCount = estado.lista.size.coerceAtLeast(PAGINA_UI)
         }
     }
 
@@ -188,10 +197,18 @@ fun PantallaReescaneos(
             )
 
             // ── Contenido reactivo (sin spinner de carga) ──
-            // Room emite la lista cacheada en <1ms. Si esta vacio y el sync
-            // esta corriendo, mostramos un banner sutil (no bloqueante). Si
-            // esta vacio y no hay sync, mostramos empty state.
-            if (lista.isEmpty() && !syncEnCurso) {
+            // Bug flash-Reescaneos fix: cuando las coordenadas cambian
+            // (A→B), `flatMapLatest` cancela el Flow de A y subscribe el
+            // de B. Mientras B no emite, `estado` retiene A etiquetado como
+            // (A, A_id). `datosValidos` es false (A != B) → renderizamos
+            // SOLO el chrome (ya esta arriba) — sin flash de la lista de A.
+            // B emite desde Room en <1ms → `datosValidos` true → render
+            // lista de B. El gap sub-frame es invisible para el usuario.
+            if (!datosValidos) {
+                // Estado en transicion entre URLs. No mostramos ni la
+                // lista, ni el empty state, ni el spinner. El contenido
+                // queda en blanco ~1 frame (<1ms), invisible.
+            } else if (estado.lista.isEmpty() && !syncEnCurso) {
                 // ── Empty state ──
                 Column(
                     modifier = Modifier.fillMaxSize(),
@@ -253,9 +270,9 @@ fun PantallaReescaneos(
                         }
                     }
                     // Mostrar solo los primeros `visibleCount` reescaneos.
-                    // LazyColumn virtualiza, asi que aunque `lista` tenga
+                    // LazyColumn virtualiza, asi que aunque `estado.lista` tenga
                     // 100 items, solo se compondran los visibles + cache.
-                    val visibles = lista.take(visibleCount)
+                    val visibles = estado.lista.take(visibleCount)
                     items(visibles, key = { it.id }) { reescaneo ->
                         TarjetaReescaneoPublica(
                             reescaneo = reescaneo,
@@ -264,10 +281,10 @@ fun PantallaReescaneos(
                     }
                     // ── Boton "Ver mas" (paginacion UI) ──
                     // Aumenta visibleCount en PAGINA_UI. El numero de
-                    // "restantes" es totalReescaneos - visibleCount (no
-                    // lista.size, porque lista puede ser menor si el Flow
+                    // "restantes" es estado.total - visibleCount (no
+                    // estado.lista.size, porque lista puede ser menor si el Flow
                     // todavia no ha emitido todos).
-                    val hayMas = visibleCount < totalReescaneos
+                    val hayMas = visibleCount < estado.total
                     if (hayMas) {
                         item {
                             OutlinedButton(
@@ -280,7 +297,7 @@ fun PantallaReescaneos(
                                 shape = RoundedCornerShape(RadioBorde.lg)
                             ) {
                                 Text(
-                                    text = "Ver mas (${totalReescaneos - visibleCount} restantes)",
+                                    text = "Ver mas (${estado.total - visibleCount} restantes)",
                                     color = CyberCyan,
                                     fontWeight = FontWeight.Bold
                                 )
