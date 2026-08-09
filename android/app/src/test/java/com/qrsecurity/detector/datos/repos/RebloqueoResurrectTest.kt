@@ -94,7 +94,7 @@ class RebloqueoResurrectTest {
             val idServidor = "uuid-servidor-B"
 
             // ── 1. bloquearLocal ──
-            val idLocal1 = repo.bloquearLocal(url, "test")
+            repo.bloquearLocal(url, "test")
             assertEquals(1, db.urlBloqueadaDao().todosLosIds().size)
 
             // ── 2. procesarCreate → POST → 201 id=uuid-servidor-B → reKey ──
@@ -138,7 +138,6 @@ class RebloqueoResurrectTest {
 
             // ── 6. procesarDelete(uuid-servidor-B) → DELETE → 204 ──
             server.enqueue(MockResponse().setResponseCode(204))
-            val ops = mutableListOf<PendingOpEntity>()
             // Buscar el DELETE en pending_ops
             val deleteOpId = db.pendingOpDao().minPendingId()
             assertNotNull(deleteOpId)
@@ -211,7 +210,7 @@ class RebloqueoResurrectTest {
             assertEquals(null, db.pendingOpDao().minPendingId())
 
             // 3. Re-bloquear
-            val idLocal2 = repo.bloquearLocal(url, "re-bloqueado")
+            repo.bloquearLocal(url, "re-bloqueado")
             assertEquals(1, db.urlBloqueadaDao().todosLosIds().size)
 
             // 4. PULL: GET → backend filtra deleted_at IS NULL → no trae nada

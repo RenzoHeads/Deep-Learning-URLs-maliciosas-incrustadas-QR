@@ -59,6 +59,7 @@ import org.robolectric.annotation.Config
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33], application = com.qrsecurity.detector.TestApplication::class)
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class PipelineDedupTest {
 
     private val testDispatcher = StandardTestDispatcher()

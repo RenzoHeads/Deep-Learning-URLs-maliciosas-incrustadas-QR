@@ -53,7 +53,7 @@ class ExtractorUrlsEsquemaDominioTest {
 
         // THEN: aceptado como URL. Se le anade ``http://`` implicitamente.
         assertTrue(resultado is Extraido.Urls, "Esperaba Urls para 'example.com': $resultado")
-        val urls = (resultado as Extraido.Urls).urls
+        val urls = resultado.urls
         assertEquals(1, urls.size)
         assertEquals("http://example.com", urls.first())
     }
@@ -64,7 +64,7 @@ class ExtractorUrlsEsquemaDominioTest {
         val resultado = extractor.extraer("sub.example.co.uk")
 
         assertTrue(resultado is Extraido.Urls, "Esperaba Urls para 'sub.example.co.uk': $resultado")
-        val urls = (resultado as Extraido.Urls).urls
+        val urls = resultado.urls
         assertEquals(1, urls.size)
         assertEquals("http://sub.example.co.uk", urls.first())
     }
