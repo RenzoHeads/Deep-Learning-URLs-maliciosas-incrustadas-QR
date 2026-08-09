@@ -22,6 +22,7 @@ import com.qrsecurity.detector.datos.local.entidades.SyncStateEntity
 import com.qrsecurity.detector.datos.local.entidades.UrlBloqueadaEntity
 import com.qrsecurity.detector.datos.local.entidades.UrlCatalogoEntity
 import com.qrsecurity.detector.datos.local.migraciones.Migracion3A4
+import com.qrsecurity.detector.datos.local.migraciones.Migracion4A5
 
 /**
  * Base de datos Room — fuente de verdad local (offline-first).
@@ -36,10 +37,11 @@ import com.qrsecurity.detector.datos.local.migraciones.Migracion3A4
  *   - urls_catalogo (cache maestro de dedup: una fila por URL escaneada,
  *     último estado + conteo; lookup O(log n) por urlHash SHA-256)
  *
- * Version 4 — Schema exportado a `app/schemas/` por KSP.
+ * Version 5 — Schema exportado a `app/schemas/` por KSP.
  *   v1 → v2: FK Denuncia→Categoria + indices en url/idCategoria/(tabla,idLocal)/nombre.
  *   v2 → v3: columna ultimoCursorModificacion en sync_state (delta sync cursor).
  *   v3 → v4: tabla urls_catalogo + backfill desde escaneos (cache de deduplicacion).
+ *   v4 → v5: columna notasAnalisis en escaneos (Pencil "Note vN" en AnalisisAnteriores).
  *
  * Singleton thread-safe via `companion object get()`. El patrón `@Volatile`
  * + double-checked locking garantiza una sola instancia por proceso.
@@ -54,7 +56,7 @@ import com.qrsecurity.detector.datos.local.migraciones.Migracion3A4
         SyncStateEntity::class,
         UrlCatalogoEntity::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = true
 )
 abstract class BaseDatosSeguridad : RoomDatabase() {
@@ -203,6 +205,30 @@ abstract class BaseDatosSeguridad : RoomDatabase() {
         }
 
         /**
+         * Migration 4 → 5:
+         *
+         * Cambio aditivo — añade la columna `notasAnalisis TEXT` a la tabla
+         * `escaneos`. Pencil "Note vN" en AnalisisAnteriores (Lb1HV) consume
+         * esta columna: el usuario registra manualmente una nota de análisis
+         * sobre un escaneo previo y se persiste (offline-first en Room →
+         * sync hacia el backend en `historial_escaneos.notas_analisis`).
+         *
+         * ALTER TABLE ADD COLUMN es instantáneo en SQLite (no reescribe la
+         * tabla) — no hay riesgo de bloqueo ni de pérdida de datos. La
+         * columna es nullable: los escaneos existentes (v4) y los nuevos sin
+         * nota quedan con NULL.
+         *
+         * Delega en [Migracion4A5.migrar] (extraído a objeto para testeabilidad:
+         * ejercido por [com.qrsecurity.detector.datos.local.migraciones.Migracion4A5Test]
+         * contra un esquema v4 simplificado sin instanciar toda la Room).
+         */
+        val MIGRATION_4_5: Migration = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                Migracion4A5.migrar(db)
+            }
+        }
+
+        /**
          * Obtiene o construye la instancia unica de la base de datos.
          * Thread-safe via double-checked locking.
          *
@@ -219,7 +245,7 @@ abstract class BaseDatosSeguridad : RoomDatabase() {
                     BaseDatosSeguridad::class.java,
                     "qr_guardian.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                     .also { builder ->
                         if (BuildConfig.DEBUG) {
                             builder.fallbackToDestructiveMigration()

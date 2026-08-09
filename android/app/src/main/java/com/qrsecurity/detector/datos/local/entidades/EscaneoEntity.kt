@@ -44,5 +44,6 @@ data class EscaneoEntity(
     val esMalicioso: Boolean,
     val creadoEnMillis: Long,
     val dirty: Boolean = false,
-    val syncedAtMillis: Long? = null
+    val syncedAtMillis: Long? = null,
+    val notasAnalisis: String? = null  // Pencil "Note vN" — nullable, set manually from AnalisisAnteriores
 )

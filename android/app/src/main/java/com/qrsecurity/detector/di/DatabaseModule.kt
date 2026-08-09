@@ -49,7 +49,8 @@ object DatabaseModule {
             .addMigrations(
                 BaseDatosSeguridad.MIGRATION_1_2,
                 BaseDatosSeguridad.MIGRATION_2_3,
-                BaseDatosSeguridad.MIGRATION_3_4
+                BaseDatosSeguridad.MIGRATION_3_4,
+                BaseDatosSeguridad.MIGRATION_4_5
             )
             .also { builder ->
                 if (BuildConfig.DEBUG) {
