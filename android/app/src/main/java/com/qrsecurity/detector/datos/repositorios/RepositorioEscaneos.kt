@@ -62,44 +62,19 @@ class RepositorioEscaneos(
 
     // ── Observacion reactiva (UI usa estos Flows) ──
     //
-    // Bug 2 fix: observarTodos/Seguros/Maliciosos ahora devuelven la ULTIMA
-    // version de cada URL (deduplicado). Los reescaneos no aparecen en el
-    // historial; viven en la pantalla de Detalle via [observarReescaneos].
+    // observarTodos devuelve la ULTIMA version de cada URL (deduplicado).
+    // Los reescaneos no aparecen en el historial; viven en la pantalla de
+    // Detalle via [observarReescaneosTodos].
 
     fun observarTodos(): Flow<List<EscaneoEntity>> = db.escaneoDao().observarTodosUnicos()
 
-    fun observarSeguros(): Flow<List<EscaneoEntity>> = db.escaneoDao().observarSegurosUnicos()
-
-    fun observarMaliciosos(): Flow<List<EscaneoEntity>> = db.escaneoDao().observarMaliciososUnicos()
-
-    fun observarDirty(): Flow<List<EscaneoEntity>> = db.escaneoDao().observarDirty()
-
-    // ── Reescaneos (versiones anteriores de una URL) ──
-    //
-    // Bug 2 fix: la pantalla de Detalle muestra los reescaneos paginados
-    // (5 por pagina). [observarReescaneos] devuelve los reescaneos de una
-    // URL excepto la fila [idActual] que el usuario esta viendo.
-    // [observarTotalReescaneos] cuenta el total para saber si hay mas.
-
-    fun observarReescaneos(
-        urlLimpia: String,
-        idActual: String,
-        limite: Int,
-        offset: Int
-    ): Flow<List<EscaneoEntity>> =
-        db.escaneoDao().observarReescaneos(urlLimpia, idActual, limite, offset)
-
     /**
      * Devuelve el Flow reactivo con TODOS los reescaneos de [urlLimpia]
-     * (excluyendo [idActual]), sin paginar. Mirror de [observarTodos] para
-     * el historial: Room re-emite automaticamente al cambiar la tabla, asi
-     * que la UI que colecta este Flow nunca necesita volver a consultar al
-     * volver a la pagina (cache automatico).
+     * (excluyendo [idActual]), sin paginar. Room re-emite automaticamente
+     * al cambiar la tabla, asi que la UI que colecta este Flow nunca
+     * necesita volver a consultar al volver a la pagina (cache automatico).
      *
-     * Usado por [com.qrsecurity.detector.ui.ReescaneosViewModel] bajo el
-     * patron reactivo (igual que [DatosTabsViewModel.historialTodos] para
-     * el historial): `stateIn(WhileSubscribed(5_000), emptyList())` —
-     * sin spinner `Cargando`, Room emite la lista cacheada en <1ms.
+     * Consumer: [AnalisisAnterioresViewModel].
      */
     fun observarReescaneosTodos(
         urlLimpia: String,
@@ -118,24 +93,8 @@ class RepositorioEscaneos(
     // metodos son `suspend` y devuelven `List` / `Int` puntuales.
 
     /**
-     * Snapshot puntual (no Flow) de reescaneos para carga inicial y
-     * paginacion. Devuelve hasta [limite] reescaneos empezando en [offset],
-     * excluyendo [idActual], ordenados por `creadoEnMillis DESC`.
-     */
-    suspend fun observarReescaneosSnapshot(
-        urlLimpia: String,
-        idActual: String,
-        limite: Int,
-        offset: Int
-    ): List<EscaneoEntity> = withContext(ioDispatcher) {
-        // Re-usamos el Flow del DAO con first() para obtener la snapshot.
-        db.escaneoDao().observarReescaneos(urlLimpia, idActual, limite, offset)
-            .first()
-    }
-
-    /**
      * Snapshot puntual (no Flow) del total de reescaneos de una URL,
-     * excluyendo [idActual]. Usado por DetalleEscaneoViewModel al cargar
+     * excluyendo [idActual]. Usado por [DetalleUrlViewModel] al cargar
      * el escaneo para saber si hay mas reescaneos por paginar.
      */
     suspend fun contarReescaneosSnapshot(urlLimpia: String, idActual: String): Int =
@@ -145,7 +104,7 @@ class RepositorioEscaneos(
 
     /**
      * Comprueba si el escaneo [id] es la version mas reciente de su
-     * `urlLimpia`. Usado por DetalleEscaneoViewModel para decidir si
+     * `urlLimpia`. Usado por [DetalleUrlViewModel] para decidir si
      * mostrar los botones de accion (solo en la ultima version).
      */
     suspend fun esUltimaVersion(id: String): Boolean = withContext(ioDispatcher) {
@@ -165,9 +124,6 @@ class RepositorioEscaneos(
     fun observarTotal(): Flow<Int> = db.escaneoDao().observarTotalUnicos()
 
     fun observarAmenazas(): Flow<Int> = db.escaneoDao().observarAmenazasUnicas()
-
-    fun observarUltimos7Dias(): Flow<Int> =
-        db.escaneoDao().observarUltimos7DiasUnicos()
 
     // ── Dedup: cache maestro urls_catalogo (lookup O(log n) por urlHash) ──
 
@@ -304,7 +260,14 @@ class RepositorioEscaneos(
     suspend fun eliminarLocal(id: String) = withContext(ioDispatcher) {
         db.withTransaction {
             val fila = db.escaneoDao().obtenerPorId(id)
-            if (fila != null && fila.dirty) {
+            // Bug M3 fix: fila == null (doble-tap en eliminar o id inexistente)
+            // → NO encolamos DELETE: el backend devolveria 404 y lo tratariamos
+            // como exito (wasteful). Ademas evita DELETE ops huerfanos que
+            // ensucian la cola y se reintentan sin efecto.
+            if (fila == null) {
+                return@withTransaction
+            }
+            if (fila.dirty) {
                 // Row dirty: nunca llego al backend. Borrar el CREATE op
                 // pendiente para que no se procese despues, y borrar el
                 // row local. No encolamos DELETE.
@@ -356,7 +319,12 @@ class RepositorioEscaneos(
             val ids = db.escaneoDao().idsPorUrlLimpia(urlLimpia)
             for (id in ids) {
                 val fila = db.escaneoDao().obtenerPorId(id)
-                if (fila != null && fila.dirty) {
+                // Bug M3 fix: fila desaparecio entre el listado y el fetch
+                // (race de doble-tap) → skip, no encolar DELETE huerfano.
+                if (fila == null) {
+                    continue
+                }
+                if (fila.dirty) {
                     val opCreate = db.pendingOpDao().findExisting(
                         tabla = "escaneos",
                         idLocal = id,
@@ -378,6 +346,11 @@ class RepositorioEscaneos(
                     db.pendingOpDao().insertar(op)
                 }
             }
+            // WAVE 15 fix (S4): borrar tambien el row de urls_catalogo en la
+            // misma transaccion. Sin esto, un re-escaneo de la misma URL
+            // quedaria bloqueado: esUrlDuplicada() mira urls_catalogo y el row
+            // seguia ahi aunque los escaneos ya se habian borrado.
+            db.urlCatalogoDao().eliminarPorHash(sha256Hex(urlLimpia))
         }
     }
 
@@ -402,28 +375,41 @@ class RepositorioEscaneos(
      * Si [cursor] es epoch (1970-01-01T00:00:00Z), equivale a un full pull
      * paginado. Si [cursor] es una fecha reciente, es un delta pull.
      *
+     * Bug A1 fix (keyset pagination): el cursor se persiste como "ts|id" de
+     * la ULTIMA fila del batch (no solo max(updated_at)). El backend filtra
+     * `(updated_at, id) > (cursor_ts, cursor_id)` ordenado ASC, asi que:
+     *  - la fila limite (updated_at == cursor) avanza via el tiebreaker `id`
+     *    → se elimina el refetch infinito de la fila limite; y
+     *  - las paginas siguientes usan el cursor avanzado, no cursor fijo +
+     *    offset → inserts concurrentes entre batches ya no desplazan filas
+     *    (sin perdida permanente).
+     * Cursores viejos (solo ISO, sin '|') siguen funcionando: [cursorId] se
+     * omite y el backend usa el modo legacy `>=`; el primer batch reescribe
+     * el cursor en el formato nuevo.
+     *
      * Flujo:
-     *  1. GET /escaneos?modificados_desde=<cursor>&limite=200&offset=0
+     *  1. GET /escaneos?modificados_desde=<cursorTs>&limite=200[&cursor_id=<id>]
      *  2. Aplicar tombstones (deleted_at != null → eliminar local)
      *  3. Upsert filas vivas (INSERT OR REPLACE)
-     *  4. Avanzar cursor a max(updated_at) del batch — EN LA MISMA TRANSACCION
+     *  4. Avanzar cursor a "ts|id" de la ultima fila — EN LA MISMA TRANSACCION
      *  5. Si batch < limite → tabla al dia (masPorSincronizar=false)
      *  6. Si pagina == MAX_PAGINAS_POR_RUN → mas paginas pendientes
-     *  7. Sino: offset += limite, repetir
+     *  7. Sino: repetir con el cursor avanzado del paso 4
      *
      * El cursor se persiste por batch (dentro de la transaccion de upsert)
      * para que un crash mid-run no repita batches ya aplicados.
      */
     suspend fun sincronizarDelta(token: String, cursor: String): ResultadoSync = withContext(ioDispatcher) {
         try {
-            var offset = 0
+            var cursorTs = cursor.substringBefore('|')
+            var cursorId = cursor.substringAfter('|', "").ifEmpty { null }
             var totalFilas = 0
             val todosIdsServidor = mutableListOf<String>()
             var masPorSincronizar = false
             val ahora = System.currentTimeMillis()
 
             for (pagina in 1..MAX_PAGINAS_POR_RUN) {
-                val delta = backend.listarEscaneosDelta(token, cursor, LIMITE_PAGINA, offset)
+                val delta = backend.listarEscaneosDelta(token, cursorTs, LIMITE_PAGINA, cursorId = cursorId)
 
                 if (delta.isEmpty()) break
 
@@ -433,7 +419,16 @@ class RepositorioEscaneos(
 
                 if (delta.size < LIMITE_PAGINA) break
 
-                offset += LIMITE_PAGINA
+                // Avanzar el cursor keyset con la ULTIMA fila del batch (el
+                // backend ordena por (updated_at, id) ASC — delta.last() es el
+                // maximo compuesto). `updatedAt` nunca deberia ser null en una
+                // fila servida; si lo fuera, no avanzamos y el proximo run
+                // reintenta desde el mismo punto (sin perdida, igual que antes).
+                val ultima = delta.last()
+                if (ultima.updatedAt != null) {
+                    cursorTs = ultima.updatedAt
+                    cursorId = ultima.id
+                }
                 if (pagina == MAX_PAGINAS_POR_RUN) masPorSincronizar = true
             }
 
@@ -474,9 +469,11 @@ class RepositorioEscaneos(
             db.escaneoDao().insertarTodos(entidades)
         }
 
-        val nuevoCursor = delta.mapNotNull { it.updatedAt }.maxByOrNull { it }
-        if (nuevoCursor != null) {
-            db.syncStateDao().actualizarCursor("escaneos", nuevoCursor)
+        // Bug A1 fix: cursor keyset compuesto "ts|id" de la ultima fila del
+        // batch, no max(updated_at) a secas (que re-traia la fila limite).
+        val ultima = delta.last()
+        if (ultima.updatedAt != null) {
+            db.syncStateDao().actualizarCursor("escaneos", "${ultima.updatedAt}|${ultima.id}")
         }
         db.syncStateDao().actualizar("escaneos", ahora, exitosa = true)
 
@@ -547,12 +544,30 @@ class RepositorioEscaneos(
                 probabilidad = entidadLocal.probabilidad,
                 nivelAlerta = entidadLocal.nivelAlerta,
                 delegado = entidadLocal.delegado,
-                notasAnalisis = entidadLocal.notasAnalisis
+                notasAnalisis = entidadLocal.notasAnalisis,
+                // Bug A5 fix: idempotencia server-side — el backend hace
+                // fetch-or-create por (id_usuario, id_cliente) y un replay
+                // del mismo CREATE devuelve la fila existente.
+                idCliente = op.idLocal
             )
             // Re-key: el id local (client UUID) se reemplaza por el id servidor (server UUID).
             val ahora = System.currentTimeMillis()
             db.withTransaction {
-                if (escaneoRespuesta.id != entidadLocal.id) {
+                // Bug C1 fix: `backend.registrarEscaneo` corre FUERA de la
+                // transaccion Room. Entre que el POST devuelve 201 y esta
+                // transaccion, `eliminarLocal` (o `eliminarLocalPorUrlLimpia`
+                // en M1) puede haber borrado la fila local (rama `dirty`) junto
+                // con el pending op CREATE. En ese caso el re-key/marcarSincronizado
+                // afecta 0 filas, pero el servidor YA persistio la fila bajo
+                // id=U-B. Sin este fix, el siguiente PULL trae U-B (dirty=false)
+                // y la fila "eliminada" resucita como fantasma.
+                //
+                // Fix: si el re-key afecto 0 filas → la fila fue eliminada en
+                // vuelo → encolamos un DELETE con el **id de servidor** (U-B)
+                // para que el proximo PUSH lo borre del backend y el PULL no
+                // reintroduzca el fantasma. `borrarPorId(op.id)` es no-op si
+                // `eliminarLocal` ya borro el op CREATE.
+                val filasAfectadas = if (escaneoRespuesta.id != entidadLocal.id) {
                     db.escaneoDao().reKey(
                         idViejo = entidadLocal.id,
                         idNuevo = escaneoRespuesta.id,
@@ -560,6 +575,17 @@ class RepositorioEscaneos(
                     )
                 } else {
                     db.escaneoDao().marcarSincronizado(entidadLocal.id, ahora)
+                }
+                if (filasAfectadas == 0) {
+                    db.pendingOpDao().insertar(
+                        PendingOpEntity(
+                            tabla = "escaneos",
+                            tipoOperacion = "DELETE",
+                            idLocal = escaneoRespuesta.id,
+                            payloadJson = null,
+                            creadoEnMillis = ahora
+                        )
+                    )
                 }
                 db.pendingOpDao().borrarPorId(op.id)
             }
@@ -592,11 +618,24 @@ class RepositorioEscaneos(
             // 401/403 y devolvera Result.failure, llevando al logout).
             // 429/5xx/408/IOException pura: transitorio / backoff.
             if (e.codigo == 409) {
-                val ahora = System.currentTimeMillis()
+                // Bug A2 fix: antes `marcarSincronizado(op.idLocal, ahora)`
+                // dejaba la fila local con id=U-A marcada como synced, pero
+                // el servidor tiene el row bajo id=U-Z. El siguiente PULL
+                // trae U-Z (PK distinta) → `INSERT OR REPLACE` no colisiona
+                // → dos filas en el log `escaneos` (U-A marcada synced +
+                // U-Z nueva del servidor). `observarTodosUnicos` dedup por
+                // `urlLimpia` esconde una, pero `observarReescaneos` la
+                // muestra como fantasma en la pantalla de Detalle.
+                //
+                // Fix: eliminar la fila local U-A. El servidor ya tiene el
+                // row (bajo id=U-Z), y el siguiente PULL hara
+                // `INSERT OR REPLACE` con U-Z limpio — sin duplicados. El
+                // cache maestro `urls_catalogo` NO se toca: ya refleja que
+                // la URL fue escaneada (correcto, el servidor la tiene), y
+                // su `vecesEscaneada`/ultimo estado se alinearan via LWW
+                // cuando el PULL traiga U-Z. El op se borra de la cola.
                 db.withTransaction {
-                    // Marca la fila como sincronizada sin re-key — el
-                    // siguiente PULL sincronizara el id servidor via LWW.
-                    db.escaneoDao().marcarSincronizado(op.idLocal, ahora)
+                    db.escaneoDao().eliminarPorId(op.idLocal)
                     db.pendingOpDao().borrarPorId(op.id)
                 }
                 true
@@ -722,19 +761,31 @@ sealed class ResultadoSync {
     ) : ResultadoSync()
 }
 
-/** Extension: mapea un DTO Escaneo del backend a la entidad Room (LWW, server source). */
+// ── WAVE 11 fix (C1 CRITICAL): esMalicioso se deriva SIEMPRE de nivelAlerta,
+// igual que el path local (l.174). Antes aEntidad copiaba el bool del DTO
+// (`es_malicious`), que puede desincronizarse del nivelAlerta por bug de
+// backend, partial update o DB drift — un scan MALICIOSO aparecia en la
+// pestaña "Seguros". Ahora nivelAlerta es la unica fuente de verdad.
 private fun Escaneo.aEntidad(syncedAt: Long): EscaneoEntity {
     val creadoMillis = try {
         Instant.parse(creadoEn).toEpochMilli()
     } catch (e: Exception) {
-        System.currentTimeMillis()  // fallback si ISO parse falla
+        // WAVE 13 fix (M2): antes System.currentTimeMillis() → la fila aparecia
+        // como "hoy" en el historial y rompia el ORDER BY creadoEnMillis DESC
+        // (dedup por ultima version). Usamos Long.MIN_VALUE como sentinel para
+        // que el row se ordene al fondo (fecha desconocida) y sea detectable
+        // en diagnostico. No dropamos la fila: el backend la mando, el usuario
+        // merece verla; solo no debe contaminar el orden cronologico.
+        Long.MIN_VALUE
     }
+    val nivelUpper = nivelAlerta.uppercase()
+    val esMalicioso = nivelUpper == "MALICIOSO"
     return EscaneoEntity(
         id = id,
         urlOriginal = urlOriginal,
         urlLimpia = urlLimpia,
         probabilidad = probabilidad,
-        nivelAlerta = nivelAlerta.uppercase(),
+        nivelAlerta = nivelUpper,
         delegado = delegado,
         esMalicioso = esMalicioso,
         creadoEnMillis = creadoMillis,
