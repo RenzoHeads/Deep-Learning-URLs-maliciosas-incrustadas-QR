@@ -172,3 +172,139 @@ def test_get_escaneos_count_excluye_soft_deleted(client, store):
     r = client.get("/escaneos/count?filtro=todos&token_api=test-token")
     total = r.json()["total"]
     assert total == 0, "count debe ignorar rows con deleted_at set"
+
+
+# ============================================================================
+# KEYSET — paginacion por llave compuesta (updated_at, id) — Bug A1 fix
+# ============================================================================
+def test_keyset_fila_limite_no_se_repite_con_mismo_updated_at(client, store):
+    """Bug A1 fix: con ``cursor_id``, la fila limite (igual ``updated_at``,
+    id menor) NO se vuelve a devolver — el tiebreaker por ``id`` elimina el
+    refetch infinito que tenia la rama ``updated_at >=`` (la fila con
+    ``updated_at == modificados_desde`` coincidia de nuevo en cada pagina).
+    """
+    from datetime import datetime, timedelta, timezone
+
+    for _ in range(3):
+        _crear_escaneo(client)
+    t0 = datetime(2026, 7, 1, tzinfo=timezone.utc)
+    rows = store["historial_escaneos"]
+    rows[0].update(id=uuid.UUID(int=1), updated_at=t0)
+    rows[1].update(id=uuid.UUID(int=2), updated_at=t0)  # fila limite (mismo ts)
+    rows[2].update(id=uuid.UUID(int=3), updated_at=t0 + timedelta(hours=1))
+
+    # Pagina 1 (sin cursor, rama legacy): [id1, id2] en orden ASC por updated_at.
+    r1 = client.get(
+        "/escaneos?modificados_desde=2026-07-01T00:00:00Z&limite=2&token_api=test-token"
+    )
+    assert r1.status_code == 200, r1.text
+    p1 = r1.json()
+    assert [e["id"] for e in p1] == [str(uuid.UUID(int=1)), str(uuid.UUID(int=2))], p1
+
+    # Pagina 2 (avance de cursor del cliente: modificados_desde = updated_at del
+    # ultimo row recibido + cursor_id = su id): la fila id2 (mismo ts, id menor)
+    # NO debe repetirse — solo id3.
+    r2 = client.get(
+        f"/escaneos?modificados_desde={p1[-1]['updated_at']}&limite=2"
+        f"&cursor_id={p1[-1]['id']}&token_api=test-token"
+    )
+    assert r2.status_code == 200, r2.text
+    p2 = r2.json()
+    assert [e["id"] for e in p2] == [str(uuid.UUID(int=3))], (
+        f"La fila limite (mismo updated_at, id menor) no debe repetirse: {p2}"
+    )
+
+
+def test_keyset_insert_concurrente_entre_paginas_no_pierde_filas(client, store):
+    """Bug A1 fix: un row insertado entre pagina 1 y pagina 2 no se pierde.
+
+    Con OFFSET fijo la ventana se corre y la fila nueva queda fuera (o
+    duplica la fila limite). Con keyset el filtro es por llave compuesta
+    estricta — la fila nueva cae dentro del rango y se entrega.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    for _ in range(3):
+        _crear_escaneo(client)
+    t0 = datetime(2026, 7, 1, tzinfo=timezone.utc)
+    rows = store["historial_escaneos"]
+    rows[0].update(id=uuid.UUID(int=1), updated_at=t0)
+    rows[1].update(id=uuid.UUID(int=2), updated_at=t0 + timedelta(hours=1))
+    rows[2].update(id=uuid.UUID(int=3), updated_at=t0 + timedelta(hours=3))
+
+    # Pagina 1: limite=2 -> [id1, id2]
+    r1 = client.get(
+        "/escaneos?modificados_desde=2026-06-30T00:00:00Z&limite=2&token_api=test-token"
+    )
+    assert r1.status_code == 200, r1.text
+    p1 = r1.json()
+    assert [e["id"] for e in p1] == [str(uuid.UUID(int=1)), str(uuid.UUID(int=2))], p1
+
+    # Insert "concurrente" ENTRE paginas: row nuevo con updated_at entre id2 e id3.
+    _crear_escaneo(client)
+    con = store["historial_escaneos"][-1]
+    con["id"] = uuid.UUID(int=4)
+    con["updated_at"] = t0 + timedelta(hours=2)
+
+    # Pagina 2 (cursor = id2): debe incluir la fila nueva (id4) y luego id3.
+    r2 = client.get(
+        f"/escaneos?modificados_desde={p1[-1]['updated_at']}&limite=2"
+        f"&cursor_id={p1[-1]['id']}&token_api=test-token"
+    )
+    assert r2.status_code == 200, r2.text
+    p2 = r2.json()
+    assert [e["id"] for e in p2] == [str(uuid.UUID(int=4)), str(uuid.UUID(int=3))], (
+        f"El insert concurrente no debe perderse ni duplicar filas: {p2}"
+    )
+
+
+def test_keyset_barrido_completo_sin_duplicados_ni_perdidas(client, store):
+    """Bug A1 fix: iterar todas las paginas con avance de cursor compuesto
+    (modificados_desde + cursor_id) no duplica ni pierde filas, incluso con
+    `updated_at` repetidos (el tiebreaker por id desempata).
+    """
+    from datetime import datetime, timedelta, timezone
+
+    for _ in range(5):
+        _crear_escaneo(client)
+    t0 = datetime(2026, 7, 1, tzinfo=timezone.utc)
+    rows = store["historial_escaneos"]
+    ts_seq = [
+        t0,
+        t0,  # tiebreaker: mismo ts que el anterior
+        t0 + timedelta(hours=1),
+        t0 + timedelta(hours=1),  # tiebreaker: mismo ts que el anterior
+        t0 + timedelta(hours=2),
+    ]
+    for i, (row, ts) in enumerate(zip(rows, ts_seq)):
+        row["id"] = uuid.UUID(int=i + 1)
+        row["updated_at"] = ts
+
+    # Simula el bucle del cliente (RepositorioEscaneos.sincronizarDelta).
+    modificados_desde = "2026-06-30T00:00:00Z"
+    cursor_id = None
+    vistos: list[str] = []
+    while True:
+        url = (
+            f"/escaneos?modificados_desde={modificados_desde}&limite=2"
+            f"&token_api=test-token"
+        )
+        if cursor_id:
+            url += f"&cursor_id={cursor_id}"
+        r = client.get(url)
+        assert r.status_code == 200, r.text
+        pagina = r.json()
+        if not pagina:
+            break
+        for e in pagina:
+            assert e["id"] not in vistos, f"duplicado en barrido: {e['id']}"
+            vistos.append(e["id"])
+        ultimo = pagina[-1]
+        modificados_desde = ultimo["updated_at"]
+        cursor_id = ultimo["id"]
+
+    esperados = [str(uuid.UUID(int=i)) for i in range(1, 6)]
+    assert vistos == esperados, (
+        f"El barrido keyset debe devolver cada fila exactamente una vez en "
+        f"orden (updated_at, id) ASC. Vistos: {vistos}; esperados: {esperados}"
+    )

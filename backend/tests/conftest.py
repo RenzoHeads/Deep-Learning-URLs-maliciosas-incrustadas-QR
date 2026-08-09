@@ -78,11 +78,13 @@ class FakeConnection:
     @staticmethod
     def _matches(row: dict, eq_conds: list[tuple[str, Any]] = None,
                  ge_conds: list[tuple[str, str, Any]] = None,
+                 keyset_conds: list[tuple[str, Any, str, Any]] = None,
                  is_null: list[str] = None,
                  is_not_null: list[str] = None) -> bool:
         """Verifica si una row cumple todas las condiciones del WHERE."""
         eq_conds = eq_conds or []
         ge_conds = ge_conds or []
+        keyset_conds = keyset_conds or []
         is_null = is_null or []
         is_not_null = is_not_null or []
 
@@ -126,6 +128,30 @@ class FakeConnection:
                     if not (rv >= val):
                         return False
 
+        # Bug A1 fix (keyset pagination): (ts > V) OR (ts == V AND id > IV).
+        # Emula la comparacion estricta de llave compuesta del backend real.
+        for ts_col, ts_val, id_col, id_val in keyset_conds:
+            rv_ts = row.get(ts_col)
+            if rv_ts is None:
+                return False
+            if isinstance(rv_ts, datetime):
+                if not isinstance(ts_val, datetime):
+                    try:
+                        ts_val = datetime.fromisoformat(str(ts_val))
+                    except ValueError:
+                        return False
+                ts_gt = rv_ts > ts_val
+                ts_eq = rv_ts == ts_val
+            else:
+                # Comparacion de strings (ISO 8601 UTC = orden cronologico).
+                ts_gt = str(rv_ts) > str(ts_val)
+                ts_eq = str(rv_ts) == str(ts_val)
+            # La fila matchea si su ts es mayor, o si es igual y su id es mayor
+            # (tiebreaker lexicografico — los ids UUID canonicos comparan igual
+            # que en Postgres).
+            if not (ts_gt or (ts_eq and str(row.get(id_col, "")) > str(id_val))):
+                return False
+
         for col in is_null:
             rv = row.get(col)
             # IS NULL matchea si la col falta o su valor es None.
@@ -141,15 +167,39 @@ class FakeConnection:
         return True
 
     @staticmethod
-    def _parse_conditions(sql: str, params: list) -> tuple[list[tuple[str, Any]], list[tuple[str, str, Any]]]:
-        """Extrae condiciones ``col = $i`` y ``col >= $i`` del WHERE.
+    def _parse_conditions(sql: str, params: list) -> tuple[list[tuple[str, Any]], list[tuple[str, str, Any]], list]:
+        """Extrae condiciones del WHERE.
 
         Returns:
             eq_conds: lista de (col, val) para condiciones de igualdad.
             ge_conds: lista de (col, ">=", val) para condiciones >= (delta sync).
+            keyset_conds: lista de (ts_col, ts_val, id_col, id_val) para la
+                condicion keyset `(updated_at > $A OR (updated_at = $A AND
+                id::text > $B))` — Bug A1 fix (pagina por llave compuesta).
         """
         eq_conds: list[tuple[str, Any]] = []
         ge_conds: list[tuple[str, str, Any]] = []
+        keyset_conds: list[tuple[str, Any, str, Any]] = []
+
+        # Bug A1 fix: keyset pagination — `(updated_at > $N OR (updated_at = $N
+        # AND id::text > $M))`. Detectamos el patron (con prefijo de tabla
+        # opcional, ej. `d.updated_at`) y lo quitamos del SQL para que eq/ge
+        # no lo re-parseen como igualdad simple.
+        m_ks = re.search(
+            r"\(\s*(?:[\w_]+\.)?([\w_]+)\s*>\s*\$(\d+)\s+OR\s+"
+            r"\(\s*(?:[\w_]+\.)?\1\s*=\s*\$(\d+)\s+AND\s+"
+            r"(?:[\w_]+\.)?([\w_]+)(?:::\w+)?\s*>\s*\$(\d+)\s*\)\s*\)",
+            sql,
+            flags=re.IGNORECASE,
+        )
+        if m_ks:
+            ts_col, ts_gt_idx, ts_eq_idx, id_col, id_gt_idx = m_ks.groups()
+            # ts va en el placeholder de la igualdad (mismo valor que el >).
+            ts_val = params[int(ts_eq_idx) - 1]
+            id_val = params[int(id_gt_idx) - 1]
+            keyset_conds.append((ts_col, ts_val, id_col, id_val))
+            sql = sql[: m_ks.start()] + " " + sql[m_ks.end():]
+
         for m in re.finditer(
             r"([\w_]+)\s*=\s*\$(\d+)", sql, flags=re.IGNORECASE
         ):
@@ -162,7 +212,7 @@ class FakeConnection:
             col, idx = m.group(1), int(m.group(2))
             if 1 <= idx <= len(params):
                 ge_conds.append((col, ">=", params[idx - 1]))
-        return eq_conds, ge_conds
+        return eq_conds, ge_conds, keyset_conds
 
     @staticmethod
     def _parse_is_null(sql: str) -> tuple[list[str], list[str]]:
@@ -253,9 +303,9 @@ class FakeConnection:
     ) -> list[FakeRecord]:
         table = self._table(sql)
         rows = self._store.get(table, [])
-        eq_conds, ge_conds = self._parse_conditions(sql, params)
+        eq_conds, ge_conds, keyset_conds = self._parse_conditions(sql, params)
         is_null, is_not_null = self._parse_is_null(sql)
-        matched = [r for r in rows if self._matches(r, eq_conds, ge_conds, is_null, is_not_null)]
+        matched = [r for r in rows if self._matches(r, eq_conds, ge_conds, keyset_conds, is_null, is_not_null)]
 
         if "COUNT" in sql.upper():
             return [FakeRecord({"count": len(matched)})]
@@ -266,19 +316,22 @@ class FakeConnection:
 
         if "RETURNING" in sql.upper() and "UPDATE" in sql.upper():
             # UPDATE ... RETURNING (resurrect de URLs bloqueadas).
-            return await self._update_returning(sql, params, table, eq_conds, ge_conds, is_null, is_not_null)
+            return await self._update_returning(sql, params, table, eq_conds, ge_conds, keyset_conds, is_null, is_not_null)
 
         # SELECT normal: devolver todos los que matcheen.
-        # En modo delta (updated_at >=), ordenar ASC por updated_at.
+        # En modo delta (updated_at >= o keyset), ordenar ASC por updated_at.
         # En modo normal, ordenar DESC por creado_en.
         sql_u = sql.upper()
-        if ge_conds:
-            # Delta: ORDER BY updated_at ASC.
+        if ge_conds or keyset_conds:
+            # Delta: ORDER BY updated_at ASC (con tiebreaker id ASC en modo
+            # keyset — Bug A1 fix).
             def _key_delta(r: dict) -> Any:
                 ua = r.get("updated_at")
                 if ua is None:
                     # Para legacy rows sin updated_at, usar creado_en como fallback.
                     ua = r.get("creado_en") or datetime.min.replace(tzinfo=timezone.utc)
+                if keyset_conds:
+                    return (ua, str(r.get("id", "")))
                 return ua
             matched_sorted = sorted(matched, key=_key_delta)
         else:
@@ -310,6 +363,9 @@ class FakeConnection:
         new_row: dict[str, Any] = {}
 
         if table == "historial_escaneos":
+            # Bug A5 fix: el INSERT ahora incluye `id_cliente` como $9
+            # (clave de idempotencia server-side, opcional — None para
+            # clientes legacy que no lo envian).
             new_row = {
                 "id": uuid.uuid4(),
                 "id_usuario": str(params[0]),
@@ -320,6 +376,7 @@ class FakeConnection:
                 "delegado": params[5],
                 "notas_analisis": params[6],
                 "es_malicioso": params[7],
+                "id_cliente": params[8] if len(params) > 8 else None,
                 "creado_en": datetime.now(timezone.utc),
                 "updated_at": datetime.now(timezone.utc),
                 "deleted_at": None,
@@ -345,6 +402,7 @@ class FakeConnection:
                 "id_usuario": str(params[0]),
                 "url": params[1],
                 "razon": params[2],
+                "id_cliente": params[3] if len(params) > 3 else None,
                 "creado_en": datetime.now(timezone.utc),
                 "updated_at": datetime.now(timezone.utc),
                 "deleted_at": None,
@@ -357,6 +415,7 @@ class FakeConnection:
                 "id_categoria": params[2],
                 "descripcion": params[3],
                 "estado": "PENDIENTE",
+                "id_cliente": params[4] if len(params) > 4 else None,
                 "creado_en": datetime.now(timezone.utc),
                 "updated_at": datetime.now(timezone.utc),
                 "deleted_at": None,
@@ -437,7 +496,7 @@ class FakeConnection:
         rows = self._store.get(table, [])
         conds = self._parse_conditions(sql, params)[0]
         is_null, is_not_null = self._parse_is_null(sql)
-        kept = [r for r in rows if not self._matches(r, conds, [], is_null, is_not_null)]
+        kept = [r for r in rows if not self._matches(r, conds, [], [], is_null, is_not_null)]
         removed = len(rows) - len(kept)
         self._store[table] = kept
         return f"DELETE {removed}"
@@ -447,13 +506,13 @@ class FakeConnection:
         Aplica el cambio a las rows que matcheen el WHERE."""
         table = self._table(sql)
         rows = self._store.get(table, [])
-        eq_conds, ge_conds = self._parse_conditions(sql, params)
+        eq_conds, ge_conds, keyset_conds = self._parse_conditions(sql, params)
         is_null, is_not_null = self._parse_is_null(sql)
         # Solo aplica a rows que matcheen el WHERE.
         # Para soft-delete: SET deleted_at = now(), updated_at = now()
         updated = 0
         for r in rows:
-            if self._matches(r, eq_conds, ge_conds, is_null, is_not_null):
+            if self._matches(r, eq_conds, ge_conds, keyset_conds, is_null, is_not_null):
                 if "deleted_at" in is_null or "deleted_at" in self._extract_set_cols(sql):
                     pass  # no-op por ahora
                 # Soft-delete: SET deleted_at, updated_at
@@ -497,6 +556,7 @@ class FakeConnection:
         self, sql: str, params: list, table: str,
         eq_conds: list[tuple[str, Any]],
         ge_conds: list[tuple[str, str, Any]],
+        keyset_conds: list[tuple[str, Any, str, Any]],
         is_null: list[str], is_not_null: list[str],
     ) -> list[FakeRecord]:
         """UPDATE ... RETURNING (resurrect de URLs bloqueadas)."""
@@ -504,7 +564,7 @@ class FakeConnection:
         # Para el resurrect: WHERE id = $1 AND id_usuario = $2 (sin IS NULL filter
         # porque la row ya esta borrada).
         for r in rows:
-            if self._matches(r, eq_conds, ge_conds, is_null, is_not_null):
+            if self._matches(r, eq_conds, ge_conds, keyset_conds, is_null, is_not_null):
                 r["deleted_at"] = None
                 r["updated_at"] = datetime.now(timezone.utc)
                 # Update razon si hay $3 en SET razon = $3.
