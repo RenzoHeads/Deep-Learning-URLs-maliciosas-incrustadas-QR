@@ -60,6 +60,24 @@ class SesionUsuario @Inject constructor(
     fun obtenerToken(): String? =
         prefs().getString(KEY_TOKEN, null)
 
+    /**
+     * F2.6: devuelve el nombre de usuario persistido en la sesion activa
+     * (null si no hay sesion o el campo esta vacio). Usado por
+     * [com.qrsecurity.detector.ui.AjustesViewModel] para mostrar el
+     * usuario en la pantalla de Ajustes.
+     */
+    fun obtenerNombreUsuario(): String? =
+        prefs().getString(KEY_USUARIO, null)
+
+    /**
+     * F2.6: devuelve el correo persistido en la sesion activa (null si no
+     * hay sesion o el campo esta vacio). Usado por
+     * [com.qrsecurity.detector.ui.AjustesViewModel] para mostrar el correo
+     * en la pantalla de Ajustes.
+     */
+    fun obtenerCorreo(): String? =
+        prefs().getString(KEY_CORREO, null)
+
     fun guardarSesion(token: String, usuario: String, correo: String = "") {
         prefs().edit()
             .putString(KEY_TOKEN, token)
