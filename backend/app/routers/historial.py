@@ -46,13 +46,39 @@ async def crear_escaneo(
     pool = await obtener_pool()
     async with pool.acquire() as conexion:
         async with conexion.transaction():
+            # Bug A5 fix (idempotencia server-side): si el cliente reenvía el
+            # mismo op CREATE tras un crash post-POST (el POST llegó al
+            # servidor pero el re-key local no se completó), devolvemos la
+            # fila existente en vez de crear una duplicada (fila fantasma
+            # U-C). La clave de idempotencia es `id_cliente` (= idLocal del
+            # pending op, UUID generado por el cliente, único por dispositivo).
+            if datos.id_cliente is not None:
+                fila_existente = await conexion.fetchrow(
+                    """
+                    SELECT id, url_original, url_limpia, probabilidad,
+                           nivel_alerta, delegado, notas_analisis, es_malicioso,
+                           creado_en, updated_at, deleted_at
+                    FROM historial_escaneos
+                    WHERE id_usuario = $1 AND id_cliente = $2 AND deleted_at IS NULL
+                    """,
+                    id_usuario,
+                    datos.id_cliente,
+                )
+                if fila_existente is not None:
+                    # Replay del POST original — no re-UPSERT del cache
+                    # maestro (nada cambió).
+                    return fila_a_escaneo(fila_existente)
+
             es_malicioso = datos.nivel_alerta == "MALICIOSO"
             fila = await conexion.fetchrow(
                 """
                 INSERT INTO historial_escaneos
                     (id_usuario, url_original, url_limpia, probabilidad,
-                     nivel_alerta, delegado, notas_analisis, es_malicioso)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                     nivel_alerta, delegado, notas_analisis, es_malicioso,
+                     id_cliente)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                ON CONFLICT (id_usuario, id_cliente)
+                    WHERE id_cliente IS NOT NULL DO NOTHING
                 RETURNING id, url_original, url_limpia, probabilidad,
                           nivel_alerta, delegado, notas_analisis, es_malicioso,
                           creado_en, updated_at, deleted_at
@@ -65,7 +91,24 @@ async def crear_escaneo(
                 datos.delegado,
                 datos.notas_analisis,
                 es_malicioso,
+                datos.id_cliente,
             )
+            if fila is None:
+                # Race concurrente rara: otra tx ganó el INSERT con el mismo
+                # id_cliente (unique index parcial). Re-SELECT para devolver
+                # la fila canónica (idempotencia durable — el INSERT espera a
+                # que la tx rival commitee antes de disparar DO NOTHING).
+                fila = await conexion.fetchrow(
+                    """
+                    SELECT id, url_original, url_limpia, probabilidad,
+                           nivel_alerta, delegado, notas_analisis, es_malicioso,
+                           creado_en, updated_at, deleted_at
+                    FROM historial_escaneos
+                    WHERE id_usuario = $1 AND id_cliente = $2 AND deleted_at IS NULL
+                    """,
+                    id_usuario,
+                    datos.id_cliente,
+                )
             # UPSERT del cache maestro urls_catalogo (atomicidad cache+log).
             await upsert_url_catalogo(
                 conexion,
@@ -85,23 +128,37 @@ async def listar_escaneos(
     modificados_desde: Annotated[datetime | None, Query(
         description="Fecha ISO 8601 desde donde obtener modificados (delta sync). Incluye tombstones (deleted_at != null)."
     )] = None,
+    cursor_id: Annotated[str | None, Query(
+        description="ID de la ultima fila recibida (keyset pagination, Bug A1 fix). "
+        "Si se envia junto a modificados_desde, el backend devuelve solo filas "
+        "con (updated_at, id) > (modificados_desde, cursor_id) — sin OFFSET."
+    )] = None,
 ):
     """Lista el historial de escaneos con filtro opcional y paginacion server-side.
 
     Modo normal (sin modificados_desde): devuelve solo escaneos NO eliminados
     (deleted_at IS NULL), ordenados por creado_en DESC.
 
-    Modo delta (con modificados_desde): devuelve todos los escaneos modificados
-    desde esa fecha (updated_at >= modificados_desde), incluyendo tombstones
-    (filas con deleted_at != null). El cliente debe eliminar localmente las
-    filas donde deleted_at != null. NO aplica filtro es_malicioso ni paginacion
-    en modo delta (devuelve todo el delta).
+    Modo delta (con ``modificados_desde``): devuelve todos los escaneos
+    modificados desde esa fecha (``updated_at >= modificados_desde``),
+    incluyendo tombstones (filas con ``deleted_at != null``). El cliente debe
+    eliminar localmente las filas donde ``deleted_at != null``. NO aplica el
+    filtro ``es_malicioso``, pero SI pagina con LIMIT/OFFSET (o con keyset
+    pagination + ``cursor_id``, ver abajo) — devuelve el delta por páginas,
+    no "todo el delta" en una sola respuesta.
+
+    Keyset pagination (con cursor_id): junto a modificados_desde, paginacion
+    por llave compuesta (updated_at, id) con comparacion estricta > — evita el
+    refetch infinito de la fila limite y la perdida de filas por inserts
+    concurrentes entre batches (Bug A1 fix).
 
     Args:
         filtro: "todos" (por defecto), "seguros" o "maliciosos".
         limite: cantidad maxima de registros a devolver (1-200, default 20).
         offset: numero de registros a saltar para paginacion (>= 0, default 0).
+                IGNORADO en modo keyset (cursor_id presente).
         modificados_desde: fecha ISO 8601 para delta sync (opcional).
+        cursor_id: ultimo id recibido para keyset pagination (opcional).
     """
     pool = await obtener_pool()
 
@@ -112,19 +169,44 @@ async def listar_escaneos(
         # Modo delta: filtrar por updated_at, incluir tombstones.
         # Paginacion server-side con LIMIT/OFFSET para soportar datasets
         # grandes (1M+ filas) sin OOM del cliente ni timeouts de red.
-        condiciones.append("updated_at >= $2")
-        params.append(modificados_desde)
-        where = _OP_AND.join(condiciones)
-        query = (
-            f"SELECT id, url_original, url_limpia, probabilidad, "
-            f"nivel_alerta, delegado, notas_analisis, es_malicioso, "
-            f"creado_en, updated_at, deleted_at "
-            f"FROM historial_escaneos WHERE {where} "
-            f"ORDER BY updated_at ASC "
-            f"LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
-        )
-        params.append(limite)
-        params.append(offset)
+        #
+        # Bug A1 fix (keyset pagination): si el cliente envia `cursor_id`,
+        # cambia a paginacion por llave compuesta (updated_at, id): solo
+        # devuelve filas ESTRICTAMENTE mayores al cursor, ordenadas por
+        # (updated_at, id) ASC y SIN OFFSET. Esto elimina:
+        #  (a) el refetch infinito de la fila limite (updated_at == cursor)
+        #      — el tiebreaker `id` hace avanzar el cursor siempre; y
+        #  (b) la perdida de filas por inserts concurrentes entre batches
+        #      de un mismo worker-run (offset fijo se corrompe).
+        if cursor_id is not None:
+            condiciones.append(
+                "(updated_at > $2 OR (updated_at = $2 AND id::text > $3))"
+            )
+            params.extend([modificados_desde, cursor_id])
+            where = _OP_AND.join(condiciones)
+            query = (
+                f"SELECT id, url_original, url_limpia, probabilidad, "
+                f"nivel_alerta, delegado, notas_analisis, es_malicioso, "
+                f"creado_en, updated_at, deleted_at "
+                f"FROM historial_escaneos WHERE {where} "
+                f"ORDER BY updated_at ASC, id ASC "
+                f"LIMIT ${len(params) + 1}"
+            )
+            params.append(limite)
+        else:
+            condiciones.append("updated_at >= $2")
+            params.append(modificados_desde)
+            where = _OP_AND.join(condiciones)
+            query = (
+                f"SELECT id, url_original, url_limpia, probabilidad, "
+                f"nivel_alerta, delegado, notas_analisis, es_malicioso, "
+                f"creado_en, updated_at, deleted_at "
+                f"FROM historial_escaneos WHERE {where} "
+                f"ORDER BY updated_at ASC "
+                f"LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
+            )
+            params.append(limite)
+            params.append(offset)
     else:
         # Modo normal: excluir eliminados, aplicar filtro + paginacion
         condiciones.append("deleted_at IS NULL")

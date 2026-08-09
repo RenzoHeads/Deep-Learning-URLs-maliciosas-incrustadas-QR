@@ -48,6 +48,30 @@ async def crear_denuncia(
     pool = await obtener_pool()
     async with pool.acquire() as conexion:
         async with conexion.transaction():
+            # Bug A5 fix (idempotencia server-side): si el cliente reenvía el
+            # mismo op CREATE tras un crash post-POST (el POST llegó al
+            # servidor pero el commit local del re-key no se completó),
+            # devolvemos la fila existente (la denuncia original) en vez de
+            # insertar una duplicada (fila fantasma U-C). Ver
+            # CrearEscaneoEntrada — misma clave (id_usuario, id_cliente).
+            if datos.id_cliente is not None:
+                fila_existente = await conexion.fetchrow(
+                    """
+                    SELECT d.id, d.url, d.id_categoria,
+                           c.nombre AS nombre_categoria,
+                           d.descripcion, d.estado, d.creado_en,
+                           d.updated_at, d.deleted_at
+                    FROM denuncias_url d
+                    LEFT JOIN categorias_denuncia c ON d.id_categoria = c.id
+                    WHERE d.id_usuario = $1 AND d.id_cliente = $2
+                          AND d.deleted_at IS NULL
+                    """,
+                    id_usuario,
+                    datos.id_cliente,
+                )
+                if fila_existente is not None:
+                    return fila_a_denuncia(fila_existente)
+
             # Verificar que la categoria existe
             existe_categoria = await conexion.fetchval(
                 "SELECT 1 FROM categorias_denuncia WHERE id = $1",
@@ -63,8 +87,11 @@ async def crear_denuncia(
                 fila = await conexion.fetchrow(
                     """
                     INSERT INTO denuncias_url
-                        (id_usuario, url, id_categoria, descripcion, estado)
-                    VALUES ($1, $2, $3, $4, 'PENDIENTE')
+                        (id_usuario, url, id_categoria, descripcion, estado,
+                         id_cliente)
+                    VALUES ($1, $2, $3, $4, 'PENDIENTE', $5)
+                    ON CONFLICT (id_usuario, id_cliente)
+                        WHERE id_cliente IS NOT NULL DO NOTHING
                     RETURNING id, url, id_categoria, descripcion, estado, creado_en,
                               updated_at, deleted_at,
                               (SELECT nombre FROM categorias_denuncia WHERE id = $3) AS nombre_categoria
@@ -73,6 +100,7 @@ async def crear_denuncia(
                     datos.url,
                     datos.id_categoria,
                     datos.descripcion,
+                    datos.id_cliente,
                 )
             except asyncpg.ForeignKeyViolationError:
                 # Race condition: la categoria fue borrada entre el SELECT de
@@ -82,6 +110,25 @@ async def crear_denuncia(
                 raise HTTPException(
                     status_code=400,
                     detail="Categoria de denuncia invalida",
+                )
+
+            if fila is None:
+                # Race concurrente rara: otra tx ganó el INSERT con el mismo
+                # id_cliente (unique index parcial). Re-SELECT para devolver
+                # la fila canónica (idempotencia durable).
+                fila = await conexion.fetchrow(
+                    """
+                    SELECT d.id, d.url, d.id_categoria,
+                           c.nombre AS nombre_categoria,
+                           d.descripcion, d.estado, d.creado_en,
+                           d.updated_at, d.deleted_at
+                    FROM denuncias_url d
+                    LEFT JOIN categorias_denuncia c ON d.id_categoria = c.id
+                    WHERE d.id_usuario = $1 AND d.id_cliente = $2
+                          AND d.deleted_at IS NULL
+                    """,
+                    id_usuario,
+                    datos.id_cliente,
                 )
 
     respuesta = fila_a_denuncia(fila)
@@ -100,6 +147,11 @@ async def listar_denuncias(
     modificados_desde: Annotated[datetime | None, Query(
         description="Fecha ISO 8601 desde donde obtener modificados (delta sync). Incluye tombstones."
     )] = None,
+    cursor_id: Annotated[str | None, Query(
+        description="ID de la ultima fila recibida (keyset pagination, Bug A1 fix). "
+        "Si se envia junto a modificados_desde, devuelve solo filas con "
+        "(updated_at, id) > (modificados_desde, cursor_id) — sin OFFSET."
+    )] = None,
 ):
     """Lista las denuncias del usuario (delta sync).
 
@@ -107,6 +159,11 @@ async def listar_denuncias(
     modificadas desde esa fecha (updated_at >= modificados_desde),
     incluyendo tombstones (filas con deleted_at != null). El cliente debe
     eliminar localmente las filas donde deleted_at != null.
+
+    Keyset pagination (con ``cursor_id``): paginacion por llave compuesta
+    (updated_at, id) con comparacion estricta > — evita el refetch infinito
+    de la fila limite y la perdida de filas por inserts concurrentes entre
+    batches (Bug A1 fix).
 
     Modo normal (sin ``modificados_desde``): devuelve solo las denuncias
     activas (deleted_at IS NULL) ordenadas por creado_en DESC.
@@ -120,26 +177,54 @@ async def listar_denuncias(
 
     if modificados_desde is not None:
         # Modo delta: filtrar por updated_at, incluir tombstones.
-        condiciones.append("d.updated_at >= $2")
-        params.append(modificados_desde)
-        orden = "d.updated_at ASC"
+        # Bug A1 fix (keyset): con cursor_id, comparacion estricta de llave
+        # compuesta (updated_at, id) y sin OFFSET — ver docstring.
+        if cursor_id is not None:
+            condiciones.append(
+                "(d.updated_at > $2 OR (d.updated_at = $2 AND d.id::text > $3))"
+            )
+            params.extend([modificados_desde, cursor_id])
+            where = " AND ".join(condiciones)
+            query = (
+                f"SELECT d.id, d.url, d.id_categoria, c.nombre AS nombre_categoria, "
+                f"d.descripcion, d.estado, d.creado_en, d.updated_at, d.deleted_at "
+                f"FROM denuncias_url d "
+                f"LEFT JOIN categorias_denuncia c ON d.id_categoria = c.id "
+                f"WHERE {where} "
+                f"ORDER BY d.updated_at ASC, d.id ASC "
+                f"LIMIT ${len(params) + 1}"
+            )
+            params.append(limite)
+        else:
+            condiciones.append("d.updated_at >= $2")
+            params.append(modificados_desde)
+            where = " AND ".join(condiciones)
+            query = (
+                f"SELECT d.id, d.url, d.id_categoria, c.nombre AS nombre_categoria, "
+                f"d.descripcion, d.estado, d.creado_en, d.updated_at, d.deleted_at "
+                f"FROM denuncias_url d "
+                f"LEFT JOIN categorias_denuncia c ON d.id_categoria = c.id "
+                f"WHERE {where} "
+                f"ORDER BY d.updated_at ASC "
+                f"LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
+            )
+            params.append(limite)
+            params.append(offset)
     else:
         # Modo normal: solo denuncias activas.
         condiciones.append("d.deleted_at IS NULL")
-        orden = "d.creado_en DESC"
-
-    where = " AND ".join(condiciones)
-    query = (
-        f"SELECT d.id, d.url, d.id_categoria, c.nombre AS nombre_categoria, "
-        f"d.descripcion, d.estado, d.creado_en, d.updated_at, d.deleted_at "
-        f"FROM denuncias_url d "
-        f"LEFT JOIN categorias_denuncia c ON d.id_categoria = c.id "
-        f"WHERE {where} "
-        f"ORDER BY {orden} "
-        f"LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
-    )
-    params.append(limite)
-    params.append(offset)
+        where = " AND ".join(condiciones)
+        query = (
+            f"SELECT d.id, d.url, d.id_categoria, c.nombre AS nombre_categoria, "
+            f"d.descripcion, d.estado, d.creado_en, d.updated_at, d.deleted_at "
+            f"FROM denuncias_url d "
+            f"LEFT JOIN categorias_denuncia c ON d.id_categoria = c.id "
+            f"WHERE {where} "
+            f"ORDER BY d.creado_en DESC "
+            f"LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
+        )
+        params.append(limite)
+        params.append(offset)
 
     async with pool.acquire() as conexion:
         filas = await conexion.fetch(query, *params)

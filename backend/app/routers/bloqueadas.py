@@ -26,6 +26,11 @@ async def listar_urls_bloqueadas(
     modificados_desde: Annotated[datetime | None, Query(
         description="Fecha ISO 8601 desde donde obtener modificados (delta sync). Incluye tombstones."
     )] = None,
+    cursor_id: Annotated[str | None, Query(
+        description="ID de la ultima fila recibida (keyset pagination, Bug A1 fix). "
+        "Si se envia junto a modificados_desde, devuelve solo filas con "
+        "(updated_at, id) > (modificados_desde, cursor_id) — sin OFFSET."
+    )] = None,
 ):
     """Lista las URLs bloqueadas del usuario (delta sync).
 
@@ -33,6 +38,11 @@ async def listar_urls_bloqueadas(
     modificadas desde esa fecha (updated_at >= modificados_desde),
     incluyendo tombstones (filas con deleted_at != null). El cliente debe
     eliminar localmente las filas donde deleted_at != null.
+
+    Keyset pagination (con ``cursor_id``): paginacion por llave compuesta
+    (updated_at, id) con comparacion estricta > — evita el refetch infinito
+    de la fila limite y la perdida de filas por inserts concurrentes entre
+    batches (Bug A1 fix).
 
     Modo normal (sin ``modificados_desde``): devuelve solo las URLs activas
     (deleted_at IS NULL) ordenadas por creado_en DESC.
@@ -46,23 +56,45 @@ async def listar_urls_bloqueadas(
 
     if modificados_desde is not None:
         # Modo delta: filtrar por updated_at, incluir tombstones.
-        condiciones.append("updated_at >= $2")
-        params.append(modificados_desde)
-        orden = "updated_at ASC"
+        # Bug A1 fix (keyset): con cursor_id, comparacion estricta de llave
+        # compuesta (updated_at, id) y sin OFFSET — ver docstring.
+        if cursor_id is not None:
+            condiciones.append(
+                "(updated_at > $2 OR (updated_at = $2 AND id::text > $3))"
+            )
+            params.extend([modificados_desde, cursor_id])
+            where = " AND ".join(condiciones)
+            query = (
+                f"SELECT id, url, razon, creado_en, updated_at, deleted_at "
+                f"FROM urls_bloqueadas WHERE {where} "
+                f"ORDER BY updated_at ASC, id ASC "
+                f"LIMIT ${len(params) + 1}"
+            )
+            params.append(limite)
+        else:
+            condiciones.append("updated_at >= $2")
+            params.append(modificados_desde)
+            where = " AND ".join(condiciones)
+            query = (
+                f"SELECT id, url, razon, creado_en, updated_at, deleted_at "
+                f"FROM urls_bloqueadas WHERE {where} "
+                f"ORDER BY updated_at ASC "
+                f"LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
+            )
+            params.append(limite)
+            params.append(offset)
     else:
         # Modo normal: solo URLs activas.
         condiciones.append("deleted_at IS NULL")
-        orden = "creado_en DESC"
-
-    where = " AND ".join(condiciones)
-    query = (
-        f"SELECT id, url, razon, creado_en, updated_at, deleted_at "
-        f"FROM urls_bloqueadas WHERE {where} "
-        f"ORDER BY {orden} "
-        f"LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
-    )
-    params.append(limite)
-    params.append(offset)
+        where = " AND ".join(condiciones)
+        query = (
+            f"SELECT id, url, razon, creado_en, updated_at, deleted_at "
+            f"FROM urls_bloqueadas WHERE {where} "
+            f"ORDER BY creado_en DESC "
+            f"LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
+        )
+        params.append(limite)
+        params.append(offset)
 
     async with pool.acquire() as conexion:
         filas = await conexion.fetch(query, *params)
@@ -90,6 +122,24 @@ async def bloquear_url(
     pool = await obtener_pool()
     async with pool.acquire() as conexion:
         async with conexion.transaction():
+            # Bug A5 fix (idempotencia server-side): si el cliente reenvía el
+            # mismo op CREATE tras un crash post-POST (el POST llegó pero el
+            # re-key local no se completó), devolvemos la fila existente (201)
+            # en vez de 409 — el cliente conserva el id de servidor U-B y
+            # completa el re-key, sin fila fantasma. Ver CrearEscaneoEntrada.
+            if datos.id_cliente is not None:
+                fila_existente = await conexion.fetchrow(
+                    """
+                    SELECT id, url, razon, creado_en, updated_at, deleted_at
+                    FROM urls_bloqueadas
+                    WHERE id_usuario = $1 AND id_cliente = $2 AND deleted_at IS NULL
+                    """,
+                    id_usuario,
+                    datos.id_cliente,
+                )
+                if fila_existente is not None:
+                    return fila_a_url_bloqueada(fila_existente)
+
             # 1. Resurrect atomico: si existe una fila soft-deleted (tombstone)
             #    para este (id_usuario, url), actualizarla in-place. Un solo
             #    UPDATE — atomico, sin race window, preserva el id original.
@@ -114,14 +164,15 @@ async def bloquear_url(
             #    idempotente (DO NOTHING) y devuelve None → cae al 409 final.
             fila = await conexion.fetchrow(
                 """
-                INSERT INTO urls_bloqueadas (id_usuario, url, razon)
-                VALUES ($1, $2, $3)
+                INSERT INTO urls_bloqueadas (id_usuario, url, razon, id_cliente)
+                VALUES ($1, $2, $3, $4)
                 ON CONFLICT (id_usuario, url) WHERE deleted_at IS NULL DO NOTHING
                 RETURNING id, url, razon, creado_en, updated_at, deleted_at
                 """,
                 id_usuario,
                 datos.url,
                 datos.razon,
+                datos.id_cliente,
             )
             if fila is not None:
                 return fila_a_url_bloqueada(fila)
