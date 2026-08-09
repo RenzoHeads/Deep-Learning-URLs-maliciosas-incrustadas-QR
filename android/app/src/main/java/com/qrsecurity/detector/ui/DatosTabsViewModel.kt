@@ -23,27 +23,22 @@ import javax.inject.Inject
  */
 @HiltViewModel
 class DatosTabsViewModel @Inject constructor(
-    val repoEscaneos: RepositorioEscaneos,
-    val repoUrls: RepositorioUrlsBloqueadas,
-    val mediadorSync: MediadorSincronizacion
+    private val repoEscaneos: RepositorioEscaneos,
+    private val repoUrls: RepositorioUrlsBloqueadas,
+    private val mediadorSync: MediadorSincronizacion
 ) : ViewModel() {
 
-    // ── HISTORIAL: Flows persistentes ──
+    // ── HISTORIAL: Flow persistente con la lista completa ──
     // stateIn(WhileSubscribed(5_000)) arranca con el primer suscriptor y
     // mantiene la coleccion viva mientras hay suscriptores activos; cancela
     // el upstream 5s despues del ultimo suscriptor (patron NiA estandar).
     // initialValue = emptyList() — nunca null, nunca spinner.
-
+    //
+    // La UI (HistorialScreen) filtra esta lista in-memory por esMalicioso
+    // segun la pestana seleccionada — verificacion "0 muerto": no exponemos
+    // StateFlows pre-filtrados que nadie consume.
     val historialTodos: StateFlow<List<EscaneoEntity>> =
         repoEscaneos.observarTodos()
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-
-    val historialSeguros: StateFlow<List<EscaneoEntity>> =
-        repoEscaneos.observarSeguros()
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-
-    val historialMaliciosos: StateFlow<List<EscaneoEntity>> =
-        repoEscaneos.observarMaliciosos()
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     // ── CONTADORES: Eagerly + null initial para eliminar parpadeo de "0" ──
@@ -63,10 +58,10 @@ class DatosTabsViewModel @Inject constructor(
     // (al montar NavGuardian), asi que Room emite el conteo cacheado en <1ms.
     // El `null` solo dura ese lapso inicial o si Room tarda excepcionalmente.
     //
-    // Bug 3 fix (URLs unicas): los DAOs ahora exponen observarTotalUnicos /
-    // observarAmenazasUnicas / observarUltimos7DiasUnicos que cuentan
-    // DISTINCT urlLimpia (no filas individuales), asi un reescaneo de una URL
-    // ya contada no incrementa el contador.
+    // Bug 3 fix (URLs unicas): los DAOs exponen observarTotalUnicos /
+    // observarAmenazasUnicas que cuentan DISTINCT urlLimpia (no filas
+    // individuales), asi un reescaneo de una URL ya contada no incrementa
+    // el contador.
 
     val totalEscaneos: StateFlow<Int?> =
         repoEscaneos.observarTotal()
@@ -75,11 +70,6 @@ class DatosTabsViewModel @Inject constructor(
 
     val amenazas: StateFlow<Int?> =
         repoEscaneos.observarAmenazas()
-            .map { it }
-            .stateIn(viewModelScope, SharingStarted.Eagerly, null)
-
-    val ultimos7Dias: StateFlow<Int?> =
-        repoEscaneos.observarUltimos7Dias()
             .map { it }
             .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 

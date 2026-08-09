@@ -9,15 +9,14 @@ import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
 // ──────────────────────────────────────────────────────────────────
-// Cyber-Sentinel — esquema de color oscuro fijo.
-// La app es siempre oscura; el design system de Stitch se diseñó
-// exclusivamente para modo oscuro con fondo #0A0E1A.
+// QR Guardian — esquema de color oscuro fijo (Pencil rediseño F3).
+// La app es siempre oscura; la paleta Pencil (#0A0F16 fondo,
+// #2DD4BF teal, #F1F5F9 texto) se diseñó exclusivamente para modo oscuro.
 // ──────────────────────────────────────────────────────────────────
 
 private val EsquemaCyberSentinel = darkColorScheme(
@@ -117,13 +116,12 @@ fun TemaDetectorSeguridadQR(
     val view = LocalView.current
     if (!view.isInEditMode) {
         SideEffect {
-            val window = (view.context as Activity).window
-            // Status bar usa el background del esquema activo (no hardcoded).
-            window.statusBarColor = esquemaColor.background.toArgb()
-            WindowCompat.getInsetsController(window, view)
+            // Bug 19 fix + deprecation fix: MainActivity ya llama a enableEdgeToEdge()
+            // que gestiona traslucidez de barras del sistema. Aqui solo ajustamos
+            // la apariencia de los iconos de la status bar segun el modo activo.
+            // No tocamos statusBarColor/navigationBarColor (deprecated en API 35+).
+            WindowCompat.getInsetsController((view.context as Activity).window, view)
                 .isAppearanceLightStatusBars = !temaOscuro
-            // Navigation bar usa el mismo background del esquema.
-            window.navigationBarColor = esquemaColor.background.toArgb()
         }
     }
 

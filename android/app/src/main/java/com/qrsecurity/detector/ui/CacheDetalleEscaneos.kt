@@ -77,12 +77,4 @@ class CacheDetalleEscaneos @Inject constructor() {
             if (anyChange) nuevo else map
         }
     }
-
-    /**
-     * Elimina una entrada del cache. Util si el escaneo fue borrado de Room
-     * (e.g., via sync pull que detecta rows zombie y los elimina).
-     */
-    fun invalidar(id: String) {
-        _cache.update { it - id }
-    }
 }

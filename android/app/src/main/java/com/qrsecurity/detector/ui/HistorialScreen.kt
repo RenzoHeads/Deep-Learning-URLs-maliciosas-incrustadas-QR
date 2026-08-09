@@ -2,6 +2,7 @@ package com.qrsecurity.detector.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -9,156 +10,346 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.FilterList
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.QrCodeScanner
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.SearchOff
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Warning
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.ui.res.stringResource
-import com.qrsecurity.detector.R
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.qrsecurity.detector.datos.local.entidades.EscaneoEntity
-import com.qrsecurity.detector.ui.TipoMensaje
+import com.qrsecurity.detector.ui.theme.CyberAmbar
 import com.qrsecurity.detector.ui.theme.CyberCyan
-import com.qrsecurity.detector.ui.theme.CyberVerdeAlerta
-import com.qrsecurity.detector.ui.theme.CyberGlassBorde
 import com.qrsecurity.detector.ui.theme.CyberFondo
 import com.qrsecurity.detector.ui.theme.CyberGlass
+import com.qrsecurity.detector.ui.theme.CyberGlassAlto
+import com.qrsecurity.detector.ui.theme.CyberGlassBorde
 import com.qrsecurity.detector.ui.theme.CyberRojo
 import com.qrsecurity.detector.ui.theme.CyberTextoPrincipal
 import com.qrsecurity.detector.ui.theme.CyberTextoSecundario
+import com.qrsecurity.detector.ui.theme.CyberVerdeAlerta
 import com.qrsecurity.detector.ui.theme.Elevacion
 import com.qrsecurity.detector.ui.theme.Espaciado
 import com.qrsecurity.detector.ui.theme.RadioBorde
 import com.qrsecurity.detector.ui.theme.TamanosIcono
-import kotlinx.coroutines.launch
-import java.time.Instant
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
-
-enum class FiltroHistorial(val etiqueta: String) {
-    TODOS("Todos"),
-    SEGUROS("Seguros"),
-    MALICIOSOS("Maliciosos")
-}
+import java.util.Calendar
+import java.util.Locale
+import java.util.concurrent.TimeUnit
 
 /**
- * Constantes de tiempo compartidas por la UI de historial.
- */
-private object ConstantesHistorial {
-    /** Umbral de "ultimos 7 dias" en milisegundos, auto-documentado via TimeUnit. */
-    val SIETE_DIAS_MS: Long = java.util.concurrent.TimeUnit.DAYS.toMillis(7)
-}
-
-/**
- * Estadisticas del historial provistas por el backend (`GET /estadisticas`).
+ * Pantalla de Historial (Pencil frame fvsVa).
  *
- * Bug 3 fix: los campos son `Int?` (nullable). `null` significa "cargando"
- * — Room no ha emitido el conteo todavia. La UI distingue null de 0:
- *  - null → mostrar placeholder (guion "-") en la tarjeta de stats
- *  - 0    → mostrar "0" (realmente cero URLs)
- *  - N>0  → mostrar "N"
- */
-data class EstadisticasHistorial(
-    val totalEscaneos: Int?,
-    val amenazas: Int?,
-    val ultimos7Dias: Int?
-)
-
-/**
- * Pantalla de Historial — cyber-sentinel design (offline-first).
+ * F3.3: implementacion del layout de Pencil fvsVa. La firma NO debe cambiar.
  *
- *  - Top app bar con logo QR GUARDIAN + icono filtro
- *  - Stats row (3 tarjetas glass: total / amenazas / 7 dias) — datos de Room
- *  - Filter chips horizontales (Todos / Seguros / Maliciosos)
- *  - Lista de entradas con tarjetas glass, borde lateral color-coded
- *  - FAB cyan para escanear
+ * Muestra la lista de escaneos con filtros (Todas, Seguras, Sospechosas,
+ * Bloqueadas). Al tocar un item, navega a DETALLE_URL/{id} via [onVerDetalle].
+ * Wire a [DatosTabsViewModel].
  *
- * Offline-first: Room es la fuente de verdad. La UI observa Flows del
- * [RepositorioEscaneos] (observarTodos / observarSeguros / observarMaliciosos)
- * + Flows de estadisticas (observarTotal / observarAmenazas / observarUltimos7Dias).
- * La pantalla no hace llamadas directas al backend — el [SyncWorker] sincroniza
- * en background. La UI se actualiza reactivamente cuando Room cambia.
+ * @param datosViewModel VM compartido con los Flows de historial.
+ * @param onEscanear Callback para navegar a la pantalla de analisis.
+ * @param onVerDetalle Callback con el id del escaneo (navega a DETALLE_URL).
+ * @param onMensaje Callback para mostrar snackbars.
  */
 @Composable
 fun PantallaHistorial(
     datosViewModel: DatosTabsViewModel,
     onEscanear: () -> Unit,
-    // Bug DETAIL-1 fix: callback para navegar al detalle del escaneo
-    // cuando el usuario toca una tarjeta del historial.
     onVerDetalle: (String) -> Unit = {},
     onMensaje: (TipoMensaje, String) -> Unit = { _, _ -> }
 ) {
-    val scope = rememberCoroutineScope()
-
-    val repoEscaneos = datosViewModel.repoEscaneos
-    val mediadorSync = datosViewModel.mediadorSync
-
-    var filtroActual by remember { mutableStateOf(FiltroHistorial.TODOS) }
-
-    val historial by when (filtroActual) {
-        FiltroHistorial.TODOS -> datosViewModel.historialTodos
-        FiltroHistorial.SEGUROS -> datosViewModel.historialSeguros
-        FiltroHistorial.MALICIOSOS -> datosViewModel.historialMaliciosos
-    }.collectAsStateWithLifecycle()
-    val totalEscaneos by datosViewModel.totalEscaneos.collectAsStateWithLifecycle()
-    val amenazas by datosViewModel.amenazas.collectAsStateWithLifecycle()
-    val ultimos7Dias by datosViewModel.ultimos7Dias.collectAsStateWithLifecycle()
+    val historialTodos by datosViewModel.historialTodos.collectAsStateWithLifecycle()
+    val urlsBloqueadas by datosViewModel.urlsBloqueadas.collectAsStateWithLifecycle()
     val syncEnCurso by datosViewModel.syncEnCurso.collectAsStateWithLifecycle()
-    var escaneoEliminar by remember { mutableStateOf<EscaneoEntity?>(null) }
 
-    val estadisticas = EstadisticasHistorial(totalEscaneos, amenazas, ultimos7Dias)
+    var busqueda by rememberSaveable { mutableStateOf("") }
+    var filtroSeleccionado by rememberSaveable { mutableStateOf("TODAS") }
 
-    Box(modifier = Modifier.fillMaxSize().background(CyberFondo)) {
+    val bloqueadasUrls = remember(urlsBloqueadas) {
+        urlsBloqueadas.map { it.url }.toSet()
+    }
+
+    val totalTodos = historialTodos.size
+    val totalSeguras = historialTodos.count { it.nivelAlerta == "SEGURO" }
+    val totalSospechosas = historialTodos.count { it.nivelAlerta == "SOSPECHOSO" }
+    val totalBloqueadas = historialTodos.count { it.urlLimpia in bloqueadasUrls }
+
+    val filtradas = remember(historialTodos, filtroSeleccionado, busqueda, bloqueadasUrls) {
+        val porFiltro: List<EscaneoEntity> = when (filtroSeleccionado) {
+            "SEGURAS" -> historialTodos.filter { it.nivelAlerta == "SEGURO" }
+            "SOSPECHOSAS" -> historialTodos.filter { it.nivelAlerta == "SOSPECHOSO" }
+            "BLOQUEADAS" -> historialTodos.filter { it.urlLimpia in bloqueadasUrls }
+            else -> historialTodos
+        }
+        if (busqueda.isBlank()) porFiltro
+        else porFiltro.filter { it.urlLimpia.contains(busqueda, ignoreCase = true) }
+    }
+
+    val grupos = remember(filtradas) { agruparPorFecha(filtradas) }
+
+    val segurosPct = if (totalTodos > 0) (100.0 * totalSeguras / totalTodos).toInt() else 0
+    val escaneosFormateado = String.format(Locale.getDefault(), "%,d", totalTodos)
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(CyberFondo)
+    ) {
         Column(
-            modifier = Modifier.fillMaxSize().padding(horizontal = Espaciado.lg)
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = Espaciado.xxl, vertical = Espaciado.xxl),
+            verticalArrangement = Arrangement.spacedBy(Espaciado.lg)
         ) {
-            CabeceraHistorial()
-            StatsRowHistorial(estadisticas)
-            FiltrosHistorial(filtroActual) { filtroActual = it }
-            Spacer(modifier = Modifier.height(Espaciado.lg))
-            ContenidoHistorial(
-                lista = historial,
-                syncEnCurso = syncEnCurso,
-                totalEscaneos = totalEscaneos,
-                onEliminar = { escaneoEliminar = it },
-                onVerDetalle = onVerDetalle
+            // ─── Header ───
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(Espaciado.xs)) {
+                    Text(
+                        text = "Historial",
+                        style = MaterialTheme.typography.displaySmall,
+                        fontWeight = FontWeight.Bold,
+                        color = CyberTextoPrincipal
+                    )
+                    Text(
+                        text = "Todos tus escaneos, con su veredicto",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = CyberTextoSecundario
+                    )
+                }
+                if (syncEnCurso) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Espaciado.xs),
+                        modifier = Modifier
+                            .background(CyberGlassAlto, RoundedCornerShape(RadioBorde.lg))
+                            .padding(horizontal = Espaciado.md, vertical = Espaciado.sm)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Sync,
+                            contentDescription = "Sincronizando",
+                            tint = CyberCyan,
+                            modifier = Modifier.size(TamanosIcono.estandar)
+                        )
+                        Text(
+                            text = "Sincronizando...",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = CyberTextoSecundario
+                        )
+                    }
+                }
+            }
+
+            // ─── Search Bar ───
+            OutlinedTextField(
+                value = busqueda,
+                onValueChange = { busqueda = it },
+                modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text("Buscar código o URL") },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Filled.Search,
+                        contentDescription = null,
+                        modifier = Modifier.size(TamanosIcono.estandar)
+                    )
+                },
+                singleLine = true,
+                shape = RoundedCornerShape(RadioBorde.md),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedContainerColor = CyberGlass,
+                    unfocusedContainerColor = CyberGlass,
+                    focusedBorderColor = CyberCyan,
+                    unfocusedBorderColor = MaterialTheme.colorScheme.outline,
+                    cursorColor = CyberCyan,
+                    focusedTextColor = CyberTextoPrincipal,
+                    unfocusedTextColor = CyberTextoPrincipal
+                )
             )
+
+            // ─── Filter Bar ───
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(Espaciado.sm)
+            ) {
+                FilterChip(
+                    selected = filtroSeleccionado == "TODAS",
+                    onClick = { filtroSeleccionado = "TODAS" },
+                    label = { Text("Todas $totalTodos") },
+                    colors = chipColoresFiltro()
+                )
+                FilterChip(
+                    selected = filtroSeleccionado == "SEGURAS",
+                    onClick = { filtroSeleccionado = "SEGURAS" },
+                    label = { Text("Seguras $totalSeguras") },
+                    colors = chipColoresFiltro()
+                )
+                FilterChip(
+                    selected = filtroSeleccionado == "SOSPECHOSAS",
+                    onClick = { filtroSeleccionado = "SOSPECHOSAS" },
+                    label = { Text("Sospechosas $totalSospechosas") },
+                    colors = chipColoresFiltro()
+                )
+                FilterChip(
+                    selected = filtroSeleccionado == "BLOQUEADAS",
+                    onClick = { filtroSeleccionado = "BLOQUEADAS" },
+                    label = { Text("Bloqueadas $totalBloqueadas") },
+                    colors = chipColoresFiltro()
+                )
+            }
+
+            // ─── Summary Chips Row ───
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(Espaciado.sm)
+            ) {
+                ChipResumen("$escaneosFormateado escaneos", CyberCyan)
+                ChipResumen("${urlsBloqueadas.size} bloqueados", CyberRojo)
+                ChipResumen("$segurosPct% seguros", CyberVerdeAlerta)
+            }
+
+            // ─── List / Empty ───
+            if (filtradas.isEmpty()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = Espaciado.giganteM),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(Espaciado.md)
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.SearchOff,
+                        contentDescription = null,
+                        tint = CyberTextoSecundario,
+                        modifier = Modifier.size(TamanosIcono.mediano)
+                    )
+                    Text(
+                        text = "No hay escaneos para mostrar",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = CyberTextoSecundario
+                    )
+                    Button(
+                        onClick = onEscanear,
+                        shape = RoundedCornerShape(RadioBorde.lg),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = CyberCyan,
+                            contentColor = CyberFondo
+                        )
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.QrCodeScanner,
+                            contentDescription = null,
+                            modifier = Modifier.size(TamanosIcono.estandar)
+                        )
+                        Spacer(modifier = Modifier.width(Espaciado.sm))
+                        Text("Escanear código")
+                    }
+                }
+            } else {
+                grupos.forEach { grupo ->
+                    Column(verticalArrangement = Arrangement.spacedBy(Espaciado.sm)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = grupo.titulo,
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = CyberTextoSecundario
+                            )
+                            Text(
+                                text = "${grupo.escaneos.size}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = CyberTextoSecundario
+                            )
+                        }
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(RadioBorde.xl),
+                            colors = CardDefaults.cardColors(containerColor = CyberGlass),
+                            elevation = CardDefaults.cardElevation(defaultElevation = Elevacion.ninguna)
+                        ) {
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                grupo.escaneos.forEachIndexed { index, escaneo ->
+                                    val bloqueada = escaneo.urlLimpia in bloqueadasUrls
+                                    FilaEscaneo(
+                                        escaneo = escaneo,
+                                        bloqueada = bloqueada,
+                                        onVerDetalle = onVerDetalle,
+                                        onMensaje = onMensaje,
+                                    )
+                                    if (index < grupo.escaneos.lastIndex) {
+                                        HorizontalDivider(
+                                            color = CyberGlassBorde,
+                                            thickness = 1.dp
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ─── Unlock Hint ───
+                Text(
+                    text = "Para desbloquear una URL, abre su detalle y toca el candado",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = CyberTextoSecundario,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = Espaciado.md)
+                )
+            }
         }
 
+        // ─── FAB ───
         FloatingActionButton(
             onClick = onEscanear,
             modifier = Modifier
@@ -167,436 +358,198 @@ fun PantallaHistorial(
             containerColor = CyberCyan,
             contentColor = CyberFondo
         ) {
-            Icon(Icons.Filled.QrCodeScanner, contentDescription = "Escanear")
-        }
-
-        escaneoEliminar?.let { escaneo ->
-            DialogoConfirmacionEliminar(
-                escaneo = escaneo,
-                onConfirmar = {
-                    val aEliminar = escaneo
-                    scope.launch {
-                        try {
-                            // Bug 2 fix: cascade delete — al eliminar una URL
-                            // del historial, se eliminan tambien todos sus
-                            // reescaneos (versiones anteriores). La operacion
-                            // es atomica: filas synced encolan DELETEs en
-                            // pending_ops para el backend; filas dirty se
-                            // borran local.
-                            repoEscaneos.eliminarLocalPorUrlLimpia(aEliminar.urlLimpia)
-                            mediadorSync.dispararSyncUnica()
-                            escaneoEliminar = null
-                            onMensaje(TipoMensaje.EXITO, "URL y reescaneos eliminados")
-                        } catch (e: Exception) {
-                            onMensaje(TipoMensaje.ERROR, "No se pudo eliminar: ${e.message ?: "error"}")
-                        }
-                    }
-                },
-                onCancelar = { escaneoEliminar = null }
-            )
-        }
-    }
-}
-
-@Composable
-private fun CabeceraHistorial() {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(top = Espaciado.lg, bottom = Espaciado.sm),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(
-                imageVector = Icons.Filled.CheckCircle,
-                contentDescription = null,
-                tint = CyberCyan,
-                modifier = Modifier.size(TamanosIcono.estandar)
-            )
-            Spacer(modifier = Modifier.width(Espaciado.sm))
-            Text(
-                text = "QR GUARDIAN",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold,
-                color = CyberCyan,
-                modifier = Modifier.testTag("titulo_qr_guardian")
+                imageVector = Icons.Filled.QrCodeScanner,
+                contentDescription = "Escanear código"
             )
         }
-        Icon(
-            imageVector = Icons.Filled.FilterList,
-            contentDescription = null,
-            tint = CyberTextoSecundario
-        )
     }
-
-    Text(
-        text = "Historial de escaneos",
-        style = MaterialTheme.typography.headlineMedium,
-        fontWeight = FontWeight.Bold,
-        color = CyberTextoPrincipal,
-        modifier = Modifier.testTag("titulo_historial_escaneos")
-    )
-    Text(
-        text = "Tus escaneos se guardan localmente y se sincronizan con el servidor.",
-        style = MaterialTheme.typography.bodyMedium,
-        color = CyberTextoSecundario
-    )
-    Spacer(modifier = Modifier.height(Espaciado.lg))
 }
 
+// ── Composables y helpers privados ──
+
 @Composable
-private fun StatsRowHistorial(estadisticas: EstadisticasHistorial) {
-    // Bug 3 fix: null → "-" placeholder (cargando), no parpadeo de "0".
-    // Mostrar "0" solo cuando Room confirma que realmente hay 0 URLs.
+private fun chipColoresFiltro() = FilterChipDefaults.filterChipColors(
+    containerColor = CyberGlass,
+    labelColor = CyberTextoSecundario,
+    selectedContainerColor = CyberCyan,
+    selectedLabelColor = CyberFondo
+)
+
+@Composable
+private fun ChipResumen(texto: String, colorPunto: Color) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(Espaciado.sm)
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Espaciado.sm),
+        modifier = Modifier
+            .background(CyberGlassAlto, RoundedCornerShape(RadioBorde.lg))
+            .padding(horizontal = Espaciado.md, vertical = Espaciado.sm)
     ) {
-        TarjetaEstadistica(
-            "Total",
-            estadisticas.totalEscaneos?.toString() ?: "—",
-            Modifier.weight(1f),
-            if (estadisticas.totalEscaneos == null) CyberTextoSecundario else CyberCyan
+        Box(
+            modifier = Modifier
+                .size(8.dp)
+                .clip(CircleShape)
+                .background(colorPunto)
         )
-        TarjetaEstadistica(
-            "Amenazas",
-            estadisticas.amenazas?.toString() ?: "—",
-            Modifier.weight(1f),
-            if (estadisticas.amenazas == null) CyberTextoSecundario else CyberRojo
-        )
-        TarjetaEstadistica(
-            "7 dias",
-            estadisticas.ultimos7Dias?.toString() ?: "—",
-            Modifier.weight(1f),
-            CyberTextoSecundario
-        )
-    }
-    Spacer(modifier = Modifier.height(Espaciado.lg))
-}
-
-@Composable
-private fun FiltrosHistorial(
-    filtroActual: FiltroHistorial,
-    onFiltroCambiado: (FiltroHistorial) -> Unit
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(Espaciado.sm)
-    ) {
-        FiltroHistorial.entries.forEach { filtro ->
-            ChipFiltro(
-                etiqueta = filtro.etiqueta,
-                seleccionado = filtroActual == filtro,
-                onClick = { onFiltroCambiado(filtro) }
-            )
-        }
-    }
-}
-
-@Composable
-private fun ContenidoHistorial(
-    lista: List<EscaneoEntity>,
-    syncEnCurso: Boolean,
-    // Bug 3 fix: Int? — null mientras Room emite el conteo (transitorio con Eagerly).
-    totalEscaneos: Int?,
-    onEliminar: (EscaneoEntity) -> Unit,
-    onVerDetalle: (String) -> Unit
-) {
-    if (lista.isEmpty()) {
-        // null o 0 + sync en curso → skeleton de carga (primer PULL).
-        if (syncEnCurso && (totalEscaneos == null || totalEscaneos == 0)) {
-            EstadoCargando()
-        } else {
-            EstadoVacio(totalEscaneos = totalEscaneos)
-        }
-    } else {
-        ListaHistorial(
-            lista = lista,
-            onEliminar = onEliminar,
-            onVerDetalle = onVerDetalle
-        )
-    }
-}
-
-@Composable
-private fun DialogoConfirmacionEliminar(
-    escaneo: EscaneoEntity,
-    onConfirmar: () -> Unit,
-    onCancelar: () -> Unit
-) {
-    val urlTruncada = escaneo.urlLimpia.take(60) + if (escaneo.urlLimpia.length > 60) "..." else ""
-    // Bug 2 fix: el dialog now advierte que se eliminaran tambien los reescaneos.
-    DialogoConfirmacion(
-        titulo = "Eliminar URL",
-        mensaje = "¿Estas seguro de que quieres eliminar \"$urlTruncada\"? " +
-            "Se eliminaran tambien todos sus reescaneos (versiones anteriores). " +
-            "Esta accion se sincronizara con el servidor.",
-        textoConfirmar = "Eliminar",
-        colorConfirmar = CyberRojo,
-        onConfirmar = onConfirmar,
-        onCancelar = onCancelar
-    )
-}
-
-@Composable
-private fun EstadoVacio(totalEscaneos: Int?) {
-    // Bug 3 fix: null → tratar como "posiblemente vacio" (transitorio con Eagerly).
-    val esCero = totalEscaneos == null || totalEscaneos == 0
-    Column(
-        modifier = Modifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        Icon(
-            imageVector = Icons.Filled.CheckCircle,
-            contentDescription = null,
-            tint = CyberCyan.copy(alpha = 0.3f),
-            modifier = Modifier.size(TamanosIcono.grande)
-        )
-        Spacer(modifier = Modifier.height(Espaciado.lg))
         Text(
-            text = if (esCero) "Aun no hay escaneos"
-                   else "No hay entradas para este filtro",
-            style = MaterialTheme.typography.titleLarge,
-            fontWeight = FontWeight.Bold,
-            color = CyberTextoPrincipal
-        )
-        Spacer(modifier = Modifier.height(Espaciado.xs))
-        Text(
-            text = if (esCero) "Escanea un codigo QR para comenzar"
-                   else "Prueba con otro filtro",
-            style = MaterialTheme.typography.bodyMedium,
-            color = CyberTextoSecundario,
-            textAlign = TextAlign.Center
-        )
-    }
-}
-
-/**
- * Fix #3 — Skeleton de carga mostrado mientras el primer PULL del SyncWorker
- * trae datos del servidor. Se muestra en lugar de [EstadoVacio] cuando la Room
- * esta vacia y el sync esta ENQUEUED o RUNNING.
- */
-@Composable
-private fun EstadoCargando() {
-    Column(
-        modifier = Modifier.fillMaxSize(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        androidx.compose.material3.CircularProgressIndicator(
-            color = CyberCyan,
-            strokeWidth = 3.dp,
-            modifier = Modifier.size(48.dp)
-        )
-        Spacer(modifier = Modifier.height(Espaciado.lg))
-        Text(
-            text = "Sincronizando con el servidor...",
-            style = MaterialTheme.typography.titleSmall,
+            text = texto,
+            style = MaterialTheme.typography.labelMedium,
             color = CyberTextoSecundario
         )
-        Spacer(modifier = Modifier.height(Espaciado.xs))
-        Text(
-            text = "Cargando tus escaneos por primera vez",
-            style = MaterialTheme.typography.bodySmall,
-            color = CyberTextoSecundario.copy(alpha = 0.7f),
-            textAlign = TextAlign.Center
-        )
     }
 }
 
 @Composable
-private fun ListaHistorial(
-    lista: List<EscaneoEntity>,
-    onEliminar: (EscaneoEntity) -> Unit,
-    onVerDetalle: (String) -> Unit
+private fun FilaEscaneo(
+    escaneo: EscaneoEntity,
+    bloqueada: Boolean,
+    onVerDetalle: (String) -> Unit,
+    onMensaje: (TipoMensaje, String) -> Unit
 ) {
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(Espaciado.sm),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = Espaciado.gigante)
-    ) {
-        items(lista, key = { it.id }) { escaneo ->
-            TarjetaHistorial(
-                escaneo = escaneo,
-                onEliminar = { onEliminar(escaneo) },
-                onVerDetalle = { onVerDetalle(escaneo.id) }
-            )
+    val (icono, color) = when (escaneo.nivelAlerta) {
+        "SEGURO" -> Icons.Filled.CheckCircle to CyberVerdeAlerta
+        "SOSPECHOSO" -> Icons.Filled.Warning to CyberAmbar
+        else -> Icons.Filled.Block to CyberRojo
+    }
+    val etiqueta = if (bloqueada) {
+        "Bloqueada"
+    } else {
+        when (escaneo.nivelAlerta) {
+            "SEGURO" -> "Segura"
+            "SOSPECHOSO" -> "Sospechosa"
+            else -> "Maliciosa"
         }
     }
-}
 
-@Composable
-private fun TarjetaEstadistica(
-    etiqueta: String,
-    valor: String,
-    modifier: Modifier = Modifier,
-    colorAcento: androidx.compose.ui.graphics.Color
-) {
-    Card(
-        modifier = modifier,
-        shape = RoundedCornerShape(RadioBorde.xxl),
-        colors = CardDefaults.cardColors(containerColor = CyberGlass)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable {
+                if (bloqueada) onMensaje(TipoMensaje.INFO, "Abre el detalle para desbloquear esta URL")
+                onVerDetalle(escaneo.id)
+            }
+            .padding(horizontal = Espaciado.lg, vertical = Espaciado.md),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Espaciado.md)
     ) {
+        // Status Tile
+        Box(
+            modifier = Modifier
+                .size(40.dp)
+                .clip(CircleShape)
+                .background(color.copy(alpha = 0.15f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = icono,
+                contentDescription = etiqueta,
+                tint = color,
+                modifier = Modifier.size(TamanosIcono.estandar)
+            )
+        }
+        // Info
         Column(
-            modifier = Modifier.padding(Espaciado.md),
-            horizontalAlignment = Alignment.Start
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(Espaciado.xs)
         ) {
             Text(
-                text = etiqueta.uppercase(),
+                text = escaneo.urlLimpia,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = CyberTextoPrincipal,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = etiqueta,
                 style = MaterialTheme.typography.labelSmall,
                 color = CyberTextoSecundario
             )
-            Text(
-                text = valor,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                color = colorAcento
-            )
         }
-    }
-}
-
-@Composable
-private fun ChipFiltro(
-    etiqueta: String,
-    seleccionado: Boolean,
-    onClick: () -> Unit
-) {
-    val colorFondo = if (seleccionado) CyberCyan else CyberGlass
-    val colorTexto = if (seleccionado) CyberFondo else CyberTextoSecundario
-
-    Box(
-        modifier = Modifier
-            .clip(RadioBorde.full)
-            .background(colorFondo)
-            .clickable(onClick = onClick)
-            .padding(horizontal = Espaciado.lg, vertical = Espaciado.sm)
-    ) {
-        Text(
-            text = etiqueta,
-            style = MaterialTheme.typography.labelLarge,
-            color = colorTexto
-        )
-    }
-}
-
-/**
- * Tarjeta de una entrada del historial. Acepta [EscaneoEntity] desde Room
- * (offline-first source of truth). Muestra el estado de sincronizacion
- * (pendiente / sincronizado) como indicador visual adicional.
- */
-@Composable
-private fun TarjetaHistorial(
-    escaneo: EscaneoEntity,
-    onEliminar: () -> Unit,
-    // Bug DETAIL-1 fix: callback al tocar la tarjeta para abrir el detalle.
-    onVerDetalle: () -> Unit = {}
-) {
-    val esMalicioso = escaneo.esMalicioso
-    val colorIcono = if (esMalicioso) CyberRojo else CyberVerdeAlerta
-    val icono = if (esMalicioso) Icons.Filled.Warning else Icons.Filled.CheckCircle
-
-    // Extraer dominio de la URL (parte entre "://" y el primer "/").
-    val dominio = remember(escaneo.urlLimpia) {
-        val sinProtocolo = escaneo.urlLimpia.substringAfter("://", escaneo.urlLimpia)
-        sinProtocolo.substringBefore("/")
-    }
-
-    // Formatear fecha desde epoch millis (Room) a "yyyy-MM-dd" para mostrar.
-    val fechaStr = remember(escaneo.creadoEnMillis) {
-        Instant.ofEpochMilli(escaneo.creadoEnMillis)
-            .atZone(ZoneId.systemDefault())
-            .toLocalDate()
-            .format(DateTimeFormatter.ISO_LOCAL_DATE)
-    }
-
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            // Bug DETAIL-1 fix: tarjeta clicable para abrir el detalle del escaneo.
-            .clickable(onClick = onVerDetalle),
-        shape = RoundedCornerShape(RadioBorde.xxl),
-        colors = CardDefaults.cardColors(containerColor = CyberGlass),
-        border = androidx.compose.foundation.BorderStroke(Elevacion.sutil, CyberGlassBorde)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(Espaciado.lg),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+        // Time + Unlock Pill
+        Column(
+            horizontalAlignment = Alignment.End,
+            verticalArrangement = Arrangement.spacedBy(Espaciado.xs)
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.weight(1f)
-            ) {
-                Box(
+            Text(
+                text = tiempoRelativo(escaneo.creadoEnMillis),
+                style = MaterialTheme.typography.labelSmall,
+                color = CyberTextoSecundario
+            )
+            if (bloqueada) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Espaciado.xs),
                     modifier = Modifier
-                        .size(TamanosIcono.mediano)
-                        .clip(RoundedCornerShape(RadioBorde.md))
-                        .background(colorIcono.copy(alpha = 0.1f)),
-                    contentAlignment = Alignment.Center
+                        .background(CyberGlassAlto, RoundedCornerShape(RadioBorde.sm))
+                        .padding(horizontal = Espaciado.sm, vertical = Espaciado.xs)
                 ) {
-                    Icon(icono, contentDescription = null, tint = colorIcono, modifier = Modifier.size(TamanosIcono.estandar))
-                }
-                Spacer(modifier = Modifier.width(Espaciado.md))
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = escaneo.urlLimpia,
-                        style = MaterialTheme.typography.labelLarge,
-                        color = if (esMalicioso) CyberRojo else CyberTextoPrincipal,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        text = "$fechaStr • $dominio",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = CyberTextoSecundario,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                    Icon(
+                        imageVector = Icons.Filled.LockOpen,
+                        contentDescription = "Desbloquear",
+                        tint = CyberCyan,
+                        modifier = Modifier.size(14.dp)
                     )
                 }
-            }
-            IconButton(onClick = onEliminar) {
-                Icon(
-                    imageVector = Icons.Filled.Delete,
-                    contentDescription = "Eliminar",
-                    tint = CyberTextoSecundario
-                )
             }
         }
     }
 }
 
+private data class GrupoHistorial(val titulo: String, val escaneos: List<EscaneoEntity>)
 
-/**
- * Bug B5 fix: Dialogo de confirmacion reutilizable.
- * Pide confirmacion al usuario antes de acciones destructivas (eliminar,
- * desbloquear). Patron estandar de Material 3.
- */
-@Composable
-fun DialogoConfirmacion(
-    titulo: String,
-    mensaje: String,
-    textoConfirmar: String,
-    colorConfirmar: androidx.compose.ui.graphics.Color = CyberCyan,
-    onConfirmar: () -> Unit,
-    onCancelar: () -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onCancelar,
-        title = { Text(titulo, fontWeight = FontWeight.Bold, color = CyberTextoPrincipal) },
-        text = { Text(mensaje, style = MaterialTheme.typography.bodyMedium, color = CyberTextoSecundario) },
-        confirmButton = {
-            TextButton(onClick = onConfirmar) {
-                Text(textoConfirmar, color = colorConfirmar, fontWeight = FontWeight.Bold)
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onCancelar) {
-                Text(stringResource(R.string.action_cancel), color = CyberTextoSecundario)
-            }
-        },
-        containerColor = CyberGlass,
-        titleContentColor = CyberTextoPrincipal,
-        textContentColor = CyberTextoSecundario
-    )
+private fun agruparPorFecha(
+    escaneos: List<EscaneoEntity>,
+    ahora: Long = System.currentTimeMillis()
+): List<GrupoHistorial> {
+    val ordenados = escaneos.sortedByDescending { it.creadoEnMillis }
+    val hoy = ordenados.filter { diasDeDiferencia(it.creadoEnMillis, ahora) == 0L }
+    val ayer = ordenados.filter { diasDeDiferencia(it.creadoEnMillis, ahora) == 1L }
+    val anteriores = ordenados.filter { diasDeDiferencia(it.creadoEnMillis, ahora) >= 2L }
+    val resultado = mutableListOf<GrupoHistorial>()
+    if (hoy.isNotEmpty()) resultado += GrupoHistorial("Hoy", hoy)
+    if (ayer.isNotEmpty()) resultado += GrupoHistorial("Ayer", ayer)
+    if (anteriores.isNotEmpty()) resultado += GrupoHistorial("Anteriores", anteriores)
+    return resultado
+}
+
+private fun diasDeDiferencia(millis: Long, ahora: Long = System.currentTimeMillis()): Long {
+    val calAhora = Calendar.getInstance().apply {
+        timeInMillis = ahora
+        set(Calendar.HOUR_OF_DAY, 0)
+        set(Calendar.MINUTE, 0)
+        set(Calendar.SECOND, 0)
+        set(Calendar.MILLISECOND, 0)
+    }
+    val calEnt = Calendar.getInstance().apply {
+        timeInMillis = millis
+        set(Calendar.HOUR_OF_DAY, 0)
+        set(Calendar.MINUTE, 0)
+        set(Calendar.SECOND, 0)
+        set(Calendar.MILLISECOND, 0)
+    }
+    return TimeUnit.MILLISECONDS.toDays(calAhora.timeInMillis - calEnt.timeInMillis)
+}
+
+private fun tiempoRelativo(millis: Long, ahora: Long = System.currentTimeMillis()): String {
+    val delta = ahora - millis
+    if (delta < 0) return "ahora"
+    val dias = diasDeDiferencia(millis, ahora)
+    if (dias <= 0L) {
+        val minutos = TimeUnit.MILLISECONDS.toMinutes(delta)
+        val horas = TimeUnit.MILLISECONDS.toHours(delta)
+        return when {
+            minutos < 1 -> "ahora"
+            minutos < 60 -> "hace $minutos min"
+            else -> "hace $horas h"
+        }
+    }
+    if (dias == 1L) return "ayer"
+    if (dias in 2L..30L) return "hace $dias días"
+    if (dias in 31L..365L) {
+        val meses = (dias / 30).toInt()
+        return "hace $meses ${if (meses == 1) "mes" else "meses"}"
+    }
+    val anos = (dias / 365).toInt()
+    return "hace $anos ${if (anos == 1) "año" else "años"}"
 }

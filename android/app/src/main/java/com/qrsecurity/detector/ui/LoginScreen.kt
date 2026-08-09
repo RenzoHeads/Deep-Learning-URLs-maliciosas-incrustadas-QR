@@ -1,426 +1,360 @@
 package com.qrsecurity.detector.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle.State.STARTED
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.qrsecurity.detector.R
-import com.qrsecurity.detector.ui.TipoMensaje
+import androidx.lifecycle.repeatOnLifecycle
 import com.qrsecurity.detector.ui.theme.CyberCyan
-import com.qrsecurity.detector.ui.theme.CyberVerdeAlerta
 import com.qrsecurity.detector.ui.theme.CyberFondo
 import com.qrsecurity.detector.ui.theme.CyberGlass
-import com.qrsecurity.detector.ui.theme.CyberRojo
+import com.qrsecurity.detector.ui.theme.CyberGlassVariant
 import com.qrsecurity.detector.ui.theme.CyberTextoPrincipal
 import com.qrsecurity.detector.ui.theme.CyberTextoSecundario
 import com.qrsecurity.detector.ui.theme.Elevacion
 import com.qrsecurity.detector.ui.theme.Espaciado
+import com.qrsecurity.detector.ui.theme.PencilBrandMark
 import com.qrsecurity.detector.ui.theme.RadioBorde
 import com.qrsecurity.detector.ui.theme.TamanosIcono
 import com.qrsecurity.detector.ui.theme.TamanosToque
 
 /**
- * Pantalla de Login / Registro con usuario y password.
+ * Pantalla de Login (Pencil frame Jitpw).
  *
- * Flujo:
- *  - Modo REGISTRO: el usuario ingresa nombre_usuario + password (+ correo opcional),
- *    se llama a [ClienteBackend.registrarUsuario] (`POST /auth/registrar`).
- *  - Modo LOGIN: el usuario ingresa nombre_usuario + password,
- *    se llama a [ClienteBackend.login] (`POST /auth/login`).
+ * F3.1: UI Compose que replica el layout de Pencil Jitpw. Patron UDF:
+ * - estado observado desde [LoginViewModel.uiState] via
+ *   `collectAsStateWithLifecycle` (sobrevive a rotacion sin re-emitir).
+ * - eventos one-shot del Channel [LoginViewModel.eventos] recolectados
+ *   con `LaunchedEffect` + `repeatOnLifecycle(STARTED)` (Bug L1 fix:
+ *   evita re-disparar navegacion/snackbar en rotacion).
+ * - acciones despachadas via `viewModel.onAction(LoginAction.Autenticar(...))`.
  *
- * Tras exito, [SesionUsuario.guardarSesion] persiste token + usuario y se
- * invoca [onExito], que navega a Onboarding.
+ * El estado de los campos vive en `rememberSaveable` (sobrevive a
+ * rotacion); la visibilidad de la contrasena vive en `remember` (es
+ * efimera y no merece sobrevivir al config change).
  *
- * El token devuelto por el backend es interno: la app solo lo persiste
- * (no se muestra al usuario). El usuario se identifica con su nombre_usuario.
+ * @param onExito Callback tras login exitoso (navega a HOME).
+ * @param onNavegarRegistro Callback para ir a la pantalla de registro.
+ * @param onMensaje Callback para mostrar snackbars.
+ * @param viewModel VM de login (Hilt, scoped al NavBackStackEntry).
  */
 @Composable
 fun PantallaLogin(
     onExito: (esNuevoRegistro: Boolean) -> Unit,
+    onNavegarRegistro: () -> Unit,
     onMensaje: (TipoMensaje, String) -> Unit = { _, _ -> },
     viewModel: LoginViewModel = hiltViewModel()
 ) {
-    var modoRegistro by remember { mutableStateOf(false) }
-    var nombreUsuario by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    var correo by remember { mutableStateOf("") }
-    var passwordVisible by remember { mutableStateOf(false) }
-
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val lifecycleOwner = LocalLifecycleOwner.current
 
-    // Bug L1 fix: consumir eventos one-shot via Channel (receiveAsFlow)
-    // en lugar de LaunchedEffect(uiState.exito, uiState.error) que
-    // re-disparaba en rotacion. El Channel entrega cada evento una sola
-    // vez — no hay re-fire al recomponer tras config change.
-    LaunchedEffect(Unit) {
-        viewModel.eventos.collect { evento ->
-            when (evento) {
-                is LoginEvento.Exito -> {
-                    onMensaje(TipoMensaje.EXITO, "Sesion iniciada")
-                    onExito(evento.esNuevoRegistro)
-                }
-                is LoginEvento.Error -> {
-                    onMensaje(TipoMensaje.ERROR, evento.mensaje)
+    LaunchedEffect(viewModel) {
+        lifecycleOwner.repeatOnLifecycle(STARTED) {
+            viewModel.eventos.collect { evento ->
+                when (evento) {
+                    is LoginEvento.Exito -> onExito(evento.esNuevoRegistro)
+                    is LoginEvento.Error -> onMensaje(TipoMensaje.ERROR, evento.mensaje)
                 }
             }
         }
     }
 
-    val estadoScroll = rememberScrollState()
-    val onToggleModo = {
-        modoRegistro = !modoRegistro
-        password = ""
-        correo = ""
-    }
+    var usuario by rememberSaveable { mutableStateOf("") }
+    var password by rememberSaveable { mutableStateOf("") }
+    var mostrarPassword by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(CyberFondo)
-            .imePadding()
-            .navigationBarsPadding()
-            .verticalScroll(estadoScroll)
-            .padding(horizontal = Espaciado.xxl, vertical = Espaciado.hero),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(Espaciado.xxxl, Alignment.Top)
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = Espaciado.xxl, vertical = Espaciado.xxxl),
+        verticalArrangement = Arrangement.spacedBy(Espaciado.xxl)
     ) {
-        LogoQRGuardian()
-
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(RadioBorde.xl))
-                .background(CyberGlass.copy(alpha = 0.85f))
-                .padding(Espaciado.xl),
-            verticalArrangement = Arrangement.spacedBy(Espaciado.lg)
-        ) {
-            Text(
-                text = if (modoRegistro) "Crear cuenta" else "Iniciar sesion",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold,
-                color = CyberTextoPrincipal
-            )
-
-            FormularioAuth(
-                modoRegistro = modoRegistro,
-                nombreUsuario = nombreUsuario,
-                password = password,
-                correo = correo,
-                passwordVisible = passwordVisible,
-                handlers = HandlersFormulario(
-                    onNombreUsuario = { nuevo ->
-                        val filtrado = nuevo.trim().filter { c ->
-                            c.isLetterOrDigit() || c == '_' || c == '.'
-                        }
-                        nombreUsuario = filtrado
-                    },
-                    onPassword = { password = it },
-                    onCorreo = { correo = it.trim() },
-                    onTogglePassword = { passwordVisible = !passwordVisible }
-                )
-            )
-
-            BotonAuth(
-                ParametrosBotonAuth(
-                    modoRegistro = modoRegistro,
-                    procesando = uiState.procesando,
-                    nombreUsuario = nombreUsuario,
-                    password = password,
-                    correo = correo,
-                    onMensaje = onMensaje,
-                    onAction = { vmAction ->
-                        viewModel.onAction(vmAction)
-                    }
-                )
-            )
-
-            ToggleLoginRegistro(modoRegistro = modoRegistro, onToggle = onToggleModo)
-        }
-
+        // ─── Brand Intro ───
+        Column(verticalArrangement = Arrangement.spacedBy(Espaciado.md)) {
         Text(
-            text = "El backend debe estar activo para usar la app",
-            style = MaterialTheme.typography.bodySmall,
-            color = CyberTextoSecundario,
-            textAlign = TextAlign.Center
-        )
-    }
-}
-
-@Composable
-private fun LogoQRGuardian() {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(Espaciado.md)
-    ) {
-        Box(
-            modifier = Modifier
-                .size(TamanosIcono.heroContenedor)
-                .clip(androidx.compose.foundation.shape.CircleShape)
-                .background(
-                    Brush.radialGradient(
-                        colors = listOf(CyberVerdeAlerta.copy(alpha = 0.2f), CyberFondo)
-                    )
-                ),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = Icons.Filled.Security,
-                contentDescription = null,
-                tint = CyberCyan,
-                modifier = Modifier.size(TamanosIcono.grande)
-            )
-        }
-        Text(
-            text = "QR GUARDIAN",
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold,
+            text = "ACCESO SEGURO",
+            style = MaterialTheme.typography.labelMedium,
             color = CyberCyan
         )
-        Text(
-            text = "Detecta URLs maliciosas\nincrustadas en codigos QR",
-            style = MaterialTheme.typography.bodyMedium,
-            color = CyberTextoSecundario,
-            textAlign = TextAlign.Center
-        )
-    }
-}
-
-@Composable
-private fun FormularioAuth(
-    modoRegistro: Boolean,
-    nombreUsuario: String,
-    password: String,
-    correo: String,
-    passwordVisible: Boolean,
-    handlers: HandlersFormulario
-) {
-    OutlinedTextField(
-        value = nombreUsuario,
-        onValueChange = handlers.onNombreUsuario,
-        label = { Text(stringResource(R.string.label_username)) },
-        placeholder = { Text(stringResource(R.string.placeholder_username)) },
-        singleLine = true,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
-        modifier = Modifier.fillMaxWidth(),
-        colors = colorsCyber()
-    )
-
-    OutlinedTextField(
-        value = password,
-        onValueChange = handlers.onPassword,
-        label = { Text(stringResource(R.string.label_password)) },
-        singleLine = true,
-        visualTransformation = if (passwordVisible) VisualTransformation.None
-            else PasswordVisualTransformation(),
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-        trailingIcon = {
-            IconButton(onClick = handlers.onTogglePassword) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Espaciado.md)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(Espaciado.gigante)
+                    .clip(CircleShape)
+                    .background(PencilBrandMark),
+                contentAlignment = Alignment.Center
+            ) {
                 Icon(
-                    imageVector = if (passwordVisible) Icons.Filled.VisibilityOff
-                        else Icons.Filled.Visibility,
-                    contentDescription = if (passwordVisible) "Ocultar" else "Mostrar",
-                    tint = CyberTextoSecundario
+                    imageVector = Icons.Filled.Security,
+                    contentDescription = null,
+                    tint = CyberCyan,
+                    modifier = Modifier.size(TamanosIcono.estandar)
                 )
             }
-        },
-        modifier = Modifier.fillMaxWidth(),
-        colors = colorsCyber()
-    )
-
-    if (modoRegistro) {
-        OutlinedTextField(
-            value = correo,
-            onValueChange = handlers.onCorreo,
-            label = { Text(stringResource(R.string.label_email_optional)) },
-            placeholder = { Text(stringResource(R.string.placeholder_email)) },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-            modifier = Modifier.fillMaxWidth(),
-            colors = colorsCyber()
-        )
-    }
-}
-
-private class HandlersFormulario(
-    val onNombreUsuario: (String) -> Unit,
-    val onPassword: (String) -> Unit,
-    val onCorreo: (String) -> Unit,
-    val onTogglePassword: () -> Unit
-)
-
-@Composable
-private fun ToggleLoginRegistro(
-    modoRegistro: Boolean,
-    onToggle: () -> Unit
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.Center,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
+            Text(
+                text = "SeguridadQR",
+                style = MaterialTheme.typography.titleLarge,
+                color = CyberTextoPrincipal
+            )
+        }
         Text(
-            text = if (modoRegistro) "Ya tienes cuenta? " else "No tienes cuenta? ",
-            style = MaterialTheme.typography.bodySmall,
+            text = "Tu centro de control para navegar con confianza.",
+            style = MaterialTheme.typography.bodyMedium,
             color = CyberTextoSecundario
         )
-        Text(
-            text = if (modoRegistro) "Inicia sesion" else "Crea una",
-            style = MaterialTheme.typography.bodySmall,
-            color = CyberCyan,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier
-                .clip(RoundedCornerShape(RadioBorde.sm))
-                .background(CyberCyan.copy(alpha = 0.1f))
-                .padding(horizontal = Espaciado.sm, vertical = Espaciado.xs)
-                .clickable(onClick = onToggle)
-        )
-    }
-}
+        }
 
-@Composable
-private fun colorsCyber() = TextFieldDefaults.colors(
-    focusedContainerColor = CyberFondo,
-    unfocusedContainerColor = CyberFondo,
-    focusedTextColor = CyberTextoPrincipal,
-    unfocusedTextColor = CyberTextoPrincipal,
-    cursorColor = CyberCyan,
-    focusedIndicatorColor = CyberCyan,
-    unfocusedIndicatorColor = CyberTextoSecundario,
-    focusedLabelColor = CyberCyan,
-    unfocusedLabelColor = CyberTextoSecundario
-)
-
-private fun validarCredenciales(
-    modoRegistro: Boolean,
-    nombreUsuario: String,
-    password: String
-): String? = when {
-    nombreUsuario.length < 3 -> "Usuario muy corto (minimo 3 caracteres)"
-    modoRegistro && password.length < 6 -> "Contrasena muy corta (minimo 6 caracteres)"
-    !modoRegistro && password.isEmpty() -> "Ingresa tu contrasena"
-    else -> null
-}
-
-private fun manejarErrorBackend(codigo: Int, cuerpo: String?, message: String?): String = when (codigo) {
-    409 -> "El usuario ya existe. Intenta con otro."
-    401 -> "Usuario o contrasena incorrectos."
-    else -> "Error $codigo: ${cuerpo ?: message}"
-}
-
-/** Datos agrupados para BotonAuth — evita S107 (>7 params). */
-private data class ParametrosBotonAuth(
-    val modoRegistro: Boolean,
-    val procesando: Boolean,
-    val nombreUsuario: String,
-    val password: String,
-    val correo: String,
-    val onMensaje: (TipoMensaje, String) -> Unit,
-    val onAction: (LoginAction) -> Unit
-)
-
-/**
- * Boton de auth con validacion + indicador de carga.
- * Extraido de PantallaLogin para reducir complejidad cognitiva (S3776).
- *
- * Hilt: la logica de auth se delega al [LoginViewModel] via onAction
- * (UDF). Ya no construye `ClienteBackend()` ni lanza corutinas — el
- * VM lo hace via viewModelScope.
- */
-@Composable
-private fun BotonAuth(params: ParametrosBotonAuth) {
-    val (modoRegistro, procesando, nombreUsuario, password, correo, onMensaje, onAction) = params
-    Button(
-        onClick = {
-            if (procesando) return@Button
-            val error = validarCredenciales(modoRegistro, nombreUsuario, password)
-            if (error != null) {
-                onMensaje(TipoMensaje.ERROR, error)
-                return@Button
-            }
-            onAction(
-                LoginAction.Autenticar(
-                    modoRegistro = modoRegistro,
-                    nombreUsuario = nombreUsuario,
-                    password = password,
-                    correo = correo
-                )
-            )
-        },
-        enabled = !procesando,
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(TamanosToque.boton),
-        shape = RoundedCornerShape(RadioBorde.lg),
-        colors = ButtonDefaults.buttonColors(
-            containerColor = CyberCyan,
-            contentColor = CyberFondo,
-            disabledContainerColor = CyberCyan.copy(alpha = 0.38f),
-            disabledContentColor = CyberFondo
-        )
-    ) {
-        if (procesando) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Espaciado.md)
+        // ─── Login Form Card ───
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(RadioBorde.xxl),
+            colors = CardDefaults.cardColors(containerColor = CyberGlass),
+            elevation = CardDefaults.cardElevation(defaultElevation = Elevacion.ninguna)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(Espaciado.xl),
+                verticalArrangement = Arrangement.spacedBy(Espaciado.lg)
             ) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(Espaciado.xl),
-                    strokeWidth = Elevacion.flotante,
-                    color = CyberFondo
+                Text(
+                    text = "Bienvenido de nuevo",
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = CyberTextoPrincipal
                 )
-                Text(stringResource(R.string.action_connecting), fontWeight = FontWeight.Bold)
+                Text(
+                    text = "Inicia sesion para gestionar tus alertas y proteger tus accesos.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = CyberTextoSecundario
+                )
+
+                // Usuario field group
+                Column(verticalArrangement = Arrangement.spacedBy(Espaciado.xs)) {
+                    Text(
+                        text = "Usuario",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = CyberTextoSecundario
+                    )
+                    OutlinedTextField(
+                        value = usuario,
+                        onValueChange = { usuario = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("Escribe tu usuario") },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Filled.Person,
+                                contentDescription = null,
+                                modifier = Modifier.size(TamanosIcono.estandar)
+                            )
+                        },
+                        singleLine = true,
+                        shape = RoundedCornerShape(RadioBorde.md),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedContainerColor = CyberGlassVariant,
+                            unfocusedContainerColor = CyberGlassVariant,
+                            focusedBorderColor = CyberCyan,
+                            unfocusedBorderColor = MaterialTheme.colorScheme.outline,
+                            cursorColor = CyberCyan,
+                            focusedTextColor = CyberTextoPrincipal,
+                            unfocusedTextColor = CyberTextoPrincipal
+                        )
+                    )
+                }
+
+                // Contrasena field group
+                Column(verticalArrangement = Arrangement.spacedBy(Espaciado.xs)) {
+                    Text(
+                        text = "Contrasena",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = CyberTextoSecundario
+                    )
+                    OutlinedTextField(
+                        value = password,
+                        onValueChange = { password = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("Introduce tu contrasena") },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Filled.Lock,
+                                contentDescription = null,
+                                modifier = Modifier.size(TamanosIcono.estandar)
+                            )
+                        },
+                        trailingIcon = {
+                            IconButton(onClick = { mostrarPassword = !mostrarPassword }) {
+                                Icon(
+                                    imageVector = if (mostrarPassword) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
+                                    contentDescription = if (mostrarPassword) "Ocultar contrasena" else "Mostrar contrasena",
+                                    modifier = Modifier.size(TamanosIcono.estandar)
+                                )
+                            }
+                        },
+                        visualTransformation = if (mostrarPassword) VisualTransformation.None else PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        singleLine = true,
+                        shape = RoundedCornerShape(RadioBorde.md),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedContainerColor = CyberGlassVariant,
+                            unfocusedContainerColor = CyberGlassVariant,
+                            focusedBorderColor = CyberCyan,
+                            unfocusedBorderColor = MaterialTheme.colorScheme.outline,
+                            cursorColor = CyberCyan,
+                            focusedTextColor = CyberTextoPrincipal,
+                            unfocusedTextColor = CyberTextoPrincipal
+                        )
+                    )
+                }
+
+                // Recovery link
+                TextButton(
+                    onClick = { /* F3.x: navegacion a recuperacion de contrasena */ },
+                    contentPadding = PaddingValues(
+                        horizontal = 0.dp,
+                        vertical = Espaciado.xs
+                    )
+                ) {
+                    Text(
+                        text = "Olvidaste tu contrasena?",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = CyberCyan
+                    )
+                }
+
+                // Primary Login button
+                Button(
+                    onClick = {
+                        viewModel.onAction(
+                            LoginAction.Autenticar(
+                                modoRegistro = false,
+                                nombreUsuario = usuario,
+                                password = password,
+                                correo = ""
+                            )
+                        )
+                    },
+                    enabled = !uiState.procesando,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(TamanosToque.boton),
+                    shape = RoundedCornerShape(RadioBorde.lg),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = CyberCyan,
+                        contentColor = CyberFondo
+                    )
+                ) {
+                    if (uiState.procesando) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            color = CyberFondo,
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                            contentDescription = null,
+                            modifier = Modifier.size(TamanosIcono.estandar)
+                        )
+                        Spacer(modifier = Modifier.width(Espaciado.sm))
+                        Text(
+                            text = "Iniciar sesion",
+                            style = MaterialTheme.typography.labelLarge
+                        )
+                    }
+                }
+
+                // Trust note
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Espaciado.sm)
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Lock,
+                        contentDescription = null,
+                        tint = CyberTextoSecundario,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = "Tus datos se mantienen protegidos.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = CyberTextoSecundario
+                    )
+                }
             }
-        } else {
+        }
+
+        // ─── Create Account Footer ───
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(Espaciado.xs)
+        ) {
             Text(
-                if (modoRegistro) "Registrarse" else stringResource(R.string.action_login),
-                fontWeight = FontWeight.Bold
+                text = "Aun no tienes cuenta?",
+                style = MaterialTheme.typography.bodyMedium,
+                color = CyberTextoSecundario
             )
+            TextButton(onClick = onNavegarRegistro) {
+                Text(
+                    text = "Crear cuenta",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = CyberCyan
+                )
+            }
         }
     }
 }

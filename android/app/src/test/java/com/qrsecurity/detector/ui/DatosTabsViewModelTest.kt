@@ -113,11 +113,8 @@ class DatosTabsViewModelTest {
      */
     private fun subscribirTodos() {
         collectorJobs += viewModel.viewModelScope.launch { viewModel.historialTodos.collect { } }
-        collectorJobs += viewModel.viewModelScope.launch { viewModel.historialSeguros.collect { } }
-        collectorJobs += viewModel.viewModelScope.launch { viewModel.historialMaliciosos.collect { } }
         collectorJobs += viewModel.viewModelScope.launch { viewModel.totalEscaneos.collect { } }
         collectorJobs += viewModel.viewModelScope.launch { viewModel.amenazas.collect { } }
-        collectorJobs += viewModel.viewModelScope.launch { viewModel.ultimos7Dias.collect { } }
         collectorJobs += viewModel.viewModelScope.launch { viewModel.urlsBloqueadas.collect { } }
     }
 
@@ -126,16 +123,6 @@ class DatosTabsViewModelTest {
     @Test
     fun estadoInicial_historialTodos_emptyList() {
         assertEquals(emptyList<EscaneoEntity>(), viewModel.historialTodos.value)
-    }
-
-    @Test
-    fun estadoInicial_historialSeguros_emptyList() {
-        assertEquals(emptyList<EscaneoEntity>(), viewModel.historialSeguros.value)
-    }
-
-    @Test
-    fun estadoInicial_historialMaliciosos_emptyList() {
-        assertEquals(emptyList<EscaneoEntity>(), viewModel.historialMaliciosos.value)
     }
 
     @Test
@@ -148,11 +135,6 @@ class DatosTabsViewModelTest {
     @Test
     fun estadoInicial_amenazas_null() {
         assertNull(viewModel.amenazas.value)
-    }
-
-    @Test
-    fun estadoInicial_ultimos7Dias_null() {
-        assertNull(viewModel.ultimos7Dias.value)
     }
 
     @Test
@@ -182,88 +164,6 @@ class DatosTabsViewModelTest {
 
         assertEquals("historialTodos debe emitir 1 escaneo tras insert", 1, viewModel.historialTodos.value.size)
         assertEquals("esc-1", viewModel.historialTodos.value[0].id)
-    }
-
-    @Test
-    fun historialSeguros_emiteSoloEscaneosSeguros() = runTest(testDispatcher) {
-        subscribirTodos()
-        db.escaneoDao().insertar(
-            EscaneoEntity(
-                id = "safe-1",
-                urlOriginal = "https://benign.example.com",
-                urlLimpia = "benign.example.com",
-                probabilidad = 0.1f,
-                nivelAlerta = "SEGURO",
-                delegado = null,
-                esMalicioso = false,
-                creadoEnMillis = System.currentTimeMillis(),
-                dirty = false,
-                syncedAtMillis = System.currentTimeMillis()
-            )
-        )
-        db.escaneoDao().insertar(
-            EscaneoEntity(
-                id = "mal-1",
-                urlOriginal = "https://evil.example.com",
-                urlLimpia = "evil.example.com",
-                probabilidad = 0.95f,
-                nivelAlerta = "MALICIOSO",
-                delegado = "NNAPI",
-                esMalicioso = true,
-                creadoEnMillis = System.currentTimeMillis(),
-                dirty = false,
-                syncedAtMillis = System.currentTimeMillis()
-            )
-        )
-        drenarRoomYDispatcher()
-
-        assertEquals(
-            "historialSeguros debe emitir solo 1 escaneo seguro (no el malicioso)",
-            1,
-            viewModel.historialSeguros.value.size
-        )
-        assertEquals("safe-1", viewModel.historialSeguros.value[0].id)
-    }
-
-    @Test
-    fun historialMaliciosos_emiteSoloEscaneosMaliciosos() = runTest(testDispatcher) {
-        subscribirTodos()
-        db.escaneoDao().insertar(
-            EscaneoEntity(
-                id = "safe-2",
-                urlOriginal = "https://benign.example.com",
-                urlLimpia = "benign.example.com",
-                probabilidad = 0.1f,
-                nivelAlerta = "SEGURO",
-                delegado = null,
-                esMalicioso = false,
-                creadoEnMillis = System.currentTimeMillis(),
-                dirty = false,
-                syncedAtMillis = System.currentTimeMillis()
-            )
-        )
-        db.escaneoDao().insertar(
-            EscaneoEntity(
-                id = "mal-2",
-                urlOriginal = "https://evil.example.com",
-                urlLimpia = "evil.example.com",
-                probabilidad = 0.95f,
-                nivelAlerta = "MALICIOSO",
-                delegado = "NNAPI",
-                esMalicioso = true,
-                creadoEnMillis = System.currentTimeMillis(),
-                dirty = false,
-                syncedAtMillis = System.currentTimeMillis()
-            )
-        )
-        drenarRoomYDispatcher()
-
-        assertEquals(
-            "historialMaliciosos debe emitir solo 1 escaneo malicioso",
-            1,
-            viewModel.historialMaliciosos.value.size
-        )
-        assertEquals("mal-2", viewModel.historialMaliciosos.value[0].id)
     }
 
     @Test
@@ -336,33 +236,6 @@ class DatosTabsViewModelTest {
         drenarRoomYDispatcher()
 
         assertEquals("amenazas debe emitir 1 (solo el malicioso)", 1, viewModel.amenazas.value)
-    }
-
-    @Test
-    fun ultimos7Dias_emiteContadorEscaneosRecientes() = runTest(testDispatcher) {
-        subscribirTodos()
-        val ahora = System.currentTimeMillis()
-        // Reciente (dentro de 7 dias)
-        db.escaneoDao().insertar(
-            EscaneoEntity(
-                id = "rec-1",
-                urlOriginal = "https://recent.example.com",
-                urlLimpia = "recent.example.com",
-                probabilidad = 0.5f,
-                nivelAlerta = "SOSPECHOSO",
-                delegado = "NNAPI",
-                esMalicioso = true,
-                creadoEnMillis = ahora,
-                dirty = false,
-                syncedAtMillis = ahora
-            )
-        )
-        drenarRoomYDispatcher()
-
-        assertTrue(
-            "ultimos7Dias debe emitir >= 1 (el escaneo reciente). Fue: ${viewModel.ultimos7Dias.value}",
-            (viewModel.ultimos7Dias.value ?: 0) >= 1
-        )
     }
 
     @Test

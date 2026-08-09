@@ -5,7 +5,6 @@ import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -29,7 +28,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -95,7 +93,7 @@ object Rutas {
  * NavHost principal de la app QR Guardian — rediseño F2.2.
  *
  * Navegacion simplificada a 3 tabs (Inicio, Historial, Ajustes) + rutas
- * de detalle. Las pantallas se rellenan en F3; por ahora son placeholders.
+ * de detalle.
  */
 @Composable
 fun NavGuardian() {
@@ -172,9 +170,6 @@ fun NavGuardian() {
 
 /**
  * Contenido del NavHost — 9 rutas de la app QR Guardian rediseñada.
- *
- * F2.2: todas las pantallas son placeholders (`Box { Text("... (F3)") }`).
- * F3 reemplaza cada placeholder con la pantalla real.
  */
 @Composable
 private fun NavGuardianRutas(
@@ -195,35 +190,91 @@ private fun NavGuardianRutas(
         popExitTransition = { ExitTransition.None },
     ) {
         composable(Rutas.LOGIN) {
-            PlaceholderPantalla("Login (F3)")
+            PantallaLogin(
+                onExito = { _ ->
+                    navController.navigate(Rutas.HOME) {
+                        popUpTo(Rutas.LOGIN) { inclusive = true }
+                    }
+                },
+                onNavegarRegistro = { navController.navigate(Rutas.REGISTRO) },
+                onMensaje = contexto.mostrarMensaje,
+            )
         }
         composable(Rutas.REGISTRO) {
-            PlaceholderPantalla("Registro (F3)")
+            PantallaRegistro(
+                onExito = {
+                    navController.navigate(Rutas.HOME) {
+                        popUpTo(Rutas.LOGIN) { inclusive = true }
+                    }
+                },
+                onVolver = { navController.popBackStack() },
+                onMensaje = contexto.mostrarMensaje,
+            )
         }
         composable(Rutas.ANALISIS) {
-            PlaceholderPantalla("Analisis (F3)")
+            PantallaAnalisis(
+                onResultadoMalicioso = { idEscaneo ->
+                    navController.navigate(Rutas.DETALLE_URL.replace("{id}", idEscaneo))
+                },
+                onResultadoSeguro = { idEscaneo ->
+                    navController.navigate(Rutas.URL_SEGURA.replace("{id}", idEscaneo))
+                },
+                onMensaje = contexto.mostrarMensaje,
+                pipelineViewModel = viewModels.pipelineViewModel,
+            )
         }
         composable(Rutas.HOME) {
-            PlaceholderPantalla("Inicio (F3)")
+            PantallaHome(
+                onEscanear = { navController.navigate(Rutas.ANALISIS) },
+                onVerHistorial = { navController.navigate(Rutas.HISTORIAL) },
+                datosViewModel = viewModels.datosViewModel,
+                pipelineViewModel = viewModels.pipelineViewModel,
+            )
         }
         composable(Rutas.HISTORIAL) {
-            PlaceholderPantalla("Historial (F3)")
+            PantallaHistorial(
+                datosViewModel = viewModels.datosViewModel,
+                onEscanear = { navController.navigate(Rutas.ANALISIS) },
+                onVerDetalle = { idEscaneo ->
+                    navController.navigate(Rutas.DETALLE_URL.replace("{id}", idEscaneo))
+                },
+                onMensaje = contexto.mostrarMensaje,
+            )
         }
         composable(
             route = Rutas.URL_SEGURA,
             arguments = listOf(
                 navArgument("id") { type = NavType.StringType },
             ),
-        ) {
-            PlaceholderPantalla("URL Segura (F3)")
+        ) { backStackEntry ->
+            val idEscaneo = backStackEntry.arguments?.getString("id").orEmpty()
+            PantallaUrlSegura(
+                id = idEscaneo,
+                onEscanearOtro = { navController.navigate(Rutas.ANALISIS) },
+                onVerDetalle = { id ->
+                    navController.navigate(Rutas.DETALLE_URL.replace("{id}", id))
+                },
+                onMensaje = contexto.mostrarMensaje,
+            )
         }
         composable(
             route = Rutas.DETALLE_URL,
             arguments = listOf(
                 navArgument("id") { type = NavType.StringType },
             ),
-        ) {
-            PlaceholderPantalla("Detalle URL (F3)")
+        ) { backStackEntry ->
+            val idEscaneo = backStackEntry.arguments?.getString("id").orEmpty()
+            PantallaDetalleUrl(
+                id = idEscaneo,
+                onBack = { navController.popBackStack() },
+                onVerAnalisisAnteriores = { urlLimpia, idActual ->
+                    val ruta = Rutas.ANALISIS_ANTERIORES
+                        .replace("{urlLimpia}", urlLimpia)
+                        .replace("{idActual}", idActual)
+                    navController.navigate(ruta)
+                },
+                onMensaje = contexto.mostrarMensaje,
+            )
         }
         composable(
             route = Rutas.ANALISIS_ANTERIORES,
@@ -237,25 +288,26 @@ private fun NavGuardianRutas(
                     defaultValue = ""
                 },
             ),
-        ) {
-            PlaceholderPantalla("Analisis Anteriores (F3)")
+        ) { backStackEntry ->
+            val urlLimpia = backStackEntry.arguments?.getString("urlLimpia").orEmpty()
+            val idActual = backStackEntry.arguments?.getString("idActual").orEmpty()
+            PantallaAnalisisAnteriores(
+                urlLimpia = urlLimpia,
+                idActual = idActual,
+                onVolver = { navController.popBackStack() },
+                viewModel = viewModels.analisisAnterioresViewModel,
+            )
         }
         composable(Rutas.AJUSTES) {
-            PlaceholderPantalla("Ajustes (F3)")
+            PantallaAjustes(
+                onCerrarSesion = {
+                    navController.navigate(Rutas.LOGIN) {
+                        popUpTo(Rutas.HOME) { inclusive = true }
+                    }
+                },
+                onMensaje = contexto.mostrarMensaje,
+            )
         }
-    }
-}
-
-/**
- * Placeholder generico para rutas pendientes de implementacion en F3.
- */
-@Composable
-private fun PlaceholderPantalla(texto: String) {
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(text = texto, color = CyberTextoSecundario)
     }
 }
 

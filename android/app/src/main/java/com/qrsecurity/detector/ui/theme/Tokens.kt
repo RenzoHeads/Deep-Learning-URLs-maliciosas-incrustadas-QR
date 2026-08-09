@@ -51,23 +51,11 @@ object Espaciado {
     /** 24dp — section spacing, large gaps between groups. */
     val xxl: Dp = 24.dp
 
-    /** 28dp — extended section spacing (avatar inner content). */
-    val xxxs: Dp = 28.dp
-
     /** 32dp — screen-level vertical spacing (permission screens, onboarding). */
     val xxxl: Dp = 32.dp
 
-    /** 36dp — medium-large spacing (section dividers). */
-    val giganteS: Dp = 36.dp
-
     /** 40dp — large spacing (image placeholders, onboarding illustrations). */
     val giganteM: Dp = 40.dp
-
-    /** 48dp — large hero spacing (empty states, splash). */
-    val hero: Dp = 48.dp
-
-    /** 56dp — hero button height / large hero spacing. */
-    val heroL: Dp = 56.dp
 
     /** 64dp — extra-large spacing (icon sizes, splash centers). */
     val gigante: Dp = 64.dp
@@ -119,12 +107,6 @@ object Elevacion {
 
     /** 2dp — snackbars, floating chips. */
     val flotante: Dp = 2.dp
-
-    /** 4dp — FABs, floating action elements. */
-    val elevada: Dp = 4.dp
-
-    /** 8dp — dialogs, bottom sheets. */
-    val modal: Dp = 8.dp
 }
 
 /**
@@ -133,14 +115,8 @@ object Elevacion {
  * The app follows the stricter 48dp minimum for accessibility.
  */
 object TamanosToque {
-    /** 48dp — minimum touch target (WCAG AA). */
-    val minimo: Dp = 48.dp
-
     /** 56dp — standard button height (Material 3 filled button). */
     val boton: Dp = 56.dp
-
-    /** 64dp — large button / icon button. */
-    val grande: Dp = 64.dp
 }
 
 /**
