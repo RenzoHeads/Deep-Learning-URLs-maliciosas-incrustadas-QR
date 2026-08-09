@@ -4,7 +4,7 @@ package com.qrsecurity.detector.ml
  * Convierte los logits crudos del modelo a probabilidad via sigmoid, luego clasifica
  * la URL en uno de tres niveles de alerta usando umbrales configurables.
  *
- * Umbrales (defaults; configurables via [inicializar] al arrancar la app):
+ * Umbrales (defaults; configurables via [inicializar]):
  *  - **prob < UMBRAL_SEGURO (default 0.3)** → [NivelAlerta.SEGURO] (verde)
  *  - **UMBRAL_SEGURO ≤ prob < UMBRAL_MALICIOSO (default 0.7)** → [NivelAlerta.SOSPECHOSO] (amarillo)
  *  - **prob ≥ UMBRAL_MALICIOSO** → [NivelAlerta.MALICIOSO] (rojo)
@@ -19,10 +19,14 @@ package com.qrsecurity.detector.ml
  * Si el modelo produce dos logits (softmax de dos clases), [desdeLogits] toma
  * el logit de la clase 1 (malicioso).
  *
- * Bug M9 (fix): antes los umbrales eran `const val` hardcodeados (0.3/0.7) y
- * no se podian calibrar desde `assets/thresholds.json`. Ahora son `@Volatile var`
- * con valores por defecto conservando los defaults historicos y se configuran una
- * vez al arrancar la app via [inicializar].
+ * Los umbrales son `@Volatile var` con valores por defecto conservando los
+ * defaults historicos (0.3 / 0.7). [inicializar] y [reset] exponen un API de
+ * calibracion forward-compatible — el runtime actual usa los defaults, pero
+ * la firma permite ajustarlos en caliente si en el futuro se incorpora un
+ * archivo de calibracion (p. ej. `assets/thresholds.json`) cargado desde
+ * `Application.onCreate()`. Hoy nadie los invoca fuera de tests; estan
+ * reservados a proposito para no romper a futuro a los consumers que ya
+ * lean [UMBRAL_SEGURO] / [UMBRAL_MALICIOSO] en el hot-path de [clasificar].
  */
 object ControladorAlerta {
 
@@ -35,10 +39,10 @@ object ControladorAlerta {
     /**
      * Umbral frontera entre SEGURO y SOSPECHOSO.
      *
-     * Modificable via [inicializar] al arrancar la app (Phase 6 leera
-     * `assets/thresholds.json` y llamara `ControladorAlerta.inicializar(...)`
-     * desde `Application.onCreate()`). Por defecto retiene el valor
-     * hardcodeado historico (0.3) hasta que la calibracion este lista.
+     * Modificable via [inicializar] (API de calibracion forward-compatible).
+     * Hoy el runtime usa el valor por defecto (0.3); si en el futuro se
+     * incorpora un archivo de calibracion `assets/thresholds.json` cargado
+     * desde `Application.onCreate()`, bastara con invocar [inicializar].
      */
     @Volatile
     var UMBRAL_SEGURO: Float = UMBRAL_SEGURO_DEFAULT
@@ -50,15 +54,15 @@ object ControladorAlerta {
         private set
 
     /**
-     * Configurar los umbrales de alerta al arrancar la app.
+     * Configurar los umbrales de alerta.
      *
-     * Se invoca desde `Application.onCreate()` (o un inicializador equivalente)
-     * uma vez leidos los umbrales calibrados desde `assets/thresholds.json`.
-     * Si no hay archivo de calibracion, no se llama y se conservan los defaults
-     * [UMBRAL_SEGURO_DEFAULT] / [UMBRAL_MALICIOSO_DEFAULT].
+     * API forward-compatible: hoy el runtime no la invoca y se conservan
+     * los defaults [UMBRAL_SEGURO_DEFAULT] / [UMBRAL_MALICIOSO_DEFAULT].
+     * Reservada para cuando se incorpore un archivo de calibracion
+     * `assets/thresholds.json` cargado desde `Application.onCreate()`.
      *
      * Thread-safe: los campos son `@Volatile` con escritura sincronizada.
-     * Las lecturas en [clasificar] son atomicas sobre Float —— no se requiere
+     * Las lecturas en [clasificar] son atomicas sobre Float — no se requiere
      * bloqueo en el hot-path.
      *
      * @param umbralSeguro frontera SEGURO/SOSPECHOSO en [0, 1].
@@ -82,8 +86,8 @@ object ControladorAlerta {
     }
 
     /**
-     * Restaurar los umbrales a sus valores por defecto — util en tests y en
-     * el logout coordinado (Phase 6 podria variar umbrales por usuario).
+     * Restaurar los umbrales a sus valores por defecto — util en tests y para
+     * reestablecer la calibracion si [inicializar] se invoca en caliente.
      */
     @Synchronized
     fun reset() {
