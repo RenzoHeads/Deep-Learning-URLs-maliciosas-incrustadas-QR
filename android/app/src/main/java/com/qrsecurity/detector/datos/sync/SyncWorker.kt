@@ -18,6 +18,7 @@ import com.qrsecurity.detector.sesion.SesionUsuario
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import androidx.hilt.work.HiltWorker
+import kotlinx.coroutines.sync.Mutex
 
 /**
  * Worker que ejecuta una ronda completa de sincronizacion offline-first.
@@ -47,7 +48,47 @@ class SyncWorker @AssistedInject constructor(
     // db, backend, sesion, monitorRed).
     // ════════════════════════════════════════════════════════════════
 
+    /**
+     * A4 fix (audit) — Exclusion mutua entre instancias concurrentes de SyncWorker.
+     *
+     * Cuando WorkManager dispara un one-shot y un periodico en paralelo
+     * (escenario tipico: app foreground + Worker periodico), ambos compiten
+     * por la misma `pending_ops` outbox y el mismo cursor `sync_state`. Sin
+     * exclusion, pueden:
+     *   - Doble-procesar la misma pending_op (POST duplicado al backend).
+     *   - Avanzar el cursor de forma no monotona (un worker sobreescribe el
+     *     cursor del otro con un valor viejo).
+     *   - Race en `KEY_ULTIMO_SYNC` y `KEY_INITIAL_SYNC_COMPLETED`.
+     *
+     * [withSyncLock] envuelve todo [doWorkInternal] en un [Mutex] de coroutines
+     * (`executionLock`) que vive en el companion object. Si otro SyncWorker
+     * ya tiene el lock, este retorna `null` y `doWork` lo traduce a
+     * `Result.retry()` — WorkManager lo reencola con backoff, evitando el
+     * skip silencioso del scan en curso.
+     *
+     * No se usa `mutual exclusion semantica` a nivel DAO porque los DAOs son
+     * por-instancia y el problema es inter-Worker, no intra-Worker.
+     */
     override suspend fun doWork(): Result {
+        val result = withSyncLock { doWorkInternal() }
+        if (result == null) {
+            Log.i(TAG, "doWork() skip: otro SyncWorker corria (lock held) → Result.retry()")
+            return Result.retry()
+        }
+        return result
+    }
+
+    /**
+     * Cuerpo real de sincronizacion — extraido a metodo privado para que
+     * [doWork] pueda envolverlo en [withSyncLock] sin tocar los early returns.
+     *
+     * Ausencia de lock aqui es deliberada: el caller [doWork] es el unico
+     * punto de entrada publico y garantiza exclusion mutua. Tests unitarios
+     * pueden ejercer [doWorkInternal] directamente sin pasar por el lock
+     * (util para tests de EstadoPulls / procesarPendingOps / procesarDeltaPulls
+     * que no necesitan exclusion).
+     */
+    private suspend fun doWorkInternal(): Result {
         val context = applicationContext
 
         // ── Preflight: sesion activa ──
@@ -83,8 +124,14 @@ class SyncWorker @AssistedInject constructor(
         val estadoPulls = procesarDeltaPulls(
             repoCategorias, repoUrls, repoEscaneos, repoDenuncias, token
         )
-        if (estadoPulls.falloPermanente) {
-            Log.e(TAG, "doWork() PULL fallo permanente → Result.failure()")
+        if (estadoPulls.authError) {
+            // WAVE 16 fix (S5 CRITICAL): 401/403 en PULL → token expirado/invalido.
+            // Cerrar sesion (limpia token; preserva pending_ops en Room para que
+            // el re-login los empuje) y devolver Result.failure() para frenar
+            // el worker. NavGuardian/SessionViewModel detectaran el logout en
+            // el siguiente check y llevaran al usuario a login.
+            Log.w(TAG, "doWork() 401/403 en PULL → cerrarSesion + Result.failure()")
+            sesionUsuario.cerrarSesion()
             return Result.failure()
         }
         if (isStopped) {
@@ -128,7 +175,18 @@ class SyncWorker @AssistedInject constructor(
 
     /** Estado consolidado de los 4 PULLs para reducir complejidad de doWork(). */
     private data class EstadoPulls(
-        val falloPermanente: Boolean = false,
+        /**
+         * WAVE 16 fix (S5 CRITICAL): 401/403 detectado en cualquier PULL →
+         * cerrar sesion (token invalido/expirado) y devolver Result.failure()
+         * para frenar el worker. Antes era `falloPermanente` (que no disparaba
+         * logout). Ahora `authError` dispara `sesionUsuario.cerrarSesion()`
+         * para que NavGuardian/SessionViewModel detecten el logout en el
+         * siguiente check y naveguen a login. Los pending_ops se conservan en
+         * Room (no se purgan) para que el re-login los empuje con el token
+         * nuevo. Esto evita tanto el bucle infinito de 401s (PULL viejo hacia
+         * Result.retry() sin logout) como el drop silencioso de ops.
+         */
+        val authError: Boolean = false,
         val huboErrorTransitorio: Boolean = false,
         /**
          * Incremental sync unificado — true si alguna tabla aun tiene mas
@@ -148,8 +206,11 @@ class SyncWorker @AssistedInject constructor(
      *
      * Categorias siempre hace full pull (read-only, bajo volumen, sin updated_at).
      *
-     * No hay orphan cleanup — los tombstones se manejan via `deleted_at` dentro
-     * de cada `sincronizarDelta`.
+     * Bug M2 fix: tras cada delta pull COMPLETO (pullCompleto=true) se invoca
+     * `limpiarHuerfanos(idsServidor)` — limpia rows locales no dirty ausentes
+     * en el backend (zombies si el backend aplica TTL a tombstones). En pulls
+     * parciales (limite de paginas por worker-run) NO se limpia, para no borrar
+     * rows sanos que existen en paginas no fetchadas aun.
      *
      * @return EstadoPulls con [EstadoPulls.masPorSincronizar] = true si alguna
      *         tabla aun tiene paginas pendientes.
@@ -164,14 +225,25 @@ class SyncWorker @AssistedInject constructor(
         var estado = EstadoPulls()
 
         // 1. Categorias — siempre full pull (read-only, bajo volumen, sin updated_at).
+        // Bug M5 fix: si categorias falla (transitorio no-auth), NO corremos el
+        // pull de denuncias este run — su `insertarTodos` fallaria por FK
+        // RESTRICT (idCategoria inexistente local) y quedaria en retry infinito
+        // mientras categorias siga caida. URLs y escaneos no dependen de la FK
+        // y si sincronizan.
+        var categoriasOk = true
         when (val r = repoCategorias.sincronizarDesdeBackend()) {
             is ResultadoSync.Exitoso -> { /* ok */ }
             is ResultadoSync.Fallido -> {
-                val mapeo = decidirResultadoPull(r.codigo, r.retryAfterSegundos)
-                if (mapeo is DecisionPull.Decision.Failure && (r.codigo == 401 || r.codigo == 403)) {
-                    return EstadoPulls(falloPermanente = true)
+                // WAVE 16 fix: 401/403 → auth error (logout), no falloPermanente silencioso.
+                if (r.codigo == 401 || r.codigo == 403) {
+                    return EstadoPulls(authError = true)
                 }
-                if (mapeo is DecisionPull.Decision.Retry) estado = estado.copy(huboErrorTransitorio = true)
+                // Bug M5 fix: logica extraida a [debeSaltarPullDenuncias]
+                // (funcion pura top-level, testeable sin SyncWorker/Hilt).
+                if (debeSaltarPullDenuncias(r)) {
+                    estado = estado.copy(huboErrorTransitorio = true)
+                    categoriasOk = false
+                }
             }
         }
 
@@ -179,24 +251,32 @@ class SyncWorker @AssistedInject constructor(
         estado = procesarDeltaTabla(
             tabla = "urls_bloqueadas",
             pullDelta = { cursor -> repoUrls.sincronizarDelta(token, cursor) },
-            estadoActual = estado
+            estadoActual = estado,
+            limpiarHuerfanos = repoUrls::limpiarHuerfanos
         )
-        if (estado.falloPermanente) return estado
+        if (estado.authError) return estado
 
         // 3. Escaneos — delta pull incremental con cursor.
         estado = procesarDeltaTabla(
             tabla = "escaneos",
             pullDelta = { cursor -> repoEscaneos.sincronizarDelta(token, cursor) },
-            estadoActual = estado
+            estadoActual = estado,
+            limpiarHuerfanos = repoEscaneos::limpiarHuerfanos
         )
-        if (estado.falloPermanente) return estado
+        if (estado.authError) return estado
 
-        // 4. Denuncias — delta pull incremental con cursor.
-        estado = procesarDeltaTabla(
-            tabla = "denuncias",
-            pullDelta = { cursor -> repoDenuncias.sincronizarDelta(token, cursor) },
-            estadoActual = estado
-        )
+        // 4. Denuncias — delta pull incremental con cursor. Solo si categorias
+        //    estan OK (Bug M5 fix: FK idCategoria → categorias_denuncia).
+        if (categoriasOk) {
+            estado = procesarDeltaTabla(
+                tabla = "denuncias",
+                pullDelta = { cursor -> repoDenuncias.sincronizarDelta(token, cursor) },
+                estadoActual = estado,
+                limpiarHuerfanos = repoDenuncias::limpiarHuerfanos
+            )
+        } else {
+            Log.w(TAG, "procesarDeltaPulls: categorias caidas → skip pull de denuncias (FK RESTRICT)")
+        }
 
         return estado
     }
@@ -217,7 +297,8 @@ class SyncWorker @AssistedInject constructor(
     private suspend fun procesarDeltaTabla(
         tabla: String,
         pullDelta: suspend (String) -> ResultadoSync,
-        estadoActual: EstadoPulls
+        estadoActual: EstadoPulls,
+        limpiarHuerfanos: (suspend (List<String>) -> Unit)? = null
     ): EstadoPulls {
         var estado = estadoActual
         val syncStateDao = db.syncStateDao()
@@ -241,12 +322,31 @@ class SyncWorker @AssistedInject constructor(
                 Log.d(TAG, "Delta pull '$tabla' OK — ${resultado.filaSincronizadas} filas" +
                     if (resultado.masPorSincronizar) " (mas paginas pendientes)" else " (al dia)")
                 estado = estado.copy(masPorSincronizar = estado.masPorSincronizar || resultado.masPorSincronizar)
+                // Bug M2 fix: orphan cleanup SOLO tras un pull COMPLETO
+                // (pullCompleto=true, todas las paginas recibidas). Si el pull
+                // fue parcial (limite por worker-run), limpiar huerfanos
+                // borraria rows locales que aun existen en paginas no
+                // fetchadas. Ver ResultadoSync.Exitoso.pullCompleto.
+                if (limpiarHuerfanos != null && resultado.pullCompleto) {
+                    limpiarHuerfanos(resultado.idsServidor)
+                }
             }
             is ResultadoSync.Fallido -> {
-                val mapeo = decidirResultadoPull(resultado.codigo, resultado.retryAfterSegundos)
-                if (mapeo is DecisionPull.Decision.Failure && (resultado.codigo == 401 || resultado.codigo == 403)) {
-                    return estado.copy(falloPermanente = true)
+                // WAVE 16 fix: 401/403 → auth error (logout + Result.failure).
+                if (resultado.codigo == 401 || resultado.codigo == 403) {
+                    return estado.copy(authError = true)
                 }
+                // WAVE 16 fix (S422 stale-stall): 422 → el server rechazo el
+                // cursor (corrupto en storage local). Resetear cursor a NULL
+                // para que la proxima run haga full pull (epoch) y sana el stall.
+                // Result.retry() via huboErrorTransitorio para que WorkManager
+                // reintente con backoff (no Result.failure que abandonaria el delta).
+                if (resultado.codigo == 422) {
+                    Log.w(TAG, "procesarDeltaTabla($tabla): 422 cursor rechazado → reset cursor + retry")
+                    db.syncStateDao().resetCursor(tabla)
+                    return estado.copy(huboErrorTransitorio = true)
+                }
+                val mapeo = decidirResultadoPull(resultado.codigo, resultado.retryAfterSegundos)
                 if (mapeo is DecisionPull.Decision.Retry) {
                     estado = estado.copy(huboErrorTransitorio = true)
                 }
@@ -307,8 +407,36 @@ class SyncWorker @AssistedInject constructor(
         /** Nombre unico del WorkManager job — usado por [MediadorSincronizacion]. */
         const val NOMBRE_TRABAJO = "sync_qr_guardian"
 
-        /** Ops que fallan este numero de veces se marcan `fallida=true` y se saltan. */
-        private const val MAX_INTENTOS_OP = 3
+        /**
+         * A4 fix (audit) — Mutex que serializa doWork() entre el one-shot worker
+         * (encolado por `dispararSyncUnica` bajo `NOMBRE_TRABAJO`) y el periodic
+         * worker (encolado por `programarSyncPeriodica` bajo `NOMBRE_TRABAJO +
+         * "_periodica"`). Como WorkManager trata OneTime y Periodic en namespaces
+         * distintos, dos instancias de SyncWorker pueden correr concurrentemente;
+         * este Mutex entrega exclusion mutua a nivel proceso.
+         *
+         * `internal` para testear desde [SyncWorkerConcurrencyTest] (patron
+         * equivalente a [decidirResultadoPull] expuesta como top-level function).
+         *
+         *ota: el Mutex vive en companion object (singleton a nivel ClassLoader,
+         * no a nivel instancia) — sobrevive a multiples instancias del worker
+         * dentro del mismo proceso. Si WorkManager corre el worker en otro
+         * proceso, este Mutex no seria compartido (caso futuro a evaluar).
+         */
+        internal val executionLock = Mutex()
+
+        /**
+         * Ops que fallan este numero de veces se marcan `fallida=true` y se saltan.
+         *
+         * A4/C2 fix (audit) — `internal` para testear desde [SyncWorkerConcurrencyTest].
+         * Antes era `private`; valor subido de 3 a 10 para dar ~43 min de margen
+         * para outages transitorios (10s+20s+...+1280s = 2550s = ~43 min).
+         *
+         * Con MAX=3 (anterior), ~70s de flaky network mataba el op permanentemente
+         * (3 fallos consecutivos con backoff 10s+20s+40s = 70s). Con MAX=10,
+         * el op sobrevive hasta ~43 min de fallos transitorios acumulados.
+         */
+        internal const val MAX_INTENTOS_OP = 10
 
         /** SharedPreferences file name for sync metadata. */
         const val PREFS_SYNC = "qr_guardian_sync_prefs"
@@ -336,6 +464,41 @@ class SyncWorker @AssistedInject constructor(
          * db.clearAllTables) y naturalmente empieza en false tras reinstalar.
          */
         const val KEY_INITIAL_SYNC_COMPLETED = "initial_sync_completed"
+    }
+}
+
+/**
+ * A4 fix (audit) — Helper de exclusion mutua para SyncWorker.
+ *
+ * Ejecuta [block] si [SyncWorker.executionLock] esta libre (tryLock exitoso),
+ * libera el lock al terminar (incluso si el block lanza), y retorna el
+ * resultado. Si el lock ya esta held por otro SyncWorker (one-shot vs
+ * periodic), retorna `null` como señal de skip — el caller (SyncWorker.doWork)
+ * debe traducir ese null a `Result.retry()` para que WorkManager reintente
+ * en el proximo backoff.
+ *
+ * Top-level function pura (al estilo de [decidirResultadoPull]) para que
+ * [SyncWorkerConcurrencyTest] pueda ejercer la logica sin instanciar SyncWorker
+ * (que requiere Hilt + Context + AssistedInject).
+ *
+ * Patron de uso en doWork():
+ * ```
+ * val result = withSyncLock {
+ *     // ... cuerpo original de doWork
+ *     Result.success()
+ * }
+ * return result ?: Result.retry()  // null = otro worker corria, skip
+ * ```
+ */
+suspend fun <T> withSyncLock(block: suspend () -> T): T? {
+    return if (SyncWorker.executionLock.tryLock()) {
+        try {
+            block()
+        } finally {
+            SyncWorker.executionLock.unlock()
+        }
+    } else {
+        null
     }
 }
 
@@ -373,7 +536,8 @@ object DecisionPull {
  *  - **429** (rate limit) → [DecisionPull.Decision.Retry] respetando
  *    `Retry-After` (si viene, >= ese valor; si no, backoff min exponencial).
  *  - **401 / 403** (auth) → [DecisionPull.Decision.Failure] — no reintenta.
- *  - **5xx** (server error) → [DecisionPull.Decision.Retry] backoff exponencial.
+ *  - **5xx** (server error) → [DecisionPull.Decision.Retry] respetando
+ *    `Retry-After` (si viene, >= ese valor; si no, backoff min exponencial).
  *  - **IOException pura** (codigo=null) → [DecisionPull.Decision.Retry] — transitorio.
  *  - **4xx != 401/403/429** (request malformado) → [DecisionPull.Decision.Failure].
  *
@@ -393,8 +557,15 @@ fun decidirResultadoPull(codigo: Int?, retryAfterSegundos: Long?): DecisionPull.
         }
         // 401/403: auth no recuperable — abortar ahora, no reintentar.
         codigo == 401 || codigo == 403 -> DecisionPull.Decision.Failure
-        // 5xx: error del servidor — reintenta con backoff exponencial.
-        codigo != null && codigo in 500..599 -> DecisionPull.Decision.Retry(BACKOFF_MIN_SEGUNDOS_TOTAL)
+        // WAVE 18 fix: 5xx respeta `Retry-After` (mismo patron que 429). El
+        // header `Retry-After: 60` en 503 Service Unavailable indica que el
+        // server estara caido ~60s; reintentar antes viola la politica del server
+        // y puede escalar a rate-limit permanente o IP-ban.
+        codigo != null && codigo in 500..599 -> {
+            val backoff = (retryAfterSegundos ?: BACKOFF_MIN_SEGUNDOS_TOTAL)
+                .coerceAtLeast(BACKOFF_MIN_SEGUNDOS_TOTAL)
+            DecisionPull.Decision.Retry(backoff)
+        }
         // IOException pura (codigo == null): fallo de red — transitorio.
         codigo == null -> DecisionPull.Decision.Retry(BACKOFF_MIN_SEGUNDOS_TOTAL)
         // 4xx no-401/403/429: request malformado / conflicto no recuperable — abortar.
@@ -413,6 +584,33 @@ fun decidirResultadoPull(codigo: Int?, retryAfterSegundos: Long?): DecisionPull.
         // Otros codigos no deberian llegar aqui — tratarlos como transitorios.
         else -> DecisionPull.Decision.Retry(BACKOFF_MIN_SEGUNDOS_TOTAL)
     }
+}
+
+/**
+ * Bug M5 fix — logica pura: debe saltarse el pull de denuncias este run?
+ *
+ * Si el pull de categorias fallo (transitorio no-auth, 5xx/429/sin-red), el
+ * pull de denuncias NO debe ejecutarse: su `insertarTodos` fallaria por FK
+ * RESTRICT (`idCategoria` sin fila local en `categorias_denuncia`) y el run
+ * quedaria en retry infinito mientras categorias siga caida. URLs y escaneos
+ * no dependen de la FK y si sincronizan.
+ *
+ * Top-level function pura (no requiere Context/WorkManager) — testeable en
+ * unit tests sin Robolectric, al estilo de [decidirResultadoPull].
+ *
+ * @return true si el pull de denuncias debe saltarse (categorias fallo
+ *         transitorio → Retry), false si debe proceder (Exitoso, o Fallido
+ *         permanente no-reintentable, o 401/403 que el caller maneja aparte
+ *         como authError).
+ */
+fun debeSaltarPullDenuncias(resultadoCategorias: ResultadoSync): Boolean {
+    if (resultadoCategorias is ResultadoSync.Exitoso) return false
+    if (resultadoCategorias !is ResultadoSync.Fallido) return false
+    // 401/403 nunca llegan aqui (el caller hace early-return authError antes),
+    // pero por defensividad no se saltan denuncias por ellos.
+    if (resultadoCategorias.codigo == 401 || resultadoCategorias.codigo == 403) return false
+    val mapeo = decidirResultadoPull(resultadoCategorias.codigo, resultadoCategorias.retryAfterSegundos)
+    return mapeo is DecisionPull.Decision.Retry
 }
 
 /**

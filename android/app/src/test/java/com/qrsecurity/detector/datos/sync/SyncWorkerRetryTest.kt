@@ -98,6 +98,30 @@ class SyncWorkerRetryTest {
         assertTrue(decision is Decision.Retry)
     }
 
+    // ──────────────────────────────────────────────────────────────
+    // WAVE 18 regression: 5xx respeta Retry-After (mismo patron que 429).
+    // Antes usaba BACKOFF_MIN_SEGUNDOS_TOTAL fijo (10s) ignorando el header;
+    // ahora usa el valor del header si viene (>=10s piso).
+    // ──────────────────────────────────────────────────────────────
+
+    @Test
+    fun `HTTP 503 con Retry-After 60 respeta el header (backoff 60s, no 10s)`() {
+        // When
+        val decision = decidirResultadoPull(codigo = 503, retryAfterSegundos = 60L)
+        // Then
+        assertTrue(decision is Decision.Retry)
+        assertEquals(60L, (decision as Decision.Retry).backoffSegundos)
+    }
+
+    @Test
+    fun `HTTP 503 sin Retry-After usa backoff min por defecto (10s)`() {
+        // When
+        val decision = decidirResultadoPull(codigo = 503, retryAfterSegundos = null)
+        // Then
+        assertTrue(decision is Decision.Retry)
+        assertEquals(10L, (decision as Decision.Retry).backoffSegundos)
+    }
+
     @Test
     fun `HTTP 422 (4xx no-401-403) devuelve Failure`() {
         // Given: 4xx request malformado — reintentar no ayuda
