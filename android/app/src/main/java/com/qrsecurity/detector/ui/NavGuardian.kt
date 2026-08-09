@@ -209,8 +209,8 @@ fun NavGuardian() {
     val logueado = remember { sessionViewModel.estaLogueado() }
     val destinoInicial = remember {
         val onboardingDone = context
-            .getSharedPreferences(PREFS_QR_GUARDIAN, android.content.Context.MODE_PRIVATE)
-            .getBoolean(CLAVE_ONBOARDING_COMPLETADO, false)
+            .getSharedPreferences(ConstantesApp.PREFS_QR_GUARDIAN, android.content.Context.MODE_PRIVATE)
+            .getBoolean(ConstantesApp.CLAVE_ONBOARDING_COMPLETADO, false)
         calcularDestinoInicial(
             logueado = logueado,
             onboardingDone = onboardingDone

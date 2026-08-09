@@ -62,8 +62,10 @@ import kotlinx.coroutines.withContext
 // mostrar Onboarding tras login. Antes, el flag no se persistia y el
 // onboarding reaparecia cada vez que el usuario cerraba y reabria la app
 // o volvia a hacer login.
-internal const val PREFS_QR_GUARDIAN = "qr_guardian_prefs"
-internal const val CLAVE_ONBOARDING_COMPLETADO = "onboarding_completado"
+//
+// F2.1: las constantes se migraron a [ConstantesApp] para que [NavGuardian]
+// deje de depender de esta pantalla (que se eliminara en F3). Los usos
+// internos referencian `ConstantesApp.*` directamente.
 
 /**
  * Pantalla de Onboarding — 3 paginas con walkthrough.
@@ -89,9 +91,9 @@ fun PantallaOnboarding(
     fun completarOnboarding() {
         scope.launch {
             withContext(Dispatchers.IO) {
-                context.getSharedPreferences(PREFS_QR_GUARDIAN, android.content.Context.MODE_PRIVATE)
+                context.getSharedPreferences(ConstantesApp.PREFS_QR_GUARDIAN, android.content.Context.MODE_PRIVATE)
                     .edit()
-                    .putBoolean(CLAVE_ONBOARDING_COMPLETADO, true)
+                    .putBoolean(ConstantesApp.CLAVE_ONBOARDING_COMPLETADO, true)
                     .commit()
             }
             onComenzar()
