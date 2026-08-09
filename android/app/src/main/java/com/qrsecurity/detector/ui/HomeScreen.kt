@@ -92,7 +92,6 @@ import kotlinx.coroutines.launch
  * @param onEscanear Callback para navegar a la pantalla de analisis.
  * @param onVerHistorial Callback para navegar al historial.
  * @param datosViewModel VM compartido con los contadores de escaneos.
- * @param sessionViewModel VM de sesion para mostrar info del usuario.
  * @param pipelineViewModel VM del pipeline (compartido a nivel NavGuardian).
  */
 @Composable

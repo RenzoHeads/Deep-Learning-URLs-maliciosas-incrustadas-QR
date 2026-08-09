@@ -335,7 +335,10 @@ private fun ChipEstadoUrl(estado: DetalleUrlUiState.Cargado) {
 private fun TarjetaVeredicto(estado: DetalleUrlUiState.Cargado) {
     val escaneo = estado.escaneo
     val colorVeredicto = colorPorNivel(escaneo.nivelAlerta)
-    val valorPct = (escaneo.probabilidad * 100f).toInt()
+    // WAVE 14 fix (M1): Math.round en vez de .toInt() (que trunca hacia 0).
+    // 0.999f * 100 = 99.9 → Math.round = 100 (no 99); 0.005f * 100 = 0.5 →
+    // Math.round = 1 (no 0). El usuario debe ver el porcentaje correcto.
+    val valorPct = Math.round(escaneo.probabilidad * 100f)
     val amenazaLabel = etiquetaAmenazaPorNivel(escaneo.nivelAlerta)
     val amenazaSubtitulo = subtituloPorNivel(escaneo.nivelAlerta)
 

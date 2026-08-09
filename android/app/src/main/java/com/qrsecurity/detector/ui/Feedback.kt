@@ -37,9 +37,7 @@ enum class TipoMensaje { EXITO, ERROR, INFO }
 /**
  * Wrapper para mensajes de UI (snackbar). Tipo + texto.
  *
- * F2.7: movido aqui desde [DetalleEscaneoViewModel] (eliminado en F2)
- * para que [DetalleUrlViewModel] y otros VMs lo consuman sin depender
- * de un archivo heredado.
+ * Compartido por todos los ViewModels que emiten snackbars via Channel.
  */
 data class MensajeUi(
     val tipo: TipoMensaje,

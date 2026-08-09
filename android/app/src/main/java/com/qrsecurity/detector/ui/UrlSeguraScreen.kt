@@ -171,7 +171,8 @@ private fun ContenidoSeguro(
 ) {
     val escaneo = estado.escaneo
     val contexto = LocalContext.current
-    val puntuacionSeguridad = ((1f - escaneo.probabilidad) * 100f).toInt().coerceIn(0, 100)
+    // WAVE 14 fix (M1): Math.round en vez de .toInt() (truncaba hacia 0).
+    val puntuacionSeguridad = Math.round((1f - escaneo.probabilidad) * 100f).coerceIn(0, 100)
 
     Column(
         modifier = Modifier
