@@ -39,8 +39,10 @@ object NetworkModule {
     @Singleton
     fun provideOkHttpClient(): OkHttpClient {
         val loggingInterceptor = HttpLoggingInterceptor().apply {
+            // WAVE 19 fix: HEADERS (no BODY) — las denuncias contienen PII
+            // (texto libre del usuario) que se volcaria a Logcat en debug.
             level = if (BuildConfig.DEBUG) {
-                HttpLoggingInterceptor.Level.BODY
+                HttpLoggingInterceptor.Level.HEADERS
             } else {
                 HttpLoggingInterceptor.Level.NONE
             }

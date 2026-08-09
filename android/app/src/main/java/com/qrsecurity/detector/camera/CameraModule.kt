@@ -2,7 +2,6 @@ package com.qrsecurity.detector.camera
 
 import android.content.Context
 import androidx.camera.core.CameraSelector
-import androidx.camera.core.ExperimentalGetImage
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
@@ -176,9 +175,8 @@ class ModuloCamara(
      * escanea buscando codigos de barras QR. Llama a [onQrDetectado] en caso de exito
      * e inmediatamente cierra la imagen para liberar el buffer.
      */
-    @OptIn(ExperimentalGetImage::class)
+    @Suppress("DEPRECATION")
     private fun analizarFrame(imageProxy: ImageProxy) {
-        @Suppress("DEPRECATION")
         val mediaImage = imageProxy.image
         if (mediaImage == null) {
             imageProxy.close()

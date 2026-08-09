@@ -72,23 +72,20 @@ class ClienteBackend(
     }
 
     /**
-     * Interceptor de logging (M-14): `Level.BODY` en debug, `Level.NONE`
-     * en release. Level.BODY subsume los headers — no hace falta
-     * Level.HEADERS. Aplicado con `addInterceptor` para que los logs
-     * vean los payloads a nivel de applicacion.
+     * Interceptor de logging (M-14): `Level.HEADERS` en debug, `Level.NONE`
+     * en release, con header `Authorization` redactado (F5).
      *
-     * F5 (CWE-532+534): redacta el header `Authorization` en los logs.
-     * Antes, `Level.BODY` volcaba todos los headers incluyendo el
-     * `Authorization: Bearer <token>` JWT completo. Si los logs de la
-     * app se capturan (logcat en dispositivo rooteado, ADB sin root,
-     * crash reporting SDKs, o filtrados por un proceso malicioso con
-     * `READ_LOGS`), el token queda expuesto. `redactHeader` reemplaza
-     * el valor del header por `*` en el output del logger antes de
-     * entregarlo a logcat, sin afectar la request real.
+     * WAVE 19 fix (S5 MINOR PII leak): antes usaba `Level.BODY` — volcaba el
+     * body completo de cada request a Logcat. Las denuncias (`POST /denuncias`)
+     * contienen URLs + texto libre escrito por el usuario (posible PII: "Mi
+     * jefe me envio este link sospechoso..."). En dispositivos debug, otros
+     * apps con acceso a logcat capturan este body. `Level.HEADERS` (con
+     * `redactHeader("Authorization")`) da diagnostico suficiente (headers,
+     * status, timing) sin PII.
      */
     private val interceptorLogging = HttpLoggingInterceptor().apply {
         level = if (BuildConfig.DEBUG) {
-            HttpLoggingInterceptor.Level.BODY
+            HttpLoggingInterceptor.Level.HEADERS
         } else {
             HttpLoggingInterceptor.Level.NONE
         }
@@ -273,7 +270,13 @@ class ClienteBackend(
         probabilidad: Float,
         nivelAlerta: String,
         delegado: String? = null,
-        notasAnalisis: String? = null  // NEW
+        notasAnalisis: String? = null,  // NEW
+        // Bug A5 fix: clave de idempotencia server-side (= idLocal del
+        // pending op CREATE). El backend hace fetch-or-create por
+        // (id_usuario, id_cliente): si el proceso muere entre el POST
+        // exitoso y el re-key local, el replay devuelve la misma fila en
+        // vez de crear una duplicada.
+        idCliente: String? = null
     ): Escaneo = withContext(Dispatchers.IO) {
         val body = buildJsonObject {
             put("url_original", JsonPrimitive(urlOriginal))
@@ -282,6 +285,7 @@ class ClienteBackend(
             put("nivel_alerta", JsonPrimitive(nivelAlerta))
             if (!delegado.isNullOrBlank()) put("delegado", JsonPrimitive(delegado))
             if (!notasAnalisis.isNullOrBlank()) put("notas_analisis", JsonPrimitive(notasAnalisis))
+            if (!idCliente.isNullOrBlank()) put("id_cliente", JsonPrimitive(idCliente))
         }
         val respuesta = post("$base/escaneos", body.toString(), token)
         json.decodeFromString(Escaneo.serializer(), respuesta)
@@ -294,21 +298,27 @@ class ClienteBackend(
      *
      * El modo delta del backend:
      *  - Devuelve filas con `updated_at >= modificados_desde` (incluye tombstones).
+     *  - Keyset pagination (Bug A1 fix): si se pasa [cursorId], devuelve solo
+     *    filas con `(updated_at, id) > (modificados_desde, cursorId)` — sin
+     *    OFFSET. Elimina el refetch infinito de la fila limite y la perdida de
+     *    filas por inserts concurrentes entre batches.
      *  - NO aplica filtro es_malicioso ni paginacion — devuelve todo el delta.
      *  - Las filas con `deleted_at != null` son tombstones: el cliente debe
      *    eliminarlas localmente.
      *
      * @param modificadosDesde Fecha ISO 8601 (ej. "2026-07-31T12:00:00Z").
      *                         Null equivale a full pull (modo normal).
+     * @param cursorId Ultimo id recibido para keyset pagination. Null = modo
+     *                 legacy (offset).
      */
     suspend fun listarEscaneosDelta(
         token: String,
         modificadosDesde: String,
         limite: Int = 200,
-        offset: Int = 0
+        offset: Int = 0,
+        cursorId: String? = null
     ): List<Escaneo> = withContext(Dispatchers.IO) {
-        val url = "$base/escaneos?modificados_desde=${java.net.URLEncoder.encode(modificadosDesde, "UTF-8")}" +
-            "&limite=$limite&offset=$offset"
+        val url = buildDeltaUrl("$base/escaneos", modificadosDesde, limite, offset, cursorId)
         val respuesta = get(url, token)
         json.decodeFromString(
             kotlinx.serialization.builtins.ListSerializer(Escaneo.serializer()),
@@ -391,10 +401,10 @@ class ClienteBackend(
         token: String,
         modificadosDesde: String,
         limite: Int = 200,
-        offset: Int = 0
+        offset: Int = 0,
+        cursorId: String? = null
     ): List<UrlBloqueada> = withContext(Dispatchers.IO) {
-        val url = "$base/urls-bloqueadas?modificados_desde=${java.net.URLEncoder.encode(modificadosDesde, "UTF-8")}" +
-            "&limite=$limite&offset=$offset"
+        val url = buildDeltaUrl("$base/urls-bloqueadas", modificadosDesde, limite, offset, cursorId)
         val respuesta = get(url, token)
         json.decodeFromString(
             kotlinx.serialization.builtins.ListSerializer(UrlBloqueada.serializer()),
@@ -403,12 +413,18 @@ class ClienteBackend(
     }
 
     /** Bug A15 fix: auth via header. */
-    suspend fun bloquearUrl(token: String, url: String, razon: String? = null): UrlBloqueada =
-        withContext(Dispatchers.IO) {
-            val body = buildJsonObject {
-                put("url", JsonPrimitive(url))
-                if (!razon.isNullOrBlank()) put("razon", JsonPrimitive(razon))
-            }
+    suspend fun bloquearUrl(
+        token: String,
+        url: String,
+        razon: String? = null,
+        // Bug A5 fix: idempotencia server-side (ver registrarEscaneo).
+        idCliente: String? = null
+    ): UrlBloqueada = withContext(Dispatchers.IO) {
+        val body = buildJsonObject {
+            put("url", JsonPrimitive(url))
+            if (!razon.isNullOrBlank()) put("razon", JsonPrimitive(razon))
+            if (!idCliente.isNullOrBlank()) put("id_cliente", JsonPrimitive(idCliente))
+        }
             val respuesta = post("$base/urls-bloqueadas", body.toString(), token)
             json.decodeFromString(UrlBloqueada.serializer(), respuesta)
         }
@@ -436,12 +452,15 @@ class ClienteBackend(
         token: String,
         url: String,
         idCategoria: Int,
-        descripcion: String? = null
+        descripcion: String? = null,
+        // Bug A5 fix: idempotencia server-side (ver registrarEscaneo).
+        idCliente: String? = null
     ): Denuncia = withContext(Dispatchers.IO) {
         val body = buildJsonObject {
             put("url", JsonPrimitive(url))
             put("id_categoria", JsonPrimitive(idCategoria))
             if (!descripcion.isNullOrBlank()) put("descripcion", JsonPrimitive(descripcion))
+            if (!idCliente.isNullOrBlank()) put("id_cliente", JsonPrimitive(idCliente))
         }
         val respuesta = post("$base/denuncias", body.toString(), token)
         json.decodeFromString(Denuncia.serializer(), respuesta)
@@ -459,10 +478,10 @@ class ClienteBackend(
         token: String,
         modificadosDesde: String,
         limite: Int = 200,
-        offset: Int = 0
+        offset: Int = 0,
+        cursorId: String? = null
     ): List<Denuncia> = withContext(Dispatchers.IO) {
-        val url = "$base/denuncias?modificados_desde=${java.net.URLEncoder.encode(modificadosDesde, "UTF-8")}" +
-            "&limite=$limite&offset=$offset"
+        val url = buildDeltaUrl("$base/denuncias", modificadosDesde, limite, offset, cursorId)
         val respuesta = get(url, token)
         json.decodeFromString(
             kotlinx.serialization.builtins.ListSerializer(Denuncia.serializer()),
@@ -473,6 +492,32 @@ class ClienteBackend(
     // ──────────────────────────────────────────────────────────────
     // Helpers HTTP
     // ──────────────────────────────────────────────────────────────
+
+    /**
+     * Construye la URL de un endpoint delta sync.
+     *
+     * Bug A1 fix (keyset pagination): si [cursorId] no es null, se agrega
+     * `cursor_id` y se OMITE `offset` (el backend ignora offset en modo
+     * keyset). Si es null, modo legacy con `offset`.
+     */
+    private fun buildDeltaUrl(
+        base: String,
+        modificadosDesde: String,
+        limite: Int,
+        offset: Int,
+        cursorId: String?
+    ): String {
+        val url = StringBuilder(
+            "$base?modificados_desde=${java.net.URLEncoder.encode(modificadosDesde, "UTF-8")}" +
+                "&limite=$limite"
+        )
+        if (cursorId != null) {
+            url.append("&cursor_id=${java.net.URLEncoder.encode(cursorId, "UTF-8")}")
+        } else {
+            url.append("&offset=$offset")
+        }
+        return url.toString()
+    }
 
     /**
      * Bug A15 fix: los helpers `post/get/delete` ahora aceptan un
