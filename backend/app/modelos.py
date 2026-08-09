@@ -67,6 +67,7 @@ class CrearEscaneoEntrada(BaseModel):
     probabilidad: float = Field(0.0, ge=0.0, le=1.0)
     nivel_alerta: str = Field("SEGURO", pattern="^(SEGURO|SOSPECHOSO|MALICIOSO)$")
     delegado: str | None = Field(None, max_length=50)
+    notas_analisis: str | None = Field(None, max_length=2000)
 
 
 class EscaneoRespuesta(BaseModel):
@@ -77,6 +78,7 @@ class EscaneoRespuesta(BaseModel):
     probabilidad: float
     nivel_alerta: str
     delegado: str | None = None
+    notas_analisis: str | None = None
     es_malicioso: bool
     creado_en: datetime
     updated_at: datetime | None = None
@@ -181,6 +183,7 @@ def fila_a_escaneo(fila: asyncpg.Record) -> EscaneoRespuesta:
         probabilidad=fila["probabilidad"],
         nivel_alerta=fila["nivel_alerta"],
         delegado=fila["delegado"],
+        notas_analisis=fila.get("notas_analisis"),
         es_malicioso=fila["es_malicioso"],
         creado_en=fila["creado_en"],
         updated_at=fila.get("updated_at"),

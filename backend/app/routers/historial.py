@@ -51,11 +51,11 @@ async def crear_escaneo(
                 """
                 INSERT INTO historial_escaneos
                     (id_usuario, url_original, url_limpia, probabilidad,
-                     nivel_alerta, delegado, es_malicioso)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                     nivel_alerta, delegado, notas_analisis, es_malicioso)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                 RETURNING id, url_original, url_limpia, probabilidad,
-                          nivel_alerta, delegado, es_malicioso, creado_en,
-                          updated_at, deleted_at
+                          nivel_alerta, delegado, notas_analisis, es_malicioso,
+                          creado_en, updated_at, deleted_at
                 """,
                 id_usuario,
                 datos.url_original,
@@ -63,6 +63,7 @@ async def crear_escaneo(
                 datos.probabilidad,
                 datos.nivel_alerta,
                 datos.delegado,
+                datos.notas_analisis,
                 es_malicioso,
             )
             # UPSERT del cache maestro urls_catalogo (atomicidad cache+log).
@@ -116,8 +117,8 @@ async def listar_escaneos(
         where = _OP_AND.join(condiciones)
         query = (
             f"SELECT id, url_original, url_limpia, probabilidad, "
-            f"nivel_alerta, delegado, es_malicioso, creado_en, "
-            f"updated_at, deleted_at "
+            f"nivel_alerta, delegado, notas_analisis, es_malicioso, "
+            f"creado_en, updated_at, deleted_at "
             f"FROM historial_escaneos WHERE {where} "
             f"ORDER BY updated_at ASC "
             f"LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
@@ -136,8 +137,8 @@ async def listar_escaneos(
         # IMPORTANTE: la clausula OFFSET va despues de LIMIT en PostgreSQL.
         query = (
             f"SELECT id, url_original, url_limpia, probabilidad, "
-            f"nivel_alerta, delegado, es_malicioso, creado_en, "
-            f"updated_at, deleted_at "
+            f"nivel_alerta, delegado, notas_analisis, es_malicioso, "
+            f"creado_en, updated_at, deleted_at "
             f"FROM historial_escaneos WHERE {where} "
             f"ORDER BY creado_en DESC "
             f"LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
@@ -230,8 +231,8 @@ async def obtener_escaneo(
         fila = await conexion.fetchrow(
             """
             SELECT id, url_original, url_limpia, probabilidad,
-                   nivel_alerta, delegado, es_malicioso, creado_en,
-                   updated_at, deleted_at
+                   nivel_alerta, delegado, notas_analisis, es_malicioso,
+                   creado_en, updated_at, deleted_at
             FROM historial_escaneos
             WHERE id = $1 AND id_usuario = $2 AND deleted_at IS NULL
             """,
