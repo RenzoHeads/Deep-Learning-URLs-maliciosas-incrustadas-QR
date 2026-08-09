@@ -31,14 +31,8 @@ interface DenunciaDao {
     @Query("DELETE FROM denuncias WHERE id = :id")
     suspend fun eliminarPorId(id: String)
 
-    @Query("UPDATE denuncias SET id = :idNuevo, dirty = 0, syncedAtMillis = :syncedAt WHERE id = :idViejo")
-    suspend fun reKey(idViejo: String, idNuevo: String, syncedAt: Long)
-
     @Query("UPDATE denuncias SET dirty = 0, syncedAtMillis = :syncedAt WHERE id = :id")
     suspend fun marcarSincronizado(id: String, syncedAt: Long)
-
-    @Query("SELECT id FROM denuncias")
-    suspend fun todosLosIds(): List<String>
 
     /**
      * Bug M10 fix: ids locales `dirty = 0` para diff contra servidor.
@@ -56,4 +50,32 @@ interface DenunciaDao {
      */
     @Query("SELECT * FROM denuncias WHERE id = :id LIMIT 1")
     suspend fun obtenerPorId(id: String): DenunciaEntity?
+
+    /**
+     * Bug A3 fix — dedup por contenido (no por UUID): busca una denuncia
+     * local `dirty=true` con el mismo `(url, idCategoria, descripcion)`.
+     *
+     * Antes el dedup se hacia con `pendingOpDao().findExisting(tabla, idLocal, ...)`
+     * donde `idLocal` era un UUID recien generado en la misma llamada →
+     * el query siempre devolvia null → doble tap en UI offline encolaba
+     * 2 ops CREATE para la misma denuncia → 2 filas en el backend.
+     *
+     * `descripcion IS :descripcion` maneja NULL de forma NULL-safe en SQLite
+     * (NULL IS NULL → 1; 'x' IS NULL → 0).
+     */
+    @Query(
+        """
+        SELECT * FROM denuncias
+        WHERE url = :url
+          AND idCategoria = :idCategoria
+          AND (descripcion IS :descripcion)
+          AND dirty = 1
+        LIMIT 1
+        """
+    )
+    suspend fun buscarDirtyPorContenido(
+        url: String,
+        idCategoria: Int,
+        descripcion: String?
+    ): DenunciaEntity?
 }

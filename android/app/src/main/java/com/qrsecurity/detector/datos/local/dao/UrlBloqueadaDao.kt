@@ -31,11 +31,23 @@ interface UrlBloqueadaDao {
     @Query("DELETE FROM urls_bloqueadas WHERE id = :id")
     suspend fun eliminarPorId(id: String)
 
+    /**
+     * Re-key: cambia el id del row de idViejo a idNuevo (client UUID → server UUID).
+     *
+     * @return filas afectadas. C1/M1 fix espejo: 0 filas significa que el row
+     *         local fue eliminado mientras el POST estaba en vuelo
+     *         (`desbloquearLocal` corre fuera de la ventana del re-key).
+     */
     @Query("UPDATE urls_bloqueadas SET id = :idNuevo, dirty = 0, syncedAtMillis = :syncedAt WHERE id = :idViejo")
-    suspend fun reKey(idViejo: String, idNuevo: String, syncedAt: Long)
+    suspend fun reKey(idViejo: String, idNuevo: String, syncedAt: Long): Int
 
+    /**
+     * Marca un row como sincronizado (dirty=0, syncedAt establecido) sin cambiar id.
+     *
+     * @return filas afectadas (0 = row eliminado en vuelo, ver [reKey]).
+     */
     @Query("UPDATE urls_bloqueadas SET dirty = 0, syncedAtMillis = :syncedAt WHERE id = :id")
-    suspend fun marcarSincronizado(id: String, syncedAt: Long)
+    suspend fun marcarSincronizado(id: String, syncedAt: Long): Int
 
     /**
      * Lookup por URL. Mapea el row completo a [UrlBloqueadaEntity] (o null si
