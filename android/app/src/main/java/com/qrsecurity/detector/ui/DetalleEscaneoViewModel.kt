@@ -20,41 +20,22 @@ import javax.inject.Inject
 /**
  * UiState para la pantalla de Detalle de Escaneo — patrón NowInAndroid.
  *
- * Sellado para que la Screen pueda hacer `when` exhaustivo sin `else`.
+ * F2.4: typealias a [DetalleUrlUiState] — la fusion de
+ * [DetalleEscaneoViewModel] + [ResultadoMaliciosoViewModel] en
+ * [DetalleUrlViewModel] unifica el UiState. Este alias mantiene la
+ * compatibilidad con [CacheDetalleEscaneos] y el codigo heredado sin
+ * tocarlos; F3 eliminara este archivo.
  */
-sealed interface DetalleEscaneoUiState {
-    data object Cargando : DetalleEscaneoUiState
-    data class Cargado(
-        val escaneo: EscaneoEntity,
-        val urlBloqueada: Boolean,
-        /**
-         * Bug 2 fix: true si este escaneo es la version mas reciente de su
-         * `urlLimpia`. La UI solo muestra los botones de accion (Abrir,
-         * Copiar, Compartir, Bloquear, Denunciar) en la ultima version;
-         * las versiones anteriores (reescaneos) solo muestran detalles.
-         */
-        val esUltimaVersion: Boolean,
-        /**
-         * Bug 2 fix: total de reescaneos (versiones anteriores de la misma
-         * URL, excluyendo el escaneo actual). Usado por la UI para mostrar
-         * el boton "Ver reescaneos (N)" si N > 0.
-         *
-         * La lista de reescaneos ya NO vive en este UiState — se cargo a
-         * su propia pagina ([PantallaReescaneos]) con su propio ViewModel
-         * ([ReescaneosViewModel]) que hace sync pull incremental + paginacion
-         * local (igual que el Historial).
-         */
-        val totalReescaneos: Int
-    ) : DetalleEscaneoUiState
-    data object NoEncontrado : DetalleEscaneoUiState
-}
+typealias DetalleEscaneoUiState = DetalleUrlUiState
 
 /**
  * Acción que la UI puede despachar al ViewModel (Unidirectional Data Flow).
+ *
+ * F2.4: typealias a [DetalleUrlAction] — incluye [DetalleUrlAction.DesbloquearUrl]
+ * que antes no existia. El `when` en [DetalleEscaneoViewModel.onAction]
+ * se actualizo para cubrir el nuevo caso.
  */
-sealed interface DetalleEscaneoAction {
-    data class BloquearUrl(val url: String, val razon: String) : DetalleEscaneoAction
-}
+typealias DetalleEscaneoAction = DetalleUrlAction
 
 /**
  * ViewModel para la pantalla de Detalle de Escaneo.
@@ -164,12 +145,17 @@ class DetalleEscaneoViewModel @Inject constructor(
     /**
      * Despacha una acción desde la UI (UDF).
      * Devuelve `true` si la acción fue procesada (para callbacks de UI).
+     *
+     * F2.4: [DetalleEscaneoAction] es ahora typealias a [DetalleUrlAction]
+     * que incluye [DetalleUrlAction.DesbloquearUrl]. Este VM heredado no
+     * implementa desbloqueo (devuelve false); [DetalleUrlViewModel] si.
      */
     fun onAction(action: DetalleEscaneoAction): Boolean = when (action) {
         is DetalleEscaneoAction.BloquearUrl -> {
             bloquearUrl(action.url, action.razon)
             true
         }
+        is DetalleEscaneoAction.DesbloquearUrl -> false
     }
 
     private fun bloquearUrl(url: String, razon: String) {
