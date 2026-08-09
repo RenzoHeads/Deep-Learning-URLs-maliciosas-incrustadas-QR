@@ -16,7 +16,7 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
- * UiState para la pantalla Login — patrón NowInAndroid.
+ * UiState para la pantalla Login — patron NowInAndroid.
  *
  * Bug L1 fix: `exito` y `error` se removieron del UiState. Antes eran
  * Boolean/String en el StateFlow, y `LaunchedEffect(uiState.exito,
@@ -33,23 +33,29 @@ data class LoginUiState(
  * Eventos one-shot del Login — entregados via Channel, no StateFlow.
  * Bug L1 fix: reemplaza los campos `exito: Boolean` y `error: String?`
  * del UiState que re-disparaban en rotacion.
+ *
+ * F2.3: [esNuevoRegistro] se conserva en [Exito] por compatibilidad con
+ * [PantallaLogin] (que sera reescrita en F3). El VM de login siempre
+ * emite `esNuevoRegistro = false` — el registro vive en [RegistroViewModel].
  */
 sealed interface LoginEvento {
     /**
-     * Login o registro exitoso.
+     * Login exitoso.
      *
-     * [esNuevoRegistro] es true cuando el usuario acabo de crear una cuenta
-     * (modo registro), false cuando inicio sesion con una cuenta existente.
-     * NavGuardian lo usa para decidir si mostrar el onboarding: un registro
-     * nuevo siempre lo muestra (el usuario es nuevo y necesita la tour),
-     * un login existente lo saltea si el flag global ya esta en true.
+     * [esNuevoRegistro] siempre es `false` desde este VM (el registro se
+     * delego a [RegistroViewModel]). El campo se conserva para no romper
+     * la firma de [PantallaLogin] mientras F3 la reescribe.
      */
-    data class Exito(val esNuevoRegistro: Boolean) : LoginEvento
+    data class Exito(val esNuevoRegistro: Boolean = false) : LoginEvento
     data class Error(val mensaje: String) : LoginEvento
 }
 
 /**
  * Acciones que la UI puede despachar (Unidirectional Data Flow).
+ *
+ * F2.3: [Autenticar.modoRegistro] se conserva por compatibilidad con
+ * [PantallaLogin] pero el VM lo ignora — siempre ejecuta `login`. El
+ * registro vive en [RegistroViewModel]. F3 eliminara este campo.
  */
 sealed interface LoginAction {
     data class Autenticar(
@@ -61,15 +67,18 @@ sealed interface LoginAction {
 }
 
 /**
- * ViewModel para la pantalla Login.
+ * ViewModel para la pantalla Login (login-only).
  *
- * Inyecta [ClienteBackend] via Hilt — elimina la construccion manual
- * `ClienteBackend()` que aparecia en `ejecutarAuth`. [SesionUsuario] se
- * inyecta tambien (companion bridge ya hecho, pero la instancia Hilt
- * es la misma registrada desde AppSeguridadQR).
+ * F2.3: la rama de registro se extrajo a [RegistroViewModel]. Este VM
+ * solo ejecuta `clienteBackend.login(...)`. El campo [Autenticar.modoRegistro]
+ * se conserva por compatibilidad con [PantallaLogin] (F3 lo eliminara).
+ *
+ * Inyecta [ClienteBackend] via Hilt. [SesionUsuario] se inyecta tambien
+ * (companion bridge ya hecho, pero la instancia Hilt es la misma
+ * registrada desde AppSeguridadQR).
  *
  * El dogma offline-first no aplica aqui: el login es la excepcion —
- * requiere conectividad (sin token, sin datos cacheados que servir).
+ * requiere conectividad (sin token, sin datos cacheados que sirvan).
  */
 @HiltViewModel
 class LoginViewModel @Inject constructor(
@@ -88,34 +97,26 @@ class LoginViewModel @Inject constructor(
     val eventos = _eventos.receiveAsFlow()
 
     /**
-     * Despacha una acción desde la UI (UDF).
+     * Despacha una accion desde la UI (UDF).
      */
     fun onAction(action: LoginAction) {
         when (action) {
             is LoginAction.Autenticar -> autenticar(
-                modoRegistro = action.modoRegistro,
                 nombreUsuario = action.nombreUsuario,
-                password = action.password,
-                correo = action.correo
+                password = action.password
             )
         }
     }
 
     private fun autenticar(
-        modoRegistro: Boolean,
         nombreUsuario: String,
-        password: String,
-        correo: String
+        password: String
     ) {
         if (_uiState.value.procesando) return
         _uiState.update { it.copy(procesando = true) }
         viewModelScope.launch {
             try {
-                val respuesta = if (modoRegistro) {
-                    clienteBackend.registrarUsuario(nombreUsuario, password, correo)
-                } else {
-                    clienteBackend.login(nombreUsuario, password)
-                }
+                val respuesta = clienteBackend.login(nombreUsuario, password)
                 if (respuesta.tokenApi.isBlank()) {
                     _uiState.update { it.copy(procesando = false) }
                     _eventos.send(LoginEvento.Error("El servidor devolvio un token vacio. Intenta de nuevo."))
@@ -124,7 +125,7 @@ class LoginViewModel @Inject constructor(
                 sesionUsuario.guardarSesion(
                     token = respuesta.tokenApi,
                     usuario = respuesta.nombreUsuario ?: nombreUsuario,
-                    correo = respuesta.correo ?: correo
+                    correo = respuesta.correo ?: ""
                 )
                 // Tras login exitoso, disparar sync inmediato para hacer PULL
                 // de los datos del usuario desde la nube (escaneos, URLs
@@ -132,7 +133,7 @@ class LoginViewModel @Inject constructor(
                 // no veria su historial hasta hacer un nuevo escaneo.
                 mediadorSincronizacion.dispararSyncUnica()
                 _uiState.update { it.copy(procesando = false) }
-                _eventos.send(LoginEvento.Exito(esNuevoRegistro = modoRegistro))
+                _eventos.send(LoginEvento.Exito(esNuevoRegistro = false))
             } catch (e: ClienteBackend.HttpBackendException) {
                 _uiState.update { it.copy(procesando = false) }
                 _eventos.send(LoginEvento.Error(manejarErrorBackend(e.codigo, e.cuerpo, e.message)))
@@ -145,7 +146,6 @@ class LoginViewModel @Inject constructor(
 }
 
 private fun manejarErrorBackend(codigo: Int, cuerpo: String?, message: String?): String = when (codigo) {
-    409 -> "El usuario ya existe. Intenta con otro."
     401 -> "Usuario o contrasena incorrectos."
     else -> "Error $codigo: ${cuerpo ?: message}"
 }
