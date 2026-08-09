@@ -33,45 +33,34 @@ data class LoginUiState(
  * Eventos one-shot del Login — entregados via Channel, no StateFlow.
  * Bug L1 fix: reemplaza los campos `exito: Boolean` y `error: String?`
  * del UiState que re-disparaban en rotacion.
- *
- * F2.3: [esNuevoRegistro] se conserva en [Exito] por compatibilidad con
- * [PantallaLogin] (que sera reescrita en F3). El VM de login siempre
- * emite `esNuevoRegistro = false` — el registro vive en [RegistroViewModel].
  */
 sealed interface LoginEvento {
     /**
-     * Login exitoso.
-     *
-     * [esNuevoRegistro] siempre es `false` desde este VM (el registro se
-     * delego a [RegistroViewModel]). El campo se conserva para no romper
-     * la firma de [PantallaLogin] mientras F3 la reescribe.
+     * Login exitoso. El registro vive en [RegistroViewModel]; este VM
+     * solo maneja autenticacion de cuentas existentes.
      */
-    data class Exito(val esNuevoRegistro: Boolean = false) : LoginEvento
+    data object Exito : LoginEvento
     data class Error(val mensaje: String) : LoginEvento
 }
 
 /**
  * Acciones que la UI puede despachar (Unidirectional Data Flow).
  *
- * F2.3: [Autenticar.modoRegistro] se conserva por compatibilidad con
- * [PantallaLogin] pero el VM lo ignora — siempre ejecuta `login`. El
- * registro vive en [RegistroViewModel]. F3 eliminara este campo.
+ * El VM solo ejecuta `clienteBackend.login(nombreUsuario, password)` —
+ * el registro vive en [RegistroViewModel].
  */
 sealed interface LoginAction {
     data class Autenticar(
-        val modoRegistro: Boolean,
         val nombreUsuario: String,
-        val password: String,
-        val correo: String
+        val password: String
     ) : LoginAction
 }
 
 /**
  * ViewModel para la pantalla Login (login-only).
  *
- * F2.3: la rama de registro se extrajo a [RegistroViewModel]. Este VM
- * solo ejecuta `clienteBackend.login(...)`. El campo [Autenticar.modoRegistro]
- * se conserva por compatibilidad con [PantallaLogin] (F3 lo eliminara).
+ * Maneja solo `clienteBackend.login(...)`. El registro se delega a
+ * [RegistroViewModel].
  *
  * Inyecta [ClienteBackend] via Hilt. [SesionUsuario] se inyecta tambien
  * (companion bridge ya hecho, pero la instancia Hilt es la misma
@@ -133,7 +122,7 @@ class LoginViewModel @Inject constructor(
                 // no veria su historial hasta hacer un nuevo escaneo.
                 mediadorSincronizacion.dispararSyncUnica()
                 _uiState.update { it.copy(procesando = false) }
-                _eventos.send(LoginEvento.Exito(esNuevoRegistro = false))
+                _eventos.send(LoginEvento.Exito)
             } catch (e: ClienteBackend.HttpBackendException) {
                 _uiState.update { it.copy(procesando = false) }
                 _eventos.send(LoginEvento.Error(manejarErrorBackend(e.codigo, e.cuerpo, e.message)))

@@ -91,7 +91,7 @@ import com.qrsecurity.detector.ui.theme.TamanosToque
  */
 @Composable
 fun PantallaLogin(
-    onExito: (esNuevoRegistro: Boolean) -> Unit,
+    onExito: () -> Unit,
     onNavegarRegistro: () -> Unit,
     onMensaje: (TipoMensaje, String) -> Unit = { _, _ -> },
     viewModel: LoginViewModel = hiltViewModel()
@@ -103,7 +103,7 @@ fun PantallaLogin(
         lifecycleOwner.repeatOnLifecycle(STARTED) {
             viewModel.eventos.collect { evento ->
                 when (evento) {
-                    is LoginEvento.Exito -> onExito(evento.esNuevoRegistro)
+                    is LoginEvento.Exito -> onExito()
                     is LoginEvento.Error -> onMensaje(TipoMensaje.ERROR, evento.mensaje)
                 }
             }
@@ -260,30 +260,18 @@ fun PantallaLogin(
                     )
                 }
 
-                // Recovery link
-                TextButton(
-                    onClick = { /* F3.x: navegacion a recuperacion de contrasena */ },
-                    contentPadding = PaddingValues(
-                        horizontal = 0.dp,
-                        vertical = Espaciado.xs
-                    )
-                ) {
-                    Text(
-                        text = "Olvidaste tu contrasena?",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = CyberCyan
-                    )
-                }
+                // WAVE 22 fix: eliminado el TextButton "Olvidaste tu contrasena?"
+                // — era un boton muerto (onClick vacio) sin ruta de recuperacion
+                // definida. Re-añadir solo cuando se implemente el flujo de
+                // recuperacion (evitaUI prometedora sin funcion).
 
                 // Primary Login button
                 Button(
                     onClick = {
                         viewModel.onAction(
                             LoginAction.Autenticar(
-                                modoRegistro = false,
                                 nombreUsuario = usuario,
-                                password = password,
-                                correo = ""
+                                password = password
                             )
                         )
                     },

@@ -17,8 +17,6 @@ import javax.inject.Inject
 
 /**
  * UiState para la pantalla Registro — patron NowInAndroid.
- *
- * F2.3: extraido de la rama `modoRegistro` del antiguo [LoginViewModel].
  */
 data class RegistroUiState(
     val procesando: Boolean = false
@@ -30,11 +28,10 @@ data class RegistroUiState(
  */
 sealed interface RegistroEvento {
     /**
-     * Registro exitoso. [esNuevoUsuario] siempre es `true` desde este VM
-     * (la cuenta se acaba de crear). NavGuardian lo usa para decidir si
-     * mostrar el onboarding de primer uso.
+     * Registro exitoso. La cuenta se acaba de crear — el consumidor solo
+     * necesita saber que el alta fue bien para navegar a HOME.
      */
-    data class Exito(val esNuevoUsuario: Boolean = true) : RegistroEvento
+    data object Exito : RegistroEvento
     data class Error(val mensaje: String) : RegistroEvento
 }
 
@@ -53,9 +50,8 @@ sealed interface RegistroAction {
 /**
  * ViewModel para la pantalla de Registro.
  *
- * F2.3: extraido de la rama `modoRegistro = true` del antiguo
- * [LoginViewModel]. Maneja exclusivamente el alta de cuentas nuevas
- * via [ClienteBackend.registrarUsuario].
+ * Maneja exclusivamente el alta de cuentas nuevas via
+ * [ClienteBackend.registrarUsuario].
  *
  * Inyecta [ClienteBackend] y [SesionUsuario] via Hilt. Tras un registro
  * exitoso persiste la sesion y dispara sync inmediato para hacer PULL
@@ -127,7 +123,7 @@ class RegistroViewModel @Inject constructor(
                 )
                 mediadorSincronizacion.dispararSyncUnica()
                 _uiState.update { it.copy(procesando = false) }
-                _eventos.send(RegistroEvento.Exito(esNuevoUsuario = true))
+                _eventos.send(RegistroEvento.Exito)
             } catch (e: ClienteBackend.HttpBackendException) {
                 _uiState.update { it.copy(procesando = false) }
                 _eventos.send(RegistroEvento.Error(manejarErrorRegistro(e.codigo, e.cuerpo, e.message)))
