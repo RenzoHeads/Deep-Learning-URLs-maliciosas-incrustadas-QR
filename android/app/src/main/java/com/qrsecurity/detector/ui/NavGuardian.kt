@@ -61,9 +61,6 @@ import kotlinx.coroutines.launch
     private data class NavGuardianViewModels(
     val pipelineViewModel: PipelineViewModel,
     val datosViewModel: DatosTabsViewModel,
-    // F2.7: renombrado de reescaneosViewModel a analisisAnterioresViewModel
-    // — typealias de ReescaneosViewModel.kt roto (Kotlin no hereda acceso
-    // a clases anidadas via typealias), asi que usamos el tipo real.
     val analisisAnterioresViewModel: AnalisisAnterioresViewModel,
     val sessionViewModel: SessionViewModel,
 )
@@ -191,7 +188,7 @@ private fun NavGuardianRutas(
     ) {
         composable(Rutas.LOGIN) {
             PantallaLogin(
-                onExito = { _ ->
+                onExito = {
                     navController.navigate(Rutas.HOME) {
                         popUpTo(Rutas.LOGIN) { inclusive = true }
                     }
