@@ -10,6 +10,7 @@ import com.qrsecurity.detector.datos.sync.SyncWorker
 import com.qrsecurity.detector.datos.sync.SyncWorker.Companion.KEY_INITIAL_SYNC_COMPLETED
 import com.qrsecurity.detector.datos.sync.SyncWorker.Companion.KEY_ULTIMO_SYNC
 import com.qrsecurity.detector.datos.sync.SyncWorker.Companion.PREFS_SYNC
+import com.qrsecurity.detector.pipeline.Pipeline
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -30,12 +31,13 @@ import javax.inject.Singleton
  *   - El SyncWorker periodico y el one-shot pendiente encolados en
  *     WorkManager, que volverian a dispararse tras el re-login con el token
  *     nuevo y los pending_ops viejos del usuario anterior.
- *   - El cache en RAM [com.qrsecurity.detector.cache.CacheResultados], que es
- *     per-instancia de [com.qrsecurity.detector.pipeline.Pipeline] (no un
- *     singleton compartido): al morir el proceso se pierde, asi que no
- *     requiere limpieza explicita aqui. Si en el futuro se eleva el cache a
- *     instancia de proceso unico, anadir aqui la llamada a
- *     ``CacheResultados.limpiar()`` sobre esa instancia compartida.
+ *   - El cache en RAM [com.qrsecurity.detector.cache.CacheResultados] del
+ *     [com.qrsecurity.detector.pipeline.Pipeline] `@Singleton`. Como el
+ *     Pipeline vive en el scope del proceso, su cache sobrevive a los
+ *     cierres de sesion y debe vaciarse explicitamente aqui via
+ *     [Pipeline.limpiarCacheInferencia] para evitar que el siguiente
+ *     usuario reciba cache hits de inferencia del anterior (fuga
+ *     cross-user de veredictos).
  *
  * Bug D4-P1 (Lote H): este coordinador estaba declarado pero **sin llamantes**
  * en toda la app — no habia boton "Cerrar sesion" en la UI, y el flujo de
@@ -85,7 +87,8 @@ class LogoutCoordinator @Inject constructor(
     @ApplicationContext private val appContext: Context,
     private val mediadorSincronizacion: MediadorSincronizacion,
     private val db: BaseDatosSeguridad,
-    private val sesionUsuario: SesionUsuario
+    private val sesionUsuario: SesionUsuario,
+    private val pipeline: Pipeline
 ) {
 
     /**
@@ -97,6 +100,8 @@ class LogoutCoordinator @Inject constructor(
      *      `withContext(Dispatchers.IO)` por D4-P2).
      *   3. Cerrar sesion en [SesionUsuario] (borra token/correo/logueado;
      *      preserva `id_dispositivo` para re-registro del mismo fisico).
+     *   4. Vaciar la cache de inferencia en RAM del [Pipeline] `@Singleton`
+     *      (fuga cross-user — ver [Pipeline.limpiarCacheInferencia]).
      */
     suspend fun logout() {
         // 1) Cancelar WorkManager y ESPERAR a que el worker en curso termine.
@@ -126,7 +131,15 @@ class LogoutCoordinator @Inject constructor(
             .putLong(KEY_ULTIMO_SYNC, 0L)
             .apply()
 
-        // 4) Eliminar token + flag de sesion (preserva id_dispositivo).
+        // 4) Vaciar cache de inferencia en RAM del Pipeline @Singleton.
+        // Bug fix: el Pipeline es @Singleton (vive en el scope del proceso),
+        // asi que su instancia y la CacheResultados interna sobreviven a los
+        // cierres de sesion. Sin esta llamada, el siguiente usuario obtendria
+        // cache hits de inferencia del anterior (veredictos y probabilidades
+        // cruzados, como los que persiste CacheResultados.EntradaCache).
+        pipeline.limpiarCacheInferencia()
+
+        // 5) Eliminar token + flag de sesion (preserva id_dispositivo).
         sesionUsuario.cerrarSesion()
     }
 

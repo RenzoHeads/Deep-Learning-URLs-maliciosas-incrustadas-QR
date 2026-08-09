@@ -41,7 +41,13 @@ import kotlin.concurrent.withLock
  * @param maxEntradas Numero maximo de entradas a conservar en el cache.
  */
 class CacheResultados(
-    private val maxEntradas: Int = MAX_ENTRADAS_POR_DEFECTO
+    private val maxEntradas: Int = MAX_ENTRADAS_POR_DEFECTO,
+    /**
+     * Fuente de reloj de pared, inyectable para tests deterministas de TTL.
+     * Por defecto [System.currentTimeMillis]; los tests de frontera pasan
+     * un reloj falso para no depender del tick del reloj real.
+     */
+    private val reloj: () -> Long = System::currentTimeMillis
 ) {
 
     /**
@@ -105,7 +111,7 @@ class CacheResultados(
      */
     fun obtener(urlLimpia: String): EntradaCache? = candado.withLock {
         val entrada = mapaInterno[urlLimpia]
-        if (entrada != null && System.currentTimeMillis() - entrada.timestampMs > TTL_MS) {
+        if (entrada != null && reloj() - entrada.timestampMs > TTL_MS) {
             mapaInterno.remove(urlLimpia)
             null
         } else {
@@ -170,7 +176,7 @@ class CacheResultados(
         candado.withLock {
             val existente = mapaInterno[urlLimpia]
             if (existente != null) {
-                if (System.currentTimeMillis() - existente.timestampMs > TTL_MS) {
+                if (reloj() - existente.timestampMs > TTL_MS) {
                     mapaInterno.remove(urlLimpia)
                     // miss: cae al bloque de calculo fuera del lock.
                 } else {
@@ -190,7 +196,7 @@ class CacheResultados(
             val existente = mapaInterno[urlLimpia]
             // Re-aplica TTL: si la entrada existente expiro entre la primera y la
             // segunda verificacion, tratala como ausente e inserta la nueva.
-            if (existente != null && System.currentTimeMillis() - existente.timestampMs <= TTL_MS) {
+            if (existente != null && reloj() - existente.timestampMs <= TTL_MS) {
                 return existente
             }
             mapaInterno[urlLimpia] = nueva

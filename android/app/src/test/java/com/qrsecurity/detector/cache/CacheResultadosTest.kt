@@ -312,18 +312,26 @@ class CacheResultadosTest {
 
     @Test
     fun `obtener entrada en frontera TTL 24h exacta no expira`() {
-        val cache = CacheResultados()
-        // exactamente 24h atras → `> TTL_MS` es false, no expira
-        val tsFrontera = System.currentTimeMillis() - CacheResultados.TTL_MS
+        // Reloj controlado: la frontera exacta no expira (`> TTL_MS` es false),
+        // y 1ms despues si expira. Con reloj real este test era flaky: entre
+        // `poner` y `obtener` el System.currentTimeMillis avanzaba >= 1ms y la
+        // entrada quedaba "expirada".
+        var ahora = 1_000_000L
+        val cache = CacheResultados(reloj = { ahora })
+        val tsFrontera = ahora - CacheResultados.TTL_MS
         cache.poner("url1", entrada("url1", ts = tsFrontera))
-        assertNotNull(cache.obtener("url1"))
+        assertNotNull("en frontera exacta no expira", cache.obtener("url1"))
+        // Avanzar 1ms → ahora si supera TTL y expira
+        ahora += 1L
+        assertNull("1ms despues de la frontera expira", cache.obtener("url1"))
     }
 
     @Test
     fun `obtener entrada 1ms despues de TTL expira`() {
-        val cache = CacheResultados()
+        var ahora = 1_000_000L
+        val cache = CacheResultados(reloj = { ahora })
         // 1ms despues de TTL → expira
-        val tsExpirado = System.currentTimeMillis() - CacheResultados.TTL_MS - 1L
+        val tsExpirado = ahora - CacheResultados.TTL_MS - 1L
         cache.poner("url1", entrada("url1", ts = tsExpirado))
         assertNull(cache.obtener("url1"))
     }

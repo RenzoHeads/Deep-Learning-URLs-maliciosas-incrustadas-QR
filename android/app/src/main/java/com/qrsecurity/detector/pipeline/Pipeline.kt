@@ -469,6 +469,20 @@ class Pipeline @Inject constructor(
     }
 
     /**
+     * Vaciar la cache de inferencia en RAM.
+     *
+     * Bug fix: [Pipeline] es `@Singleton`, asi que su instancia (y la
+     * [CacheResultados] que crea en su constructor) sobrevive a cierres
+     * de sesion dentro del mismo proceso. Sin esta llamada, al cerrar
+     * sesion, el siguiente usuario obtendria cache hits de inferencia
+     * del usuario anterior (fuga cross-user de veredictos). Debe
+     * invocarse desde [com.qrsecurity.detector.sesion.LogoutCoordinator.logout].
+     */
+    fun limpiarCacheInferencia() {
+        cache.limpiar()
+    }
+
+    /**
      * Liberar los recursos nativos retenidos por el motor de inferencia.
      * Llamar desde [androidx.lifecycle.LifecycleObserver.onDestroy].
      */
