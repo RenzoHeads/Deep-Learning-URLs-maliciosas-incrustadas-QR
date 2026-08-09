@@ -39,7 +39,7 @@ interface EscaneoDao {
     //
     // Resultado: una fila por `urlLimpia` = la version mas reciente del
     // escaneo. Los reescaneos no aparecen en el historial; vivimos en la
-    // pantalla de detalle via [observarReescaneos].
+    // pantalla de detalle via [observarReescaneosTodos].
 
     /** Historial deduplicado: ultima version de cada URL (todas). */
     @Query(
@@ -92,35 +92,9 @@ interface EscaneoDao {
     fun observarMaliciososUnicos(): Flow<List<EscaneoEntity>>
 
     /**
-     * Reescaneos de una URL (versiones anteriores) — paginado.
-     *
-     * Devuelve todas las filas con `urlLimpia = :urlLimpia` **excepto** la
-     * fila [idActual] (el escaneo que el usuario esta viendo en detalle),
-     * ordenadas por `creadoEnMillis DESC` (mas reciente primero), con
-     * `LIMIT :limite OFFSET :offset`.
-     *
-     * Excluye filas con DELETE pendiente en pending_ops.
-     */
-    @Query(
-        "SELECT * FROM escaneos " +
-            "WHERE urlLimpia = :urlLimpia " +
-            "AND id != :idActual " +
-            "AND id NOT IN (" +
-                "SELECT idLocal FROM pending_ops " +
-                "WHERE tabla = 'escaneos' AND tipoOperacion = 'DELETE' AND fallida = 0" +
-            ") ORDER BY creadoEnMillis DESC, id DESC LIMIT :limite OFFSET :offset"
-    )
-    fun observarReescaneos(
-        urlLimpia: String,
-        idActual: String,
-        limite: Int,
-        offset: Int
-    ): Flow<List<EscaneoEntity>>
-
-    /**
      * Reescaneos de una URL (versiones anteriores) — TODOS, sin paginar.
      *
-     * Igual que [observarReescaneos] pero sin `LIMIT`/`OFFSET` — devuelve
+     * Devuelve
      * todas las filas con `urlLimpia = :urlLimpia` excepto [idActual],
      * ordenadas por `creadoEnMillis DESC`. Usado por la pantalla de
      * Reescaneos bajo el patron reactivo (como [observarTodosUnicos] para
@@ -161,10 +135,6 @@ interface EscaneoDao {
     )
     fun observarTotalReescaneos(urlLimpia: String, idActual: String): Flow<Int>
 
-    /** Escaneos dirty (pendientes de sync). */
-    @Query("SELECT * FROM escaneos WHERE dirty = 1")
-    fun observarDirty(): Flow<List<EscaneoEntity>>
-
     // ── Writes ──
 
     // M-22 — REPLACE colisiona por `id` (PrimaryKey) sin importar el valor de
@@ -197,13 +167,23 @@ interface EscaneoDao {
 
     // ── Sync engine ──
 
-    /** Re-key: cambia el id del row de idViejo a idNuevo (client UUID → server UUID). */
+    /**
+     * Re-key: cambia el id del row de idViejo a idNuevo (client UUID → server UUID).
+     *
+     * @return filas afectadas. C1/M1 fix: 0 filas significa que el row local fue
+     *         eliminado mientras el POST estaba en vuelo (`eliminarLocal` /
+     *         `eliminarLocalPorUrlLimpia` corren fuera de la ventana del re-key).
+     */
     @Query("UPDATE escaneos SET id = :idNuevo, dirty = 0, syncedAtMillis = :syncedAt WHERE id = :idViejo")
-    suspend fun reKey(idViejo: String, idNuevo: String, syncedAt: Long)
+    suspend fun reKey(idViejo: String, idNuevo: String, syncedAt: Long): Int
 
-    /** Marca un row como sincronizado (dirty=0, syncedAt establecido) sin cambiar id. */
+    /**
+     * Marca un row como sincronizado (dirty=0, syncedAt establecido) sin cambiar id.
+     *
+     * @return filas afectadas (0 = row eliminado en vuelo, ver [reKey]).
+     */
     @Query("UPDATE escaneos SET dirty = 0, syncedAtMillis = :syncedAt WHERE id = :id")
-    suspend fun marcarSincronizado(id: String, syncedAt: Long)
+    suspend fun marcarSincronizado(id: String, syncedAt: Long): Int
 
     // ── Estadisticas deduplicadas (Bug 3 fix) ──
     //
@@ -250,31 +230,6 @@ interface EscaneoDao {
     fun observarAmenazasUnicas(): Flow<Int>
 
     /**
-     * Cuenta URLs unicas cuyo ultimo escaneo fue en los ultimos 7 dias.
-     *
-     * El corte de 7 dias se calcula dinamicamente en SQL con
-     * `strftime('%s','now','-7 days') * 1000`. La subconsulta correlacionada
-     * asegura que solo cuenta la version mas reciente de cada URL; si esa
-     * ultima version esta dentro de 7 dias, la URL cuenta.
-     */
-    @Query(
-        "SELECT COUNT(*) FROM escaneos e WHERE e.creadoEnMillis >= " +
-            "CAST(strftime('%s','now','-7 days') AS INTEGER) * 1000 " +
-            "AND e.id = (" +
-                "SELECT e2.id FROM escaneos e2 " +
-                "WHERE e2.urlLimpia = e.urlLimpia " +
-                "AND e2.id NOT IN (" +
-                    "SELECT idLocal FROM pending_ops " +
-                    "WHERE tabla = 'escaneos' AND tipoOperacion = 'DELETE' AND fallida = 0" +
-                ") ORDER BY e2.creadoEnMillis DESC, e2.id DESC LIMIT 1" +
-            ") AND e.id NOT IN (" +
-            "SELECT idLocal FROM pending_ops " +
-            "WHERE tabla = 'escaneos' AND tipoOperacion = 'DELETE' AND fallida = 0" +
-        ")"
-    )
-    fun observarUltimos7DiasUnicos(): Flow<Int>
-
-    /**
      * Obtiene un escaneo por su id (para pantalla de detalle desde historial).
      * Devuelve null si no existe (p.ej. fue borrado tras navegacion).
      */
@@ -286,7 +241,7 @@ interface EscaneoDao {
      * `urlLimpia`. Devuelve true si NO existe ningun otro escaneo de la misma
      * URL con `creadoEnMillis` mayor (o igual pero `id` mayor como tie-break).
      *
-     * Usado por [com.qrsecurity.detector.ui.DetalleEscaneoViewModel] para
+     * Usado por [com.qrsecurity.detector.ui.DetalleUrlViewModel] para
      * decidir si mostrar los botones de accion (solo en la ultima version).
      */
     @Query(

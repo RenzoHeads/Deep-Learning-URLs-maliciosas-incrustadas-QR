@@ -39,9 +39,35 @@ interface SyncStateDao {
 
     /**
      * Delta sync — actualiza el cursor de modificacion tras un delta pull
-     * exitosa. El cursor es el max(updated_at) de las filas recibidas del
-     * backend. La proxima delta pull pedira ?modificados_desde=<cursor>.
+     * exitosa.
+     *
+     * Bug A1 fix (keyset pagination): el cursor es el **par compuesto
+     * "ts|id"** de la ULTIMA fila recibida del backend (no solo max(updated_at)).
+     * La proxima delta pull enviara `modificados_desde=<ts>` + `cursor_id=<id>`
+     * para que el backend filtre `(updated_at, id) > (ts, id)`:
+     *  - la fila limite (updated_at == ts) ya no se re-trae en cada run
+     *    (el tiebreaker `id` hace avanzar el cursor siempre); y
+     *  - las paginas dentro de un worker-run usan el cursor avanzado, no
+     *    cursor fijo + offset (que se corrompia con inserts concurrentes).
+     *
+     * Compatibilidad: cursores viejos sin '|' (solo ISO) siguen validos —
+     * el repo los envia sin `cursor_id` y el backend usa el modo legacy `>=`.
      */
     @Query("UPDATE sync_state SET ultimoCursorModificacion = :cursor, ultimaSincronizacionExitosa = 1 WHERE tabla = :tabla")
     suspend fun actualizarCursor(tabla: String, cursor: String): Int
+
+    /**
+     * WAVE 16 fix (S422 stale-stall): resetea el cursor de modificacion a NULL.
+     *
+     * Cuando un PULL recibe 422 (Unprocessable Entity) — tipicamente un cursor
+     * corrupto en storage local — el cursor `since` queda adelantado a un
+     * delta que el server rechaza; subsiguientes PULLs saltan el delta corrupto
+     * para siempre (stale-stall). Al resetear a NULL, el proximo PULL usa
+     * epoch (1970-01-01T00:00:00Z) → full pull paginado → sana el stall.
+     *
+     * Llamado desde [com.qrsecurity.detector.datos.sync.SyncWorker] dentro de
+     * la rama 422, en la misma transaccion conceptual que el PULL.
+     */
+    @Query("UPDATE sync_state SET ultimoCursorModificacion = NULL, ultimaSincronizacionExitosa = 0 WHERE tabla = :tabla")
+    suspend fun resetCursor(tabla: String): Int
 }

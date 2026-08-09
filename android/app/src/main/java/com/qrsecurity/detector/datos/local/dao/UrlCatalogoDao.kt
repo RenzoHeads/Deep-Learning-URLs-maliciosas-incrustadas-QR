@@ -43,4 +43,15 @@ interface UrlCatalogoDao {
     /** Cuenta total de URLs en el catálogo (helper de verificación/tests). */
     @Query("SELECT COUNT(*) FROM urls_catalogo")
     suspend fun contar(): Int
+
+    /**
+     * Elimina la entrada de catálogo por hash de URL.
+     *
+     * WAVE 15 fix: `eliminarLocalPorUrlLimpia` debe limpiar `urls_catalogo`
+     * junto con `escaneos`, o un re-escaneo de la misma URL quedaria bloqueado
+     * por `esUrlDuplicada` (el row de escaneos se borro pero el de catálogo no).
+     * Se invoca dentro de la misma transacción Room que borra los escaneos.
+     */
+    @Query("DELETE FROM urls_catalogo WHERE urlHash = :urlHash")
+    suspend fun eliminarPorHash(urlHash: String)
 }
