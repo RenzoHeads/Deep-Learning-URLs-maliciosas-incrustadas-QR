@@ -43,12 +43,13 @@ class PreprocesadorTest {
 
     @Test
     fun `limpiarUrl quita ftp`() {
-        assertEquals("files.example.com", Preprocesador.limpiarUrl("ftp://files.example.com/"))
+        // WAVE 12 fix: trailing slash preservado (contrato 1:1 con clean_url).
+        assertEquals("files.example.com/", Preprocesador.limpiarUrl("ftp://files.example.com/"))
     }
 
     @Test
     fun `limpiarUrl quita ftps`() {
-        assertEquals("files.example.com", Preprocesador.limpiarUrl("ftps://files.example.com/"))
+        assertEquals("files.example.com/", Preprocesador.limpiarUrl("ftps://files.example.com/"))
     }
 
     @Test
@@ -61,14 +62,20 @@ class PreprocesadorTest {
         assertEquals("example.com/no_protocol", Preprocesador.limpiarUrl("example.com/no_protocol"))
     }
 
+    // ── WAVE 12 fix: `.lowercase()` y `.trimEnd('/')` removidos de limpiarUrl
+    // para alinear 1:1 con el `clean_url` de Python (training data). Los tests
+    // siguientes reflejan el nuevo contrato: case-sensitive, slash preservado.
+
     @Test
-    fun `limpiarUrl lowercase la entrada`() {
-        assertEquals("example.com", Preprocesador.limpiarUrl("HTTPS://WWW.EXAMPLE.COM"))
+    fun `limpiarUrl mayusculas no se aplica lowercase - protocolo no se quita`() {
+        // HTTPS:// no coincide case-sensitive con "https://" → no se strip.
+        assertEquals("HTTPS://WWW.EXAMPLE.COM", Preprocesador.limpiarUrl("HTTPS://WWW.EXAMPLE.COM"))
     }
 
     @Test
-    fun `limpiarUrl lowercase mixto`() {
-        assertEquals("example.com", Preprocesador.limpiarUrl("Https://WwW.Example.Com"))
+    fun `limpiarUrl case mixto no se aplica lowercase - protocolo no se quita`() {
+        // "Https://" != "https://" → no se strip; "WwW." != "www." → no se strip.
+        assertEquals("Https://WwW.Example.Com", Preprocesador.limpiarUrl("Https://WwW.Example.Com"))
     }
 
     @Test
@@ -77,13 +84,16 @@ class PreprocesadorTest {
     }
 
     @Test
-    fun `limpiarUrl quita trailing slash`() {
-        assertEquals("example.com", Preprocesador.limpiarUrl("https://example.com/"))
+    fun `limpiarUrl preserva trailing slash`() {
+        // WAVE 12 fix: trailing slash es estructural (path vs root con slash
+        // final), el modelo lo vio asi en training; no se debe remover.
+        assertEquals("example.com/", Preprocesador.limpiarUrl("https://example.com/"))
     }
 
     @Test
-    fun `limpiarUrl preserva slash interno`() {
-        assertEquals("example.com/path", Preprocesador.limpiarUrl("https://example.com/path/"))
+    fun `limpiarUrl preserva slash interno y trailing`() {
+        // Trailing slash del path tambien se preserva.
+        assertEquals("example.com/path/", Preprocesador.limpiarUrl("https://example.com/path/"))
     }
 
     @Test

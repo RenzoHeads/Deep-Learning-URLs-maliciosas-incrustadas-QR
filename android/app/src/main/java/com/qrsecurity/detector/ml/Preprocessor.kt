@@ -41,15 +41,26 @@ object Preprocesador {
     /**
      * Normalizar una URL para entrada al modelo quitando protocolo y prefijo ``www.``.
      *
+     * **WAVE 12 fix (C2 CRITICAL):** antes aplicabamos `.lowercase()` y
+     * `.trimEnd('/')`, dos transformaciones que el `clean_url` de Python
+     * (dataset de entrenamiento) NO aplica. Eso producía skew: el modelo
+     * infería sobre strings que nunca vio en training (e.g.
+     * `"Example.com/Path"` → `"example.com/path"`, `"evil.com/"` →
+     * `"evil.com"`), degradando silenciosamente la probabilidad. Ahora
+     * solo `trim()` (whitespace externo) + quitar protocolo y `www.` —
+     * contrato 1:1 con el preprocesador de training.
+     *
      * Ejemplos:
      *   "https://www.example.com/path" -> "example.com/path"
      *   "http://example.com"            -> "example.com"
      *   "www.malicious.site/x?a=1"      -> "malicious.site/x?a=1"
      *   "ftp://files.example.com/"      -> "files.example.com/"
      *   "example.com/no_protocol"       -> "example.com/no_protocol"
+     *   "Example.COM/Path"              -> "Example.COM/Path"   (preserva case)
+     *   "evil.com/"                     -> "evil.com/"           (preserva slash)
      */
     fun limpiarUrl(url: String): String {
-        var resultado = url.trim().lowercase()
+        var resultado = url.trim()
 
         // Quitar prefijo de protocolo (coincidencia mas larga primero).
         for (prefijo in PREFIJOS_PROTOCOLO) {
@@ -62,8 +73,7 @@ object Preprocesador {
         // Quitar subdominio "www." inicial.
         resultado = resultado.removePrefix("www.")
 
-        // Quitar barra final por consistencia (se conserva solo si hay ruta).
-        return resultado.trimEnd('/')
+        return resultado
     }
 
     /**
