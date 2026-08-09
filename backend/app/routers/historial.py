@@ -205,10 +205,14 @@ async def existe_url(
             de normalizarla antes de llamar — aquí no se re-normaliza.
 
     Returns:
-        [UrlCatalogoRespuesta] con ``existe=True`` + datos del último
-        escaneo (``ultimo_nivel_alerta``, ``ultima_probabilidad``,
-        ``ultimo_escaneo_millis``, ``veces_escaneada``) si la URL ya fue
-        escaneada, o ``existe=False`` + campos nulos/``0`` si no.
+        [UrlCatalogoRespuesta] con ``existe=True`` + ``url_limpia`` y
+        ``ultimo_nivel_alerta`` del último escaneo si la URL ya fue
+        escaneada, o ``existe=False`` + campos nulos si no.
+
+        Nota de seguridad: el cache maestro ``urls_catalogo`` almacena
+        adicionalemente ``ultima_probabilidad``, ``ultimo_escaneo_millis``
+        y ``veces_escaneada``, pero este endpoint **no** los devuelve
+        (defense in depth — ver ``buscar_url_catalogo``).
     """
     pool = await obtener_pool()
     async with pool.acquire() as conexion:

@@ -3,7 +3,9 @@
 GREEN  → comportamiento actual.
 RED    → nuevo comportamiento no implementado (``updated_at``/``deleted_at``,
          ``modificados_desde``, endpoint DELETE).
-XFAIL  → soft-delete pendiente de migracion.
+PASS   → aserciones sobre soft-delete que ya estan soportadas tras la
+         migracion 006 (columnas ``updated_at``/``deleted_at`` en el
+         esquema); antes estaban marcadas como pendientes.
 """
 from __future__ import annotations
 
