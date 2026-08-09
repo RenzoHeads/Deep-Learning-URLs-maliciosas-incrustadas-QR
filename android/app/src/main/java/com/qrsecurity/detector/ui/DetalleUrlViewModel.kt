@@ -19,15 +19,8 @@ import javax.inject.Inject
 /**
  * UiState para la pantalla de Detalle de URL — patron NowInAndroid.
  *
- * F2.4: fusion de [DetalleEscaneoUiState] (DetalleEscaneoViewModel) y
- * [ResultadoMaliciosoUiState] (ResultadoMaliciosoViewModel). La pantalla de
- * detalle de URL reemplaza tanto a la pantalla de detalle de escaneo como
- * a la pantalla de resultado malicioso — ambas mostraban la misma entidad
- * [EscaneoEntity] con botones de bloquear/denunciar.
- *
- * `DetalleEscaneoUiState` es ahora un typealias a este tipo para que el
- * codigo heredado (CacheDetalleEscaneos, DetalleEscaneoScreen sin
- * reescribir) siga compilando mientras F3 lo reemplaza.
+ * La pantalla de detalle de URL muestra la entidad [EscaneoEntity] con
+ * botones de bloquear/denunciar.
  */
 sealed interface DetalleUrlUiState {
     data object Cargando : DetalleUrlUiState
@@ -54,10 +47,8 @@ sealed interface DetalleUrlUiState {
 /**
  * Acciones que la UI puede despachar al ViewModel (Unidirectional Data Flow).
  *
- * F2.4: anade [DesbloquearUrl] que antes no existia en
- * [DetalleEscaneoAction] (solo BloquearUrl). El bloqueo/desbloqueo ahora
- * vive en una sola pantalla en lugar de estar repartido entre
- * DetalleEscaneo y ResultadoMalicioso.
+ * Las dos acciones cubren el ciclo de bloqueo/desbloqueo de una URL desde
+ * la pantalla de detalle.
  */
 sealed interface DetalleUrlAction {
     data class BloquearUrl(val url: String, val razon: String) : DetalleUrlAction
@@ -72,10 +63,7 @@ sealed interface DetalleUrlAction {
 /**
  * ViewModel para la pantalla de Detalle de URL.
  *
- * F2.4: fusion de [DetalleEscaneoViewModel] (detalle de escaneo desde
- * historial) y [ResultadoMaliciosoViewModel] (resultado de analisis
- * malicioso). Ambas pantallas mostraban la misma entidad [EscaneoEntity]
- * con botones de bloquear/denunciar; ahora viven en una sola pantalla.
+ * Muestra la entidad [EscaneoEntity] con botones de bloquear/denunciar.
  *
  * Inyecta [RepositorioEscaneos], [RepositorioUrlsBloqueadas] y
  * [MediadorSincronizacion] via Hilt. Usa [CacheDetalleEscaneos] para
@@ -98,7 +86,7 @@ class DetalleUrlViewModel @Inject constructor(
     private val _uiState = MutableStateFlow<DetalleUrlUiState>(DetalleUrlUiState.Cargando)
     val uiState: StateFlow<DetalleUrlUiState> = _uiState.asStateFlow()
 
-    // Eventos one-shot via Channel — mismo patron que DetalleEscaneoViewModel.
+    // Eventos one-shot via Channel — cada evento se entrega una sola vez.
     private val _mensaje = Channel<MensajeUi>(Channel.BUFFERED)
     val mensaje = _mensaje.receiveAsFlow()
 

@@ -44,8 +44,7 @@ data class EstadoAnalisisAnteriores(
  * ViewModel para la pantalla de Analisis Anteriores (versiones anteriores
  * de una URL).
  *
- * F2.5: renombrado de [ReescaneosViewModel]. Mismo patron que
- * [DatosTabsViewModel] (Historial):
+ * Mismo patron que [DatosTabsViewModel] (Historial):
  *  - Room es la fuente de verdad. El Flow [estadoAnalisisAnteriores] se
  *    suscribe via `stateIn(WhileSubscribed(5_000),
  *    EstadoAnalisisAnteriores(null, ...))` — Room emite la lista cacheada
