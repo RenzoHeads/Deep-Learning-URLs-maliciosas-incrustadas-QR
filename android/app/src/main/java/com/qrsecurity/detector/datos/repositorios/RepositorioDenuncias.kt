@@ -43,59 +43,58 @@ class RepositorioDenuncias(
      * Crea una denuncia localmente. NO llama al backend.
      * Genera UUID client, inserta con dirty=true, encola op CREATE.
      *
-     * @return el id local asignado.
+     * Bug A3 fix: dedup por CONTENIDO, no por UUID. El `idLocal` se genera
+     * dentro de la llamada, por lo que el dedup viejo
+     * (`findExisting(tabla, idLocal, "CREATE")`) siempre devolvia null →
+     * doble tap en UI offline creaba 2 filas + 2 ops CREATE → 2 denuncias
+     * en el backend. Ahora, si ya existe una fila local **dirty** con el
+     * mismo (url, idCategoria, descripcion), reutilizamos su id y no
+     * creamos ni fila ni op. Escaneos NO se deduplican a propósito:
+     * re-escaneo es una accion intencional (log append-only).
+     *
+     * @return el id local asignado (nuevo, o el de la fila existente).
      */
     suspend fun crearLocal(
         url: String,
         idCategoria: Int,
         descripcion: String? = null
     ): String = withContext(ioDispatcher) {
-        val idLocal = UUID.randomUUID().toString()
-        val ahora = System.currentTimeMillis()
-
-        val entidad = DenunciaEntity(
-            id = idLocal,
-            url = url,
-            idCategoria = idCategoria,
-            nombreCategoria = null,  // se rellena tras pull del backend
-            descripcion = descripcion,
-            estado = "PENDIENTE",
-            creadoEnMillis = ahora,
-            dirty = true,
-            syncedAtMillis = null
-        )
-
-        val payloadJson = json.encodeToString(DenunciaEntity.serializer(), entidad)
-
         db.withTransaction {
-            db.denunciaDao().insertar(entidad)
-            // M-21 secondary: dedup — si ya hay un op CREATE pendiente para
-            // este mismo idLocal (doble tap en UI offline), no encolamos otro.
-            val existente = db.pendingOpDao().findExisting(
-                tabla = "denuncias",
-                idLocal = idLocal,
-                tipoOperacion = "CREATE"
-            )
-            if (existente == null) {
-                val op = PendingOpEntity(
-                    tabla = "denuncias",
-                    tipoOperacion = "CREATE",
-                    idLocal = idLocal,
-                    payloadJson = payloadJson,
-                    creadoEnMillis = ahora
-                )
-                db.pendingOpDao().insertar(op)
+            val filaExistente = db.denunciaDao()
+                .buscarDirtyPorContenido(url, idCategoria, descripcion)
+            if (filaExistente != null) {
+                return@withTransaction filaExistente.id
             }
-        }
-        idLocal
-    }
 
-    /**
-     * PULL legacy — delega a [sincronizarDelta] con epoch cursor.
-     * Equivale a un full pull paginado via el endpoint delta.
-     */
-    suspend fun sincronizarDesdeBackend(token: String): ResultadoSync =
-        sincronizarDelta(token, "1970-01-01T00:00:00Z")
+            val idLocal = UUID.randomUUID().toString()
+            val ahora = System.currentTimeMillis()
+
+            val entidad = DenunciaEntity(
+                id = idLocal,
+                url = url,
+                idCategoria = idCategoria,
+                nombreCategoria = null,  // se rellena tras pull del backend
+                descripcion = descripcion,
+                estado = "PENDIENTE",
+                creadoEnMillis = ahora,
+                dirty = true,
+                syncedAtMillis = null
+            )
+
+            val payloadJson = json.encodeToString(DenunciaEntity.serializer(), entidad)
+
+            db.denunciaDao().insertar(entidad)
+            val op = PendingOpEntity(
+                tabla = "denuncias",
+                tipoOperacion = "CREATE",
+                idLocal = idLocal,
+                payloadJson = payloadJson,
+                creadoEnMillis = ahora
+            )
+            db.pendingOpDao().insertar(op)
+            idLocal
+        }
+    }
 
     /**
      * PULL incremental unificado — pide solo las denuncias modificadas desde
@@ -105,18 +104,27 @@ class RepositorioDenuncias(
      * Si [cursor] es epoch, equivale a full pull paginado.
      * Maneja tombstones (deleted_at != null → eliminar local).
      * El cursor se persiste por batch dentro de la transaccion.
+     *
+     * Bug A1 fix (keyset pagination): el cursor se persiste como "ts|id" de
+     * la ULTIMA fila del batch (no solo max(updated_at)). El backend filtra
+     * `(updated_at, id) > (cursor_ts, cursor_id)` ordenado ASC, asi que la
+     * fila limite avanza via el tiebreaker `id` (sin refetch infinito) y las
+     * paginas siguientes usan el cursor avanzado (sin perdida por inserts
+     * concurrentes entre batches). Cursores viejos (solo ISO) siguen
+     * funcionando via el modo legacy `>=` del backend.
      */
     suspend fun sincronizarDelta(token: String, cursor: String): ResultadoSync =
         withContext(ioDispatcher) {
             try {
-                var offset = 0
+                var cursorTs = cursor.substringBefore('|')
+                var cursorId = cursor.substringAfter('|', "").ifEmpty { null }
                 var totalFilas = 0
                 val todosIdsServidor = mutableListOf<String>()
                 var masPorSincronizar = false
                 val ahora = System.currentTimeMillis()
 
                 for (pagina in 1..MAX_PAGINAS_POR_RUN) {
-                    val delta = backend.listarDenunciasDelta(token, cursor, LIMITE_PAGINA, offset)
+                    val delta = backend.listarDenunciasDelta(token, cursorTs, LIMITE_PAGINA, cursorId = cursorId)
 
                     if (delta.isEmpty()) break
 
@@ -126,7 +134,13 @@ class RepositorioDenuncias(
 
                     if (delta.size < LIMITE_PAGINA) break
 
-                    offset += LIMITE_PAGINA
+                    // Bug A1 fix: avanzar el cursor keyset con la ULTIMA fila
+                    // del batch (backend ordena por (updated_at, id) ASC).
+                    val ultima = delta.last()
+                    if (ultima.updatedAt != null) {
+                        cursorTs = ultima.updatedAt
+                        cursorId = ultima.id
+                    }
                     if (pagina == MAX_PAGINAS_POR_RUN) masPorSincronizar = true
                 }
 
@@ -168,9 +182,11 @@ class RepositorioDenuncias(
             db.denunciaDao().insertarTodos(entidades)
         }
 
-        val nuevoCursor = delta.mapNotNull { it.updatedAt }.maxByOrNull { it }
-        if (nuevoCursor != null) {
-            db.syncStateDao().actualizarCursor("denuncias", nuevoCursor)
+        // Bug A1 fix: cursor keyset compuesto "ts|id" de la ultima fila del
+        // batch, no max(updated_at) a secas (que re-traia la fila limite).
+        val ultima = delta.last()
+        if (ultima.updatedAt != null) {
+            db.syncStateDao().actualizarCursor("denuncias", "${ultima.updatedAt}|${ultima.id}")
         }
         db.syncStateDao().actualizar("denuncias", ahora, exitosa = true)
 
@@ -222,7 +238,9 @@ class RepositorioDenuncias(
                 token = token,
                 url = entidadLocal.url,
                 idCategoria = entidadLocal.idCategoria,
-                descripcion = entidadLocal.descripcion
+                descripcion = entidadLocal.descripcion,
+                // Bug A5 fix: idempotencia server-side (ver RepositorioEscaneos).
+                idCliente = op.idLocal
             )
             val ahora = System.currentTimeMillis()
             db.withTransaction {
@@ -260,9 +278,21 @@ class RepositorioDenuncias(
             // Sin esto, el op queda atrapado con `intentos` creciendo hasta
             // `marcarFallida`, perdiendo la denuncia del usuario para siempre.
             if (e.codigo == 409) {
-                val ahora = System.currentTimeMillis()
+                // Bug A2 fix: antes `marcarSincronizado(op.idLocal, ahora)`
+                // dejaba la fila local con id=U-A marcada como synced, pero
+                // el servidor tiene el row bajo id=U-Z. El siguiente PULL
+                // trae U-Z (PK distinta) → `insertarTodos(REPLACE)` no
+                // colisiona → dos filas en `denuncias` (U-A synced + U-Z
+                // nueva). `observarTodas()` no dedup → dos denuncias
+                // visibles en la UI.
+                //
+                // Fix: eliminar la fila local U-A. El servidor ya tiene el
+                // row (bajo id=U-Z), y el siguiente PULL hara
+                // `insertarTodos` con U-Z limpio (incluyendo
+                // nombre_categoria y estado server-assigned). El op se
+                // borra de la cola.
                 db.withTransaction {
-                    db.denunciaDao().marcarSincronizado(op.idLocal, ahora)
+                    db.denunciaDao().eliminarPorId(op.idLocal)
                     db.pendingOpDao().borrarPorId(op.id)
                 }
                 true

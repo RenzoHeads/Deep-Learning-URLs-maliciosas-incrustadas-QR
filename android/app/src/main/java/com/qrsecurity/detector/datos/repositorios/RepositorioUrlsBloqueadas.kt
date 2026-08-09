@@ -41,7 +41,7 @@ class RepositorioUrlsBloqueadas(
 
     /**
      * Consulta puntual (no reactiva) para verificar si una URL esta
-     * bloqueada. Usado por DetalleEscaneoViewModel para mostrar el
+     * bloqueada. Usado por [DetalleUrlViewModel] para mostrar el
      * estado de bloqueo de la URL asociada al escaneo.
      */
     suspend fun obtenerPorUrl(url: String): UrlBloqueadaEntity? =
@@ -51,46 +51,58 @@ class RepositorioUrlsBloqueadas(
      * Bloquea una URL localmente. NO llama al backend.
      * Genera UUID client, inserta con dirty=true, encola op CREATE.
      *
-     * @return el id local asignado.
+     * Bug A3 fix: dedup por contenido (URL) en lugar de idLocal (UUID fresh).
+     * Antes el dedup era `findExisting(tabla, idLocal, "CREATE")` donde
+     * `idLocal` acababa de generarse — siempre devolvia null. Doble tap en
+     * UI (mismo `url` dentro de ventana offline) → 2 filas locales con
+     * 2 UUID distintos + 2 ops CREATE → backend recibe 2 POST que el A2
+     * handler sanea pero a costa de 1 ida-vuelta extra y la primera fila
+     * "phantom-becoming-409" visible en UI brevemente. Ahora consultamos
+     * directamente la fila local por `url`: si existe (dirty o synced),
+     * retornamos su id sin crear nuevo row ni nuevo op. Si esta dirty, su
+     * CREATE encolado se sincronizara; si esta synced, el backend ya la
+     * tiene y un POST duplicado seria 409 (manejado por A2 handler).
+     *
+     * @return el id local asignado (nuevo o el existente si ya estaba bloqueada).
      */
     suspend fun bloquearLocal(url: String, razon: String? = null): String =
         withContext(ioDispatcher) {
-            val idLocal = UUID.randomUUID().toString()
-            val ahora = System.currentTimeMillis()
-
-            val entidad = UrlBloqueadaEntity(
-                id = idLocal,
-                url = url,
-                razon = razon,
-                creadoEnMillis = ahora,
-                dirty = true,
-                syncedAtMillis = null
-            )
-
-            val payloadJson = json.encodeToString(UrlBloqueadaEntity.serializer(), entidad)
-
             db.withTransaction {
-                db.urlBloqueadaDao().insertar(entidad)
-                // M-21 secondary: dedup — si ya hay un op CREATE pendiente para
-                // este mismo idLocal (doble tap en UI offline), no encolamos otro.
-                val existente = db.pendingOpDao().findExisting(
-                    tabla = "urls_bloqueadas",
-                    idLocal = idLocal,
-                    tipoOperacion = "CREATE"
-                )
-                if (existente == null) {
-                    db.pendingOpDao().insertar(
-                        PendingOpEntity(
-                            tabla = "urls_bloqueadas",
-                            tipoOperacion = "CREATE",
-                            idLocal = idLocal,
-                            payloadJson = payloadJson,
-                            creadoEnMillis = ahora
-                        )
-                    )
+                // A3 dedup: fila local existente para esta URL → no duplicar.
+                val filaExistente = db.urlBloqueadaDao().obtenerPorUrl(url)
+                if (filaExistente != null) {
+                    return@withTransaction filaExistente.id
                 }
+
+                val idLocal = UUID.randomUUID().toString()
+                val ahora = System.currentTimeMillis()
+
+                val entidad = UrlBloqueadaEntity(
+                    id = idLocal,
+                    url = url,
+                    razon = razon,
+                    creadoEnMillis = ahora,
+                    dirty = true,
+                    syncedAtMillis = null
+                )
+
+                val payloadJson = json.encodeToString(
+                    UrlBloqueadaEntity.serializer(),
+                    entidad
+                )
+
+                db.urlBloqueadaDao().insertar(entidad)
+                db.pendingOpDao().insertar(
+                    PendingOpEntity(
+                        tabla = "urls_bloqueadas",
+                        tipoOperacion = "CREATE",
+                        idLocal = idLocal,
+                        payloadJson = payloadJson,
+                        creadoEnMillis = ahora
+                    )
+                )
+                idLocal
             }
-            idLocal
         }
 
     /**
@@ -108,7 +120,13 @@ class RepositorioUrlsBloqueadas(
     suspend fun desbloquearLocal(id: String) = withContext(ioDispatcher) {
         db.withTransaction {
             val fila = db.urlBloqueadaDao().obtenerPorId(id)
-            if (fila != null && fila.dirty) {
+            // Bug M3 fix: fila == null (doble-tap en desbloquear o id
+            // inexistente) → NO encolamos DELETE: el backend devolveria 404
+            // y lo tratariamos como exito (wasteful).
+            if (fila == null) {
+                return@withTransaction
+            }
+            if (fila.dirty) {
                 // Row dirty: nunca llego al backend. Borrar el CREATE op
                 // pendiente para que no se procese, y borrar el row local.
                 val opCreate = db.pendingOpDao().findExisting(
@@ -150,18 +168,27 @@ class RepositorioUrlsBloqueadas(
      * Si [cursor] es epoch, equivale a full pull paginado.
      * Maneja tombstones (deleted_at != null → eliminar local).
      * El cursor se persiste por batch dentro de la transaccion.
+     *
+     * Bug A1 fix (keyset pagination): el cursor se persiste como "ts|id" de
+     * la ULTIMA fila del batch (no solo max(updated_at)). El backend filtra
+     * `(updated_at, id) > (cursor_ts, cursor_id)` ordenado ASC, asi que la
+     * fila limite avanza via el tiebreaker `id` (sin refetch infinito) y las
+     * paginas siguientes usan el cursor avanzado (sin perdida por inserts
+     * concurrentes entre batches). Cursores viejos (solo ISO) siguen
+     * funcionando via el modo legacy `>=` del backend.
      */
     suspend fun sincronizarDelta(token: String, cursor: String): ResultadoSync =
         withContext(ioDispatcher) {
             try {
-                var offset = 0
+                var cursorTs = cursor.substringBefore('|')
+                var cursorId = cursor.substringAfter('|', "").ifEmpty { null }
                 var totalFilas = 0
                 val todosIdsServidor = mutableListOf<String>()
                 var masPorSincronizar = false
                 val ahora = System.currentTimeMillis()
 
                 for (pagina in 1..MAX_PAGINAS_POR_RUN) {
-                    val delta = backend.listarUrlsBloqueadasDelta(token, cursor, LIMITE_PAGINA, offset)
+                    val delta = backend.listarUrlsBloqueadasDelta(token, cursorTs, LIMITE_PAGINA, cursorId = cursorId)
 
                     if (delta.isEmpty()) break
 
@@ -171,7 +198,13 @@ class RepositorioUrlsBloqueadas(
 
                     if (delta.size < LIMITE_PAGINA) break
 
-                    offset += LIMITE_PAGINA
+                    // Bug A1 fix: avanzar el cursor keyset con la ULTIMA fila
+                    // del batch (backend ordena por (updated_at, id) ASC).
+                    val ultima = delta.last()
+                    if (ultima.updatedAt != null) {
+                        cursorTs = ultima.updatedAt
+                        cursorId = ultima.id
+                    }
                     if (pagina == MAX_PAGINAS_POR_RUN) masPorSincronizar = true
                 }
 
@@ -213,9 +246,11 @@ class RepositorioUrlsBloqueadas(
             db.urlBloqueadaDao().insertarTodos(entidades)
         }
 
-        val nuevoCursor = delta.mapNotNull { it.updatedAt }.maxByOrNull { it }
-        if (nuevoCursor != null) {
-            db.syncStateDao().actualizarCursor("urls_bloqueadas", nuevoCursor)
+        // Bug A1 fix: cursor keyset compuesto "ts|id" de la ultima fila del
+        // batch, no max(updated_at) a secas (que re-traia la fila limite).
+        val ultima = delta.last()
+        if (ultima.updatedAt != null) {
+            db.syncStateDao().actualizarCursor("urls_bloqueadas", "${ultima.updatedAt}|${ultima.id}")
         }
         db.syncStateDao().actualizar("urls_bloqueadas", ahora, exitosa = true)
 
@@ -275,11 +310,27 @@ class RepositorioUrlsBloqueadas(
             val respuesta = backend.bloquearUrl(
                 token = token,
                 url = entidadLocal.url,
-                razon = entidadLocal.razon
+                razon = entidadLocal.razon,
+                // Bug A5 fix: idempotencia server-side (ver RepositorioEscaneos).
+                idCliente = op.idLocal
             )
             val ahora = System.currentTimeMillis()
             db.withTransaction {
-                if (respuesta.id != entidadLocal.id) {
+                // Bug C1 fix (espejo de RepositorioEscaneos): `backend.bloquearUrl`
+                // corre FUERA de la transaccion Room. Entre que el POST devuelve
+                // 201 y esta transaccion, `desbloquearLocal` puede haber borrado
+                // la fila local (rama `dirty`) junto con el pending op CREATE.
+                // En ese caso el re-key/marcarSincronizado afecta 0 filas, pero el
+                // servidor YA persistio la URL bajo id=U-B. Sin este fix, el
+                // proximo PULL trae U-B (dirty=false) y la URL "desbloqueada"
+                // resucita como fantasma.
+                //
+                // Fix: si el re-key afecto 0 filas → la fila fue eliminada en
+                // vuelo → encolamos un DELETE con el **id de servidor** (U-B)
+                // para que el proximo PUSH lo borre del backend y el PULL no
+                // reintroduzca el fantasma. `borrarPorId(op.id)` es no-op si
+                // `desbloquearLocal` ya borro el op CREATE.
+                val filasAfectadas = if (respuesta.id != entidadLocal.id) {
                     db.urlBloqueadaDao().reKey(
                         idViejo = entidadLocal.id,
                         idNuevo = respuesta.id,
@@ -287,6 +338,17 @@ class RepositorioUrlsBloqueadas(
                     )
                 } else {
                     db.urlBloqueadaDao().marcarSincronizado(entidadLocal.id, ahora)
+                }
+                if (filasAfectadas == 0) {
+                    db.pendingOpDao().insertar(
+                        PendingOpEntity(
+                            tabla = "urls_bloqueadas",
+                            tipoOperacion = "DELETE",
+                            idLocal = respuesta.id,
+                            payloadJson = null,
+                            creadoEnMillis = ahora
+                        )
+                    )
                 }
                 db.pendingOpDao().borrarPorId(op.id)
             }
@@ -303,9 +365,20 @@ class RepositorioUrlsBloqueadas(
             // 409 y devolvia `false`, dejando el op permanentemente en
             // cola y la fila `dirty=true` para siempre.
             if (e.codigo == 409) {
-                val ahora = System.currentTimeMillis()
+                // Bug A2 fix: antes `marcarSincronizado(op.idLocal, ahora)`
+                // dejaba la fila local con id=U-A marcada como synced, pero
+                // el servidor tiene el row bajo id=U-Z. El siguiente PULL
+                // trae U-Z (PK distinta) → `insertarTodos(REPLACE)` no
+                // colisiona → dos filas en `urls_bloqueadas` (U-A synced +
+                // U-Z nueva). `observarTodos()` no dedup → la URL aparece
+                // bloqueada dos veces en la UI.
+                //
+                // Fix: eliminar la fila local U-A. El servidor ya tiene el
+                // row (bajo id=U-Z), y el siguiente PULL hara
+                // `insertarTodos` con U-Z limpio — sin duplicados. El op
+                // se borra de la cola.
                 db.withTransaction {
-                    db.urlBloqueadaDao().marcarSincronizado(op.idLocal, ahora)
+                    db.urlBloqueadaDao().eliminarPorId(op.idLocal)
                     db.pendingOpDao().borrarPorId(op.id)
                 }
                 true
@@ -370,7 +443,10 @@ private fun UrlBloqueada.aEntidad(syncedAt: Long): UrlBloqueadaEntity {
     val creadoMillis = try {
         Instant.parse(creadoEn).toEpochMilli()
     } catch (e: Exception) {
-        System.currentTimeMillis()
+        // WAVE 13 fix (M2): antes System.currentTimeMillis() → la fila aparecia
+        // como "hoy" en el historial. Usamos Long.MIN_VALUE como sentinel para
+        // que se ordene al fondo (fecha desconocida) y sea detectable.
+        Long.MIN_VALUE
     }
     return UrlBloqueadaEntity(
         id = id,
