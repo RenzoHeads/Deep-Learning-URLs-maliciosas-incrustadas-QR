@@ -112,7 +112,7 @@ class RegistrarEscaneoLocalTest {
             val ids = db.escaneoDao().todosLosIds()
             assertTrue(ids.contains(idLocal))
 
-            val unsafe = db.escaneoDao().observarSeguros().first()
+            val unsafe = db.escaneoDao().observarSegurosUnicos().first()
             assertEquals(1, unsafe.size)
             assertEquals(idLocal, unsafe.first().id)
             assertFalse("SEGURO no es malicioso", unsafe.first().esMalicioso)

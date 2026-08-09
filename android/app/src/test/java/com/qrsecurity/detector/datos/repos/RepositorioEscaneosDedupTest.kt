@@ -114,7 +114,7 @@ class RepositorioEscaneosDedupTest {
             assertEquals(0.9f, catalogo.ultimaProbabilidad)
 
             // El historial preserva AMBOS escaneos (append-only)
-            val historial = db.escaneoDao().observarTodos().first()
+            val historial = db.escaneoDao().todosLosIds()
             assertEquals("historial append-only conserva los 2 escaneos", 2, historial.size)
         }
 

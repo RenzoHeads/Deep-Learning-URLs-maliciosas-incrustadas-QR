@@ -24,6 +24,7 @@ import kotlinx.coroutines.test.setMain
 import kotlinx.serialization.json.Json
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -137,18 +138,20 @@ class DatosTabsViewModelTest {
     }
 
     @Test
-    fun estadoInicial_totalEscaneos_cero() {
-        assertEquals(0, viewModel.totalEscaneos.value)
+    fun estadoInicial_totalEscaneos_null() {
+        // Bug 3 fix: StateFlow<Int?> inicia en null para distinguir
+        // "cargando" de "0 real". Cuando Room emite, sera 0 (DB vacia).
+        assertNull(viewModel.totalEscaneos.value)
     }
 
     @Test
-    fun estadoInicial_amenazas_cero() {
-        assertEquals(0, viewModel.amenazas.value)
+    fun estadoInicial_amenazas_null() {
+        assertNull(viewModel.amenazas.value)
     }
 
     @Test
-    fun estadoInicial_ultimos7Dias_cero() {
-        assertEquals(0, viewModel.ultimos7Dias.value)
+    fun estadoInicial_ultimos7Dias_null() {
+        assertNull(viewModel.ultimos7Dias.value)
     }
 
     @Test
@@ -357,7 +360,7 @@ class DatosTabsViewModelTest {
 
         assertTrue(
             "ultimos7Dias debe emitir >= 1 (el escaneo reciente). Fue: ${viewModel.ultimos7Dias.value}",
-            viewModel.ultimos7Dias.value >= 1
+            (viewModel.ultimos7Dias.value ?: 0) >= 1
         )
     }
 

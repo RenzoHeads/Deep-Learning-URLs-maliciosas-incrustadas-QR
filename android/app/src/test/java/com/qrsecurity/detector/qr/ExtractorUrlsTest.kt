@@ -119,25 +119,27 @@ class ExtractorUrlsTest {
     }
 
     @Test
-    fun `extraer dos URLs separadas por coma devuelve Urls con un solo elemento — coma es parte del path`() {
-        // java.net.URI acepta coma en path/query, asi que el fast-path traga
-        // toda la cadena como una sola URL. Coma no es separador efectivo.
+    fun `extraer dos URLs separadas por coma devuelve dos URLs — coma es separador efectivo`() {
+        // java.net.URI parsea "https://example.com,https://test.org" con
+        // authority="example.com,..." pero el host regex (^[A-Za-z0-9.\\-:]+$
+        // en esUrlHttpValida) rechaza la coma → fast-path falla → multi-URL
+        // path usa split(Regex("[\\s,;]+")) que separa por coma → 2 URLs.
         val payload = "https://example.com,https://test.org"
         val resultado = extractor.extraer(payload)
         assertTrue(resultado is ExtractorUrls.Extraido.Urls)
         resultado as ExtractorUrls.Extraido.Urls
-        assertEquals(1, resultado.urls.size)
+        assertEquals(2, resultado.urls.size)
     }
 
     @Test
-    fun `extraer dos URLs separadas por punto-y-coma devuelve Urls con un solo elemento — punto-y-coma es parte del path`() {
-        // java.net.URI acepta ; en path/query, asi que el fast-path traga
-        // toda la cadena como una sola URL. Punto-y-coma no es separador efectivo.
+    fun `extraer dos URLs separadas por punto-y-coma devuelve dos URLs — punto-y-coma es separador efectivo`() {
+        // Misma razon que coma: el host regex rechaza ';' → fast-path falla →
+        // multi-URL split separa por ';' → 2 URLs.
         val payload = "https://example.com;https://test.org"
         val resultado = extractor.extraer(payload)
         assertTrue(resultado is ExtractorUrls.Extraido.Urls)
         resultado as ExtractorUrls.Extraido.Urls
-        assertEquals(1, resultado.urls.size)
+        assertEquals(2, resultado.urls.size)
     }
 
     @Test
@@ -187,18 +189,17 @@ class ExtractorUrlsTest {
     // ──────────────────────────────────────────────────────────────
 
     @Test
-    fun `extraer URL con host Cyrillic NO es rechazada — bug F3 IDN no efectivo`() {
-        // BUG F3 No RESUELTO: el check `uri.host != null` falla porque
-        // java.net.URI devuelve host=null para hosts no-ASCII (no resuelve
-        // Punycode automaticamente), asi que la guarda `host != null && ...`
-        // se salta el chequeo de IDN. La URL se acepta como valida.
-        // Esto es un bug de production conocido: la proteccion contra
-        // homograph attacks IDN (CWE-451+176) NO funciona con java.net.URI
-        // estandar. Se requiere IDN.toAscii() o un parser alternativo.
-        // Test documenta el comportamiento actual (No corregido).
+    fun `extraer URL con host Cyrillic ES rechazada — F3 IDN efectivo`() {
+        // F3 CORREGIDO: el check `host.isNullOrBlank()` (esUrlHttpValida l.181)
+        // devuelve false para hosts null (java.net.URI los descarta), y el
+        // check `host.matches(^[A-Za-z0-9.\\-:]+$)` (l.184) rechaza cualquier
+        // caracter no-ASCII. La URL Cyrillic "https://аpple.com" es rechazada
+        // porque el host 'а' (U+0430) no coincide con el regex ASCII.
         val resultado = extractor.extraer("https://аpple.com")
-        assertTrue("F3 IDN check actualmente no efectivo — URL aceptada (bug conocido)",
-            resultado is ExtractorUrls.Extraido.Urls)
+        assertTrue(
+            "F3 IDN check efectivo — URL con Cyrillic rechazada (NoUrl)",
+            resultado is ExtractorUrls.Extraido.NoUrl
+        )
     }
 
     // ──────────────────────────────────────────────────────────────
