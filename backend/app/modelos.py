@@ -1,4 +1,4 @@
-# / -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 # ============================================================================
 # QR Guardian — Modelos Pydantic (esquemas de entrada/salida)
 # ============================================================================
@@ -44,17 +44,9 @@ class RespuestaAuth(BaseModel):
     creado_en: datetime
 
 
-# noqa: legacy auth por dispositivo eliminado (B-legacy).
-# Las clases RegistroDispositivoEntrada / RespuestaDispositivo se removieron
-# junto con el endpoint POST /auth/registrar-dispositivo. Si necesitas
-# reinstaurar el flujo legacy, recuperalas del historial git.
-
-
 # ============================================================================
 # Validacion de Token
 # ============================================================================
-# Bug B9 fix: ``TokenEntrada`` estaba definido pero nunca usado en ningun
-# endpoint. Eliminado para reducir codigo muerto.
 
 
 # ============================================================================
@@ -161,16 +153,6 @@ class DenunciaRespuesta(BaseModel):
     creado_en: datetime
     updated_at: datetime | None = None
     deleted_at: datetime | None = None
-
-
-# ============================================================================
-# Estadisticas
-# ============================================================================
-class EstadisticasRespuesta(BaseModel):
-    """Estadisticas agregadas del usuario."""
-    total_escaneos: int
-    amenazas: int
-    ultimos_7_dias: int
 
 
 def fila_a_escaneo(fila: asyncpg.Record) -> EscaneoRespuesta:

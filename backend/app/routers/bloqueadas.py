@@ -27,45 +27,46 @@ async def listar_urls_bloqueadas(
         description="Fecha ISO 8601 desde donde obtener modificados (delta sync). Incluye tombstones."
     )] = None,
 ):
-    """Lista las URLs bloqueadas del usuario.
+    """Lista las URLs bloqueadas del usuario (delta sync).
 
-    Modo normal (sin modificados_desde): devuelve solo URLs NO eliminadas
-    (deleted_at IS NULL), ordenadas por creado_en DESC.
+    Modo delta (con ``modificados_desde``): devuelve todas las URLs
+    modificadas desde esa fecha (updated_at >= modificados_desde),
+    incluyendo tombstones (filas con deleted_at != null). El cliente debe
+    eliminar localmente las filas donde deleted_at != null.
 
-    Modo delta (con modificados_desde): devuelve todas las URLs modificadas
-    desde esa fecha (updated_at >= modificados_desde), incluyendo tombstones.
-    El cliente debe eliminar localmente las filas donde deleted_at != null.
+    Modo normal (sin ``modificados_desde``): devuelve solo las URLs activas
+    (deleted_at IS NULL) ordenadas por creado_en DESC.
+
     Paginacion server-side con LIMIT/OFFSET para datasets grandes.
     """
     pool = await obtener_pool()
+
+    condiciones = ["id_usuario = $1"]
+    params: list = [id_usuario]
+
+    if modificados_desde is not None:
+        # Modo delta: filtrar por updated_at, incluir tombstones.
+        condiciones.append("updated_at >= $2")
+        params.append(modificados_desde)
+        orden = "updated_at ASC"
+    else:
+        # Modo normal: solo URLs activas.
+        condiciones.append("deleted_at IS NULL")
+        orden = "creado_en DESC"
+
+    where = " AND ".join(condiciones)
+    query = (
+        f"SELECT id, url, razon, creado_en, updated_at, deleted_at "
+        f"FROM urls_bloqueadas WHERE {where} "
+        f"ORDER BY {orden} "
+        f"LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
+    )
+    params.append(limite)
+    params.append(offset)
+
     async with pool.acquire() as conexion:
-        if modificados_desde is not None:
-            filas = await conexion.fetch(
-                """
-                SELECT id, url, razon, creado_en, updated_at, deleted_at
-                FROM urls_bloqueadas
-                WHERE id_usuario = $1 AND updated_at >= $2
-                ORDER BY updated_at ASC
-                LIMIT $3 OFFSET $4
-                """,
-                id_usuario,
-                modificados_desde,
-                limite,
-                offset,
-            )
-        else:
-            filas = await conexion.fetch(
-                """
-                SELECT id, url, razon, creado_en, updated_at, deleted_at
-                FROM urls_bloqueadas
-                WHERE id_usuario = $1 AND deleted_at IS NULL
-                ORDER BY creado_en DESC
-                LIMIT $2 OFFSET $3
-                """,
-                id_usuario,
-                limite,
-                offset,
-            )
+        filas = await conexion.fetch(query, *params)
+
     return [fila_a_url_bloqueada(f) for f in filas]
 
 
@@ -88,49 +89,49 @@ async def bloquear_url(
     """
     pool = await obtener_pool()
     async with pool.acquire() as conexion:
-        # Verificar si ya esta bloqueada (fila viva)
-        existente_id = await conexion.fetchval(
-            "SELECT id FROM urls_bloqueadas WHERE id_usuario = $1 AND url = $2 AND deleted_at IS NULL",
-            id_usuario,
-            datos.url,
-        )
-        if existente_id is not None:
-            raise HTTPException(
-                status_code=409,
-                detail="Esta URL ya esta bloqueada",
-            )
-
-        # Verificar si existe pero soft-deleted (resurrectar)
-        borrada_id = await conexion.fetchval(
-            "SELECT id FROM urls_bloqueadas WHERE id_usuario = $1 AND url = $2 AND deleted_at IS NOT NULL",
-            id_usuario,
-            datos.url,
-        )
-        if borrada_id is not None:
+        async with conexion.transaction():
+            # 1. Resurrect atomico: si existe una fila soft-deleted (tombstone)
+            #    para este (id_usuario, url), actualizarla in-place. Un solo
+            #    UPDATE — atomico, sin race window, preserva el id original.
             fila = await conexion.fetchrow(
                 """
                 UPDATE urls_bloqueadas
                 SET deleted_at = NULL, razon = $3, updated_at = now()
-                WHERE id = $1 AND id_usuario = $2
+                WHERE id_usuario = $1 AND url = $2 AND deleted_at IS NOT NULL
                 RETURNING id, url, razon, creado_en, updated_at, deleted_at
                 """,
-                borrada_id,
                 id_usuario,
+                datos.url,
                 datos.razon,
             )
-            return fila_a_url_bloqueada(fila)
+            if fila is not None:
+                return fila_a_url_bloqueada(fila)
 
-        fila = await conexion.fetchrow(
-            """
-            INSERT INTO urls_bloqueadas (id_usuario, url, razon)
-            VALUES ($1, $2, $3)
-            RETURNING id, url, razon, creado_en, updated_at, deleted_at
-            """,
-            id_usuario,
-            datos.url,
-            datos.razon,
-        )
-    return fila_a_url_bloqueada(fila)
+            # 2. No hay tombstone. INSERT nuevo con ON CONFLICT DO NOTHING —
+            #    elimina la ventana TOCTOU: dos llamadas concurrentes para
+            #    la misma URL nueva ya no chocan con la constraint unica
+            #    (asyncpg UniqueViolation 23505); el segundo INSERT es
+            #    idempotente (DO NOTHING) y devuelve None → cae al 409 final.
+            fila = await conexion.fetchrow(
+                """
+                INSERT INTO urls_bloqueadas (id_usuario, url, razon)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (id_usuario, url) WHERE deleted_at IS NULL DO NOTHING
+                RETURNING id, url, razon, creado_en, updated_at, deleted_at
+                """,
+                id_usuario,
+                datos.url,
+                datos.razon,
+            )
+            if fila is not None:
+                return fila_a_url_bloqueada(fila)
+
+            # 3. ON CONFLICT fired — ya existe una fila viva (la carrera la
+            #    gano otra tx concurrente, o ya estaba bloqueada de antes).
+            raise HTTPException(
+                status_code=409,
+                detail="Esta URL ya esta bloqueada",
+            )
 
 
 @router.delete(

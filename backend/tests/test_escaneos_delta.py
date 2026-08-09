@@ -4,8 +4,9 @@ GREEN  → comportamiento actual que debe seguir pasando.
 RED    → aserciones sobre NUEVO comportamiento todavia no implementado
          (campos ``updated_at`` / ``deleted_at``, parametro ``modificados_desde``,
           soft-delete). Fallan contra el codigo actual.
-XFAIL  → aserciones sobre soft-delete que requieren la migracion de esquema;
-          marcadas explicitamente para no romper la suite.
+PASS   → aserciones sobre soft-delete ya estan soportadas (columnas
+         ``updated_at``/``deleted_at``); antes estaban marcadas como
+         pendientes.
 """
 from __future__ import annotations
 

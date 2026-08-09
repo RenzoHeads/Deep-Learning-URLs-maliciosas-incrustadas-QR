@@ -324,6 +324,21 @@ class FakeConnection:
                 "deleted_at": None,
             }
         elif table == "urls_bloqueadas":
+            # B1 fix: INSERT ... ON CONFLICT (id_usuario, url) WHERE deleted_at
+            # IS NULL DO NOTHING — idempotente si ya existe una fila viva para
+            # esa URL (eliminar la ventana TOCTOU SELECT-then-INSERT). El fake
+            # respeta la semantica ON CONFLICT DO NOTHING: si ya hay una fila
+            # viva (deleted_at IS NULL) para (id_usuario, url), no inserta y
+            # devuelve [] — fetchrow recibira None.
+            sql_u = sql.upper()
+            if "ON CONFLICT" in sql_u and "DO NOTHING" in sql_u:
+                id_usuario_nuevo = str(params[0])
+                url_nueva = params[1]
+                for r in self._store.get(table, []):
+                    if (str(r.get("id_usuario")) == id_usuario_nuevo
+                            and r.get("url") == url_nueva
+                            and r.get("deleted_at") is None):
+                        return []  # conflict — DO NOTHING (no insert)
             new_row = {
                 "id": uuid.uuid4(),
                 "id_usuario": str(params[0]),

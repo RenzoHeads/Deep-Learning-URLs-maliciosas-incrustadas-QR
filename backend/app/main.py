@@ -12,19 +12,37 @@ Documentacion interactiva:
     http://localhost:8000/docs    (Swagger UI)
     http://localhost:8000/redoc   (ReDoc)
 """
-import os
+from contextlib import asynccontextmanager
+import logging
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.routers import auth, historial, bloqueadas, denuncias, estadisticas
+from app.base_datos import cerrar_pool
+from app.config import obtener_ajustes
+from app.routers import auth, historial, bloqueadas, denuncias
+
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan de la aplicacion FastAPI.
+
+    En Vercel serverless el shutdown rara vez se dispara (instancias
+    efimeras), pero en desarrollo local (uvicorn --reload) es esencial
+    para cerrar el pool y no dejar conexiones huerfanas al hacer restarts.
+    """
+    yield
+    await cerrar_pool()
 
 
 app = FastAPI(
     title="QR Guardian API",
     description="Backend para la app Android QR Guardian — deteccion de URLs maliciosas en codigos QR",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 # Bug B7 fix: CORS middleware. Combos `allow_methods=["*"]` + `allow_credentials=True`
@@ -33,10 +51,10 @@ app = FastAPI(
 # La app Android no lo necesita (OkHttp directo, no navegador), pero
 # desarrollo/debug desde localhost:3000 u origins web futuros si lo requieren.
 # ALLOWED_ORIGINS en .env puede ampliar la allowlist.
-_origins = os.getenv("ALLOWED_ORIGINS", "https://qr-guardian-api.vercel.app").split(",")
+_ajustes = obtener_ajustes()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[o.strip() for o in _origins if o.strip()],
+    allow_origins=_ajustes.allowed_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
@@ -47,7 +65,6 @@ app.include_router(auth.router)
 app.include_router(historial.router)
 app.include_router(bloqueadas.router)
 app.include_router(denuncias.router)
-app.include_router(estadisticas.router)
 
 
 @app.get("/", tags=["inicio"])

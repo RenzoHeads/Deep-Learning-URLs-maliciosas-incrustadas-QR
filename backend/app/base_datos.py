@@ -12,6 +12,7 @@ Uso tipico dentro de un endpoint:
     async with pool.acquire() as conexion:
         ... = await conexion.fetchval("SELECT 1")
 """
+import asyncio
 import hashlib
 import logging
 from typing import Any
@@ -22,6 +23,20 @@ from app.config import obtener_ajustes
 logger = logging.getLogger(__name__)
 
 _pool: asyncpg.Pool | None = None
+_pool_lock: asyncio.Lock | None = None
+
+
+def _obtener_lock() -> asyncio.Lock:
+    """Devuelve el lock de creación del pool, creándolo perezosamente.
+
+    El lock se crea bajo el event loop activo (no en import-time) para evitar
+    el warning ``Got a Litre Object`` en loops distintos (relevante en tests
+    y en Vercel serverless donde cada cold-start tiene su propio loop).
+    """
+    global _pool_lock
+    if _pool_lock is None:
+        _pool_lock = asyncio.Lock()
+    return _pool_lock
 
 
 async def obtener_pool() -> asyncpg.Pool:
@@ -35,33 +50,76 @@ async def obtener_pool() -> asyncpg.Pool:
     contexto util. Ahora capturamos el error, lo logueamos con contexto
     (sin exponer la URL con password) y relanzamos como RuntimeError con
     un mensaje limpio para que los handlers lo atrapen.
+
+    Race-condition fix: si dos requests concurrentes llamaban
+    ``obtener_pool`` simultaneamente en un cold-start (pool aun no creado),
+    ambos veian ``_pool is None`` y ambos llamaban ``create_pool`` —
+    creando dos pools y descartando uno (conexionFilter leak). Ahora un
+    ``asyncio.Lock`` serializa la creación: el segundo await espera al
+    primero y reutiliza el pool ya creado.
     """
     global _pool
     if _pool is not None:
         return _pool
 
-    ajustes = obtener_ajustes()
-    try:
-        _pool = await asyncpg.create_pool(
-            dsn=ajustes.obtener_database_url,
-            # Bug B9 fix: ``min_size=1`` abre una conexion TCP eagerly al
-            # crear el pool. En Vercel serverless el primer request tras un
-            # cold-start bloquea ~5s esperando esaconexion (Neon cold-start),
-            # lo que con el timeout por defecto de Vercel (10s Hobby / 60s Pro)
-            # puede provocar 504. Con ``min_size=0`` asyncpg no abre ninguna
-            # conexion hasta el primer ``acquire()``, repartiendo la latencia
-            # entre los requests reales.
-            min_size=0,
-            max_size=5,
-            command_timeout=30,
-        )
-    except Exception as e:
-        logger.exception("No se pudo crear el pool de conexiones a Neon: %s", type(e).__name__)
-        # No exponer database_url (contiene password). Resetear para que un
-        # siguiente intento pueda reintentar.
-        _pool = None
-        raise RuntimeError("No se pudo conectar a la base de datos") from e
+    async with _obtener_lock():
+        # Doble check bajo el lock: otro task pudo haberlo creado mientras
+        # esperabamos adquirir el lock.
+        if _pool is not None:
+            return _pool
+
+        ajustes = obtener_ajustes()
+        try:
+            _pool = await asyncpg.create_pool(
+                dsn=ajustes.obtener_database_url,
+                # Bug B9 fix: ``min_size=1`` abre una conexion TCP eagerly al
+                # crear el pool. En Vercel serverless el primer request tras un
+                # cold-start bloquea ~5s esperando esaconexion (Neon cold-start),
+                # lo que con el timeout por defecto de Vercel (10s Hobby / 60s Pro)
+                # puede provocar 504. Con ``min_size=0`` asyncpg no abre ninguna
+                # conexion hasta el primer ``acquire()``, repartiendo la latencia
+                # entre los requests reales.
+                min_size=0,
+                max_size=5,
+                command_timeout=30,
+                # Health-check: cada 30s asyncpg hace un ``SELECT 1`` en las
+                # conexiones idle del pool. Neon cierra conexiones inactivas
+                # tras ~30s (serverless compute suspend); sin health-check,
+                # la primera peticion que reutiliza una conexion stale recibe
+                # ``ConnectionDoesNotExistError``. Con 30s nos mantenemos por
+                # debajo del idle timeout de Neon y reciclamos conexiones
+                # antes de que el server las cierre.
+                health_check_interval=30,
+            )
+        except Exception as e:
+            logger.exception("No se pudo crear el pool de conexiones a Neon: %s", type(e).__name__)
+            # No exponer database_url (contiene password). Resetear para que un
+            # siguiente intento pueda reintentar.
+            _pool = None
+            raise RuntimeError("No se pudo conectar a la base de datos") from e
     return _pool
+
+
+async def cerrar_pool() -> None:
+    """Cierra el pool de conexiones gracefulmente.
+
+    Uso tipico en el.shutdown del lifespan de FastAPI::
+
+        @asynccontextmanager
+        async def lifespan(app: FastAPI):
+            yield
+            await cerrar_pool()
+
+    En Vercel serverless el shutdown event rara vez se dispara (las
+    instancias lambda son efimeras), pero en desarrollo local (uvicorn
+    --reload) es esencial para no dejar conexiones huerfanas al hacer
+    restarts. Idempotente: si el pool ya es None, no hace nada.
+    """
+    global _pool
+    if _pool is not None:
+        await _pool.close()
+        _pool = None
+        logger.info("Pool de conexiones cerrado")
 
 
 # ============================================================================
