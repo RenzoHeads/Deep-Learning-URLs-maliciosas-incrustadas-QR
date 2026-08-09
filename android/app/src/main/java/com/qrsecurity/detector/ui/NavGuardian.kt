@@ -60,12 +60,13 @@ import kotlinx.coroutines.launch
 // Agrupacion de ViewModels para NavGuardianRutas (evita S107 — max 7
 // parametros). Los VMs se instancian a nivel NavGuardian y se pasan
 // hacia abajo para que persistan al cambiar de tab.
-private data class NavGuardianViewModels(
+    private data class NavGuardianViewModels(
     val pipelineViewModel: PipelineViewModel,
     val datosViewModel: DatosTabsViewModel,
-    // F2.5: este campo se renombrara a `analisisAnterioresViewModel`
-    // cuando ReescaneosViewModel → AnalisisAnterioresViewModel.
-    val reescaneosViewModel: ReescaneosViewModel,
+    // F2.7: renombrado de reescaneosViewModel a analisisAnterioresViewModel
+    // — typealias de ReescaneosViewModel.kt roto (Kotlin no hereda acceso
+    // a clases anidadas via typealias), asi que usamos el tipo real.
+    val analisisAnterioresViewModel: AnalisisAnterioresViewModel,
     val sessionViewModel: SessionViewModel,
 )
 
@@ -117,7 +118,7 @@ fun NavGuardian() {
     // VMs a nivel NavGuardian — persisten al cambiar de tab (F3 los usa).
     val pipelineViewModel: PipelineViewModel = hiltViewModel()
     val datosViewModel: DatosTabsViewModel = hiltViewModel()
-    val reescaneosViewModel: ReescaneosViewModel = hiltViewModel()
+    val analisisAnterioresViewModel: AnalisisAnterioresViewModel = hiltViewModel()
     val sessionViewModel: SessionViewModel = hiltViewModel()
 
     val logueado = remember { sessionViewModel.estaLogueado() }
@@ -154,7 +155,7 @@ fun NavGuardian() {
             viewModels = NavGuardianViewModels(
                 pipelineViewModel = pipelineViewModel,
                 datosViewModel = datosViewModel,
-                reescaneosViewModel = reescaneosViewModel,
+                analisisAnterioresViewModel = analisisAnterioresViewModel,
                 sessionViewModel = sessionViewModel,
             ),
             contexto = NavGuardianContexto(

@@ -35,6 +35,18 @@ import com.qrsecurity.detector.ui.theme.CyberVerdeFondo
 enum class TipoMensaje { EXITO, ERROR, INFO }
 
 /**
+ * Wrapper para mensajes de UI (snackbar). Tipo + texto.
+ *
+ * F2.7: movido aqui desde [DetalleEscaneoViewModel] (eliminado en F2)
+ * para que [DetalleUrlViewModel] y otros VMs lo consuman sin depender
+ * de un archivo heredado.
+ */
+data class MensajeUi(
+    val tipo: TipoMensaje,
+    val texto: String
+)
+
+/**
  * Snackbar host global con styling cyber-sentinel.
  * Colorea el fondo segun TipoMensaje (actionLabel).
  */

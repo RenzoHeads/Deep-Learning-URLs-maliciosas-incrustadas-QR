@@ -9,23 +9,27 @@ import kotlinx.coroutines.flow.update
 
 /**
  * Cache Singleton (alcance app) de los estados
- * [DetalleEscaneoUiState.Cargado] por id de escaneo.
+ * [DetalleUrlUiState.Cargado] por id de escaneo.
  *
- * **Por que existe**: [DetalleEscaneoViewModel] se instancia por cada
- * `NavBackStackEntry` (cada navigation a `detalle_escaneo/{id}` crea una
+ * F2.7: migrado de `DetalleEscaneoUiState.Cargado` (typealias roto en
+ * Kotlin — no hereda acceso a clases anidadas) a `DetalleUrlUiState.Cargado`
+ * directamente. cacheDetalle ya no depende de typealias.
+ *
+ * **Por que existe**: [DetalleUrlViewModel] se instancia por cada
+ * `NavBackStackEntry` (cada navigation a `detalle_url/{id}` crea una
  * entrada nueva). Sin cache, al re-entrar al detalle de un mismo id (via
  * back, o tocando el detalle de un reescaneo de la misma URL), el VM
- * empieza en [DetalleEscaneoUiState.Cargando] y muestra un flash de
+ * empieza en [DetalleUrlUiState.Cargando] y muestra un flash de
  * "Cargando..." hasta que Room responde (~1-3 frames). Con este cache,
  * el VM lee `obtener(id)` en su construccion (via `SavedStateHandle`) y
- * muestra [DetalleEscaneoUiState.Cargado] instantaneamente — sin flash.
+ * muestra [DetalleUrlUiState.Cargado] instantaneamente — sin flash.
  * La validacion contra Room ocurre despues en background (~ms, invisible
  * para el usuario).
  *
  * **Tamanio acotado**: solo guarda ids visitados en esta sesion. Los
  * [com.qrsecurity.detector.datos.local.entidades.EscaneoEntity] ya estan
  * en Room (memoria + disco); este cache solo guarda referencias + los
- * flags derivados que [DetalleEscaneoViewModel] calcula al cargar
+ * flags derivados que [DetalleUrlViewModel] calcula al cargar
  * (`urlBloqueada`, `esUltimaVersion`, `totalReescaneos`).
  *
  * **No es un cache RAM de listas** (como pidio el usuario evitar para
@@ -37,20 +41,20 @@ import kotlinx.coroutines.flow.update
 class CacheDetalleEscaneos @Inject constructor() {
 
     private val _cache =
-        MutableStateFlow<Map<String, DetalleEscaneoUiState.Cargado>>(emptyMap())
-    val cache: StateFlow<Map<String, DetalleEscaneoUiState.Cargado>> = _cache.asStateFlow()
+        MutableStateFlow<Map<String, DetalleUrlUiState.Cargado>>(emptyMap())
+    val cache: StateFlow<Map<String, DetalleUrlUiState.Cargado>> = _cache.asStateFlow()
 
     /**
      * Lectura sincrona del estado cacheado para [id].
      * Devuelve `null` si el id no esta en cache (primera visita).
      */
-    fun obtener(id: String): DetalleEscaneoUiState.Cargado? = _cache.value[id]
+    fun obtener(id: String): DetalleUrlUiState.Cargado? = _cache.value[id]
 
     /**
      * Guarda (o actualiza si ya existia) el estado [estado] en el cache,
      * indexado por `estado.escaneo.id`.
      */
-    fun guardar(estado: DetalleEscaneoUiState.Cargado) {
+    fun guardar(estado: DetalleUrlUiState.Cargado) {
         _cache.update { it + (estado.escaneo.id to estado) }
     }
 
