@@ -60,6 +60,12 @@ class CrearEscaneoEntrada(BaseModel):
     nivel_alerta: str = Field("SEGURO", pattern="^(SEGURO|SOSPECHOSO|MALICIOSO)$")
     delegado: str | None = Field(None, max_length=50)
     notas_analisis: str | None = Field(None, max_length=2000)
+    # Bug A5 fix (idempotencia server-side): clave de idempotencia enviada
+    # por el cliente (= idLocal del pending op CREATE). El backend usa
+    # (id_usuario, id_cliente) como llave unica parcial para devolver la
+    # fila existente cuando el cliente reenvia el mismo op tras un crash
+    # post-POST — elimina las filas fantasma duplicadas.
+    id_cliente: str | None = Field(None, max_length=64)
 
 
 class EscaneoRespuesta(BaseModel):
@@ -122,6 +128,8 @@ class BloquearUrlEntrada(BaseModel):
     """Datos para bloquear una URL."""
     url: str = Field(..., min_length=1)
     razon: str | None = Field(None, max_length=255)
+    # Bug A5 fix (idempotencia server-side) — ver CrearEscaneoEntrada.
+    id_cliente: str | None = Field(None, max_length=64)
 
 
 class UrlBloqueadaRespuesta(BaseModel):
@@ -142,6 +150,8 @@ class CrearDenunciaEntrada(BaseModel):
     url: str = Field(..., min_length=1)
     id_categoria: int = Field(..., ge=1)
     descripcion: str | None = Field(None)
+    # Bug A5 fix (idempotencia server-side) — ver CrearEscaneoEntrada.
+    id_cliente: str | None = Field(None, max_length=64)
 
 
 class DenunciaRespuesta(BaseModel):

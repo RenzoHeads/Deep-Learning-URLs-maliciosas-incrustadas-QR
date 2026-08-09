@@ -33,6 +33,13 @@ class Ajustes(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
+        # Claves extra del .env (PORT, ENTORNO, etc.) son metadatos de
+        # despliegue (uvicorn/Vercel), no ajustes de la app. Con
+        # pydantic-settings >= 2.6 las claves no declaradas disparaban
+        # ValidationError (extra_forbidden) al instanciar Ajustes, tumbando
+        # el backend entero. Ignorarlas explicitamente mantiene compatibilidad
+        # con el pin del repo (2.7.1) y con versiones posteriores.
+        extra="ignore",
     )
 
 
