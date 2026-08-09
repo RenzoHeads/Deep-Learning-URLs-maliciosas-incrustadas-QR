@@ -155,6 +155,7 @@ class ClienteBackend(
         val probabilidad: Float,
         @SerialName("nivel_alerta") val nivelAlerta: String,
         val delegado: String? = null,
+        @SerialName("notas_analisis") val notasAnalisis: String? = null,
         @SerialName("es_malicioso") val esMalicioso: Boolean,
         @SerialName("creado_en") val creadoEn: String,
         @SerialName("updated_at") val updatedAt: String? = null,
@@ -271,7 +272,8 @@ class ClienteBackend(
         urlLimpia: String,
         probabilidad: Float,
         nivelAlerta: String,
-        delegado: String? = null
+        delegado: String? = null,
+        notasAnalisis: String? = null  // NEW
     ): Escaneo = withContext(Dispatchers.IO) {
         val body = buildJsonObject {
             put("url_original", JsonPrimitive(urlOriginal))
@@ -279,6 +281,7 @@ class ClienteBackend(
             put("probabilidad", JsonPrimitive(probabilidad))
             put("nivel_alerta", JsonPrimitive(nivelAlerta))
             if (!delegado.isNullOrBlank()) put("delegado", JsonPrimitive(delegado))
+            if (!notasAnalisis.isNullOrBlank()) put("notas_analisis", JsonPrimitive(notasAnalisis))
         }
         val respuesta = post("$base/escaneos", body.toString(), token)
         json.decodeFromString(Escaneo.serializer(), respuesta)

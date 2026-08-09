@@ -210,7 +210,8 @@ class RepositorioEscaneos(
         urlLimpia: String,
         probabilidad: Float,
         nivelAlerta: String,
-        delegado: String? = null
+        delegado: String? = null,
+        notasAnalisis: String? = null
     ): String = withContext(ioDispatcher) {
         val idLocal = UUID.randomUUID().toString()
         val ahora = System.currentTimeMillis()
@@ -226,7 +227,8 @@ class RepositorioEscaneos(
             esMalicioso = esMalicioso,
             creadoEnMillis = ahora,
             dirty = true,
-            syncedAtMillis = null
+            syncedAtMillis = null,
+            notasAnalisis = notasAnalisis
         )
 
         val payloadJson = json.encodeToString(EscaneoEntity.serializer(), entidad)
@@ -544,7 +546,8 @@ class RepositorioEscaneos(
                 urlLimpia = entidadLocal.urlLimpia,
                 probabilidad = entidadLocal.probabilidad,
                 nivelAlerta = entidadLocal.nivelAlerta,
-                delegado = entidadLocal.delegado
+                delegado = entidadLocal.delegado,
+                notasAnalisis = entidadLocal.notasAnalisis
             )
             // Re-key: el id local (client UUID) se reemplaza por el id servidor (server UUID).
             val ahora = System.currentTimeMillis()
@@ -736,6 +739,7 @@ private fun Escaneo.aEntidad(syncedAt: Long): EscaneoEntity {
         esMalicioso = esMalicioso,
         creadoEnMillis = creadoMillis,
         dirty = false,
-        syncedAtMillis = syncedAt
+        syncedAtMillis = syncedAt,
+        notasAnalisis = notasAnalisis
     )
 }
