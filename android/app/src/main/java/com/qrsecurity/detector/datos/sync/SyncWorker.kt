@@ -166,7 +166,7 @@ class SyncWorker @AssistedInject constructor(
             syncPrefs.edit().putBoolean(KEY_INITIAL_SYNC_COMPLETED, true).apply()
             Log.d(TAG, "doWork() initial_sync_completed=true — todas las tablas al dia")
         } else if (estadoPulls.masPorSincronizar) {
-            Log.d(TAG, "doWork() initial sync仍在en progreso — quedan paginas por sincronizar")
+            Log.d(TAG, "doWork() initial sync aun en progreso — quedan paginas por sincronizar")
         }
 
         Log.d(TAG, "doWork() completado OK → Result.success()")
@@ -281,10 +281,6 @@ class SyncWorker @AssistedInject constructor(
         return estado
     }
 
-    /**
-     * Procesa el delta pull de una sola tabla. Si no hay cursor guardado,
-     * hace full pull de fallback (no perdemos datos).
-     */
     /**
      * Ejecuta el delta pull de una tabla con cursor incremental.
      *

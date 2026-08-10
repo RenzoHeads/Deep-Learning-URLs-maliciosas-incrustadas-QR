@@ -7,6 +7,8 @@ Endpoints:
   GET    /denuncias/categorias — Lista las categorias disponibles
   DELETE /denuncias/{id}       — Elimina (soft-delete) una denuncia
 """
+import uuid
+
 from datetime import datetime
 from typing import Annotated
 
@@ -130,6 +132,15 @@ async def crear_denuncia(
                     id_usuario,
                     datos.id_cliente,
                 )
+                if fila is None:
+                    # Bug M3 fix (tombstone race, analogo a C3 en
+                    # historial.py): la fila con este id_cliente existe pero
+                    # fue soft-deleted por otra tx entre el INSERT DO NOTHING
+                    # y el re-SELECT. 409 en vez de 500.
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Denuncia ya eliminada — id_cliente reusado",
+                    )
 
     respuesta = fila_a_denuncia(fila)
     # Bug B12 fix: antes se hacia un segundo query ``SELECT nombre FROM categorias_denuncia``
@@ -238,7 +249,7 @@ async def listar_denuncias(
     responses={404: {"description": "Denuncia no encontrada o ya eliminada"}},
 )
 async def eliminar_denuncia(
-    denuncia_id: str,
+    denuncia_id: uuid.UUID,
     id_usuario: Annotated[str, Depends(verificar_token)],
 ):
     """Elimina (soft-delete) una denuncia del usuario.

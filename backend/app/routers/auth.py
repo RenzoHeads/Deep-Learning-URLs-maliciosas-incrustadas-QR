@@ -91,10 +91,7 @@ async def registrar_usuario(datos: RegistroUsuarioEntrada):
                 status_code=status.HTTP_409_CONFLICT,
                 detail="El nombre de usuario ya esta en uso",
             )
-        except Exception:
-            raise
-
-    return RespuestaAuth(
+        return RespuestaAuth(
         id_usuario=fila["id"],
         token_api=fila["token_api"],
         nombre_usuario=fila["nombre_usuario"],

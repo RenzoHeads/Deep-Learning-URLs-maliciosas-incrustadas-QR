@@ -80,7 +80,7 @@ private fun CategoriaDenuncia.aEntidad(syncedAt: Long): CategoriaDenunciaEntity 
     return CategoriaDenunciaEntity(
         id = id,
         nombre = nombre,
-        descripcion = null,  // el backend no devuelve descripcion en el listado
+        descripcion = descripcion,
         syncedAtMillis = syncedAt
     )
 }

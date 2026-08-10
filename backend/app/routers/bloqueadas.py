@@ -6,6 +6,8 @@ Endpoints:
   POST   /urls-bloqueadas          — Bloquea una URL
   DELETE /urls-bloqueadas/{id}     — Desbloquea una URL
 """
+import uuid
+
 from datetime import datetime
 from typing import Annotated
 
@@ -191,7 +193,7 @@ async def bloquear_url(
     responses={404: {"description": "URL bloqueada no encontrada o ya eliminada"}},
 )
 async def desbloquear_url(
-    url_id: str,
+    url_id: uuid.UUID,
     id_usuario: Annotated[str, Depends(verificar_token)],
 ):
     """Desbloquea (soft-delete) una URL de la lista de bloqueadas."""
