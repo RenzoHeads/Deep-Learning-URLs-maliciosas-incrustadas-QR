@@ -247,7 +247,10 @@ class FakeConnection:
         if not rows:
             return None
         if "COUNT" in sql.upper():
-            return len(rows)
+            # Bug C2 fix: _select ya devuelve un row unico `{"count": N}`
+            # para queries COUNT — devolver el valor real en vez de
+            # `len(rows)` (=1 siempre), que enmascaraba el xfail.
+            return rows[0].get("count")
         if "RETURNING" in sql.upper():
             first = rows[0]
             return first.get("id")
@@ -366,6 +369,19 @@ class FakeConnection:
             # Bug A5 fix: el INSERT ahora incluye `id_cliente` como $9
             # (clave de idempotencia server-side, opcional — None para
             # clientes legacy que no lo envian).
+            # Bug m3 fix: respetar la semantica real de ON CONFLICT
+            # (id_usuario, id_cliente) WHERE id_cliente IS NOT NULL DO
+            # NOTHING — si ya existe UNA fila (viva o tombstone) con el mismo
+            # id_cliente, no insertar y devolver [] (fetchrow recibira None:
+            # Path 3 de la race en crear_escaneo, testeable para C3).
+            if "ON CONFLICT" in sql_u and "DO NOTHING" in sql_u:
+                id_usuario_nuevo = str(params[0])
+                id_cliente_nuevo = params[8] if len(params) > 8 else None
+                if id_cliente_nuevo is not None:
+                    for r in self._store.get(table, []):
+                        if (str(r.get("id_usuario")) == id_usuario_nuevo
+                                and r.get("id_cliente") == id_cliente_nuevo):
+                            return []  # conflict — DO NOTHING (no insert)
             new_row = {
                 "id": uuid.uuid4(),
                 "id_usuario": str(params[0]),
@@ -408,6 +424,16 @@ class FakeConnection:
                 "deleted_at": None,
             }
         elif table == "denuncias_url":
+            # Bug m3 fix: mismo trato ON CONFLICT (id_usuario, id_cliente)
+            # WHERE id_cliente IS NOT NULL DO NOTHING para denuncias.
+            if "ON CONFLICT" in sql_u and "DO NOTHING" in sql_u:
+                id_usuario_nuevo = str(params[0])
+                id_cliente_nuevo = params[4] if len(params) > 4 else None
+                if id_cliente_nuevo is not None:
+                    for r in self._store.get(table, []):
+                        if (str(r.get("id_usuario")) == id_usuario_nuevo
+                                and r.get("id_cliente") == id_cliente_nuevo):
+                            return []  # conflict — DO NOTHING (no insert)
             new_row = {
                 "id": uuid.uuid4(),
                 "id_usuario": str(params[0]),
@@ -599,7 +625,7 @@ def _seed_usuarios(store: dict[str, list[dict]]) -> None:
             "id": uuid.UUID(ID_USUARIO_TEST) if _is_uuid(ID_USUARIO_TEST) else uuid.uuid4(),
             "token_api": "test-token",
             "nombre_usuario": "tester",
-            "correo": "tester@test.local",
+            "correo": "tester@test.com",
             "password_hash": None,
             "id_dispositivo": "dev-test",
             "creado_en": datetime.now(timezone.utc),
@@ -642,7 +668,7 @@ def usuario_aleatorio() -> dict[str, str]:
     return {
         "nombre_usuario": f"user_{_secrets.token_hex(8)}",
         "password": f"pw_{_secrets.token_urlsafe(12)}",
-        "correo": f"{_secrets.token_hex(4)}@test.local",
+        "correo": f"{_secrets.token_hex(4)}@test.com",
     }
 
 
@@ -660,7 +686,7 @@ def client(monkeypatch, fake_pool, store) -> TestClient:
     from app import base_datos
     from app.main import app
     from app.routers import auth as auth_module
-    from app.routers import historial, bloqueadas, denuncias, estadisticas
+    from app.routers import historial, bloqueadas, denuncias
     from app.routers.auth import verificar_token
 
     # Seed: usuario de prueba con token 'test-token'
@@ -672,7 +698,7 @@ def client(monkeypatch, fake_pool, store) -> TestClient:
     # Patch ALL references: ``from app.base_datos import obtener_pool`` en cada
     # modulo crea su propio binding. Hay que patchear cada uno.
     monkeypatch.setattr(base_datos, "obtener_pool", _fake_obtener_pool)
-    for mod in (auth_module, historial, bloqueadas, denuncias, estadisticas):
+    for mod in (auth_module, historial, bloqueadas, denuncias):
         if hasattr(mod, "obtener_pool"):
             monkeypatch.setattr(mod, "obtener_pool", _fake_obtener_pool)
 

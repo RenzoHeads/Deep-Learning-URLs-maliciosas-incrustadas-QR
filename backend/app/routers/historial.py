@@ -7,6 +7,8 @@ Endpoints:
   GET    /escaneos/{id}        — Obtiene un escaneo por ID
   DELETE /escaneos/{id}        — Elimina un escaneo del historial
 """
+import uuid
+
 from datetime import datetime
 from typing import Annotated, Literal
 
@@ -109,13 +111,28 @@ async def crear_escaneo(
                     id_usuario,
                     datos.id_cliente,
                 )
-            # UPSERT del cache maestro urls_catalogo (atomicidad cache+log).
-            await upsert_url_catalogo(
-                conexion,
-                url_limpia=datos.url_limpia,
-                nivel_alerta=datos.nivel_alerta,
-                probabilidad=datos.probabilidad,
-            )
+                if fila is None:
+                    # Tombstone race (fix C3): la fila con este id_cliente
+                    # existe pero fue soft-deleted (o el cliente reenvía un
+                    # id_cliente de una fila ya eliminada) — el INSERT hizo
+                    # DO NOTHING y el re-SELECT no encuentra fila viva.
+                    # 409 en vez de crash (fila_a_escaneo(None) → 500).
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Este escaneo ya fue eliminado — operación en conflicto",
+                    )
+            else:
+                # Bug C3 fix: el UPSERT del cache maestro urls_catalogo
+                # (atomicidad cache+log) SOLO en Path 2 (INSERT exitoso). En
+                # Path 3 (race, fila is None) la tx ganadora ya ejecutó este
+                # UPSERT — re-ejecutarlo aquí doblaría `veces_escaneada` para
+                # un solo escaneo.
+                await upsert_url_catalogo(
+                    conexion,
+                    url_limpia=datos.url_limpia,
+                    nivel_alerta=datos.nivel_alerta,
+                    probabilidad=datos.probabilidad,
+                )
     return fila_a_escaneo(fila)
 
 
@@ -308,7 +325,7 @@ async def existe_url(
     responses={404: {"description": "Escaneo no encontrado"}},
 )
 async def obtener_escaneo(
-    escaneo_id: str,
+    escaneo_id: uuid.UUID,
     id_usuario: Annotated[str, Depends(verificar_token)],
 ):
     """Obtiene un escaneo especifico por ID."""
@@ -337,7 +354,7 @@ async def obtener_escaneo(
     responses={404: {"description": "Escaneo no encontrado o ya eliminado"}},
 )
 async def eliminar_escaneo(
-    escaneo_id: str,
+    escaneo_id: uuid.UUID,
     id_usuario: Annotated[str, Depends(verificar_token)],
 ):
     """Elimina un escaneo del historial."""

@@ -91,6 +91,31 @@ def test_escaneo_legacy_sin_id_cliente_conserva_append_only(client, store):
     assert len(store["historial_escaneos"]) == 2
 
 
+def test_escaneo_tombstone_race_id_cliente_reusado_devuelve_409(client, store):
+    # Bug C3 fix (tombstone race): el cliente reenvía un id_cliente de una
+    # fila ya soft-deleted → el INSERT hace DO NOTHING, el re-SELECT no
+    # encuentra fila viva → 409 (antes: fila_a_escaneo(None) → crash 500).
+    r1 = client.post(
+        "/escaneos?token_api=test-token", json=_escaneo_payload("clt-esc-tomb")
+    )
+    assert r1.status_code == 201
+    for row in store["historial_escaneos"]:
+        if row.get("id_cliente") == "clt-esc-tomb":
+            row["deleted_at"] = "2026-07-25T00:00:00Z"
+    r2 = client.post(
+        "/escaneos?token_api=test-token", json=_escaneo_payload("clt-esc-tomb")
+    )
+    assert r2.status_code == 409, (
+        f"id_cliente de fila eliminada debe dar 409, got {r2.status_code}: {r2.text}"
+    )
+    vivos = [
+        row
+        for row in store["historial_escaneos"]
+        if row.get("deleted_at") is None
+    ]
+    assert len(vivos) == 0, "no debe crearse una fila nueva/duplicada"
+
+
 # ============================================================================
 # URLs bloqueadas
 # ============================================================================

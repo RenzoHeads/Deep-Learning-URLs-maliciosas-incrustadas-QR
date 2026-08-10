@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
 
 # Bug B14 fix: ``asyncpg`` solo se usa aqui para anotaciones de tipo
 # (``asyncpg.Record``). Importarlo eagerly en cada arranque de worker sumaba
@@ -26,7 +26,7 @@ class RegistroUsuarioEntrada(BaseModel):
     """Datos para registrar un nuevo usuario con usuario y password."""
     nombre_usuario: str = Field(..., min_length=3, max_length=50, pattern=r"^[A-Za-z0-9_]+$")
     password: str = Field(..., min_length=6, max_length=128)
-    correo: str | None = Field(None, max_length=255)
+    correo: EmailStr | None = None
 
 
 class LoginEntrada(BaseModel):
@@ -54,8 +54,8 @@ class RespuestaAuth(BaseModel):
 # ============================================================================
 class CrearEscaneoEntrada(BaseModel):
     """Datos para registrar un nuevo escaneo (sin modelo ML aun)."""
-    url_original: str = Field(..., min_length=1)
-    url_limpia: str = Field(..., min_length=1)
+    url_original: str = Field(..., min_length=1, max_length=2048)
+    url_limpia: str = Field(..., min_length=1, max_length=2048)
     probabilidad: float = Field(0.0, ge=0.0, le=1.0)
     nivel_alerta: str = Field("SEGURO", pattern="^(SEGURO|SOSPECHOSO|MALICIOSO)$")
     delegado: str | None = Field(None, max_length=50)
@@ -126,7 +126,7 @@ class UrlCatalogoRespuesta(BaseModel):
 # ============================================================================
 class BloquearUrlEntrada(BaseModel):
     """Datos para bloquear una URL."""
-    url: str = Field(..., min_length=1)
+    url: str = Field(..., min_length=1, max_length=2048)
     razon: str | None = Field(None, max_length=255)
     # Bug A5 fix (idempotencia server-side) — ver CrearEscaneoEntrada.
     id_cliente: str | None = Field(None, max_length=64)
@@ -147,9 +147,9 @@ class UrlBloqueadaRespuesta(BaseModel):
 # ============================================================================
 class CrearDenunciaEntrada(BaseModel):
     """Datos para crear una denuncia de URL maliciosa."""
-    url: str = Field(..., min_length=1)
+    url: str = Field(..., min_length=1, max_length=2048)
     id_categoria: int = Field(..., ge=1)
-    descripcion: str | None = Field(None)
+    descripcion: str | None = Field(None, max_length=2000)
     # Bug A5 fix (idempotencia server-side) — ver CrearEscaneoEntrada.
     id_cliente: str | None = Field(None, max_length=64)
 

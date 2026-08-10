@@ -414,7 +414,11 @@ class Pipeline @Inject constructor(
         val comparador = compareByDescending<ResultadoAnalisis.ResultadoUrl> { it.nivelAlerta.ordinal }
             .thenByDescending { it.probabilidad }
 
-        val peorResultado = resultadosUrls.maxWithOrNull(comparador)!!
+        // Bug M11 fix: maxWithOrNull retorna null si la lista esta vacia.
+        // El guard de arriba (resultadosUrls.isEmpty()) ya lo cubre, pero un
+        // `?: return null` hace el invariante explicito e inmune a movidas
+        // futuras del guard — sin NPE.
+        val peorResultado = resultadosUrls.maxWithOrNull(comparador) ?: return null
 
         val adicionales = resultadosUrls
             .sortedWith(comparador)

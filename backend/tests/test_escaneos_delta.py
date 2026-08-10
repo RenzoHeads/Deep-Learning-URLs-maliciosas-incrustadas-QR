@@ -160,11 +160,10 @@ def test_delete_escaneo_es_soft_delete(client, store):
     )
 
 
-@pytest.mark.xfail(
-    reason="awaiting soft-delete migration: count debe excluir soft-deleted",
-    strict=True,
-)
 def test_get_escaneos_count_excluye_soft_deleted(client, store):
+    """Bug C2 fix: el count real venia de `_select` que ya filtra
+    `deleted_at IS NULL`; el fake de `fetchval` devolvia `len(rows)` (=1
+    siempre) enmascarando el xfail. Con el fix devuelve el valor real."""
     creado = _crear_escaneo(client)
     for row in store["historial_escaneos"]:
         if str(row["id"]) == str(creado["id"]):
@@ -172,6 +171,17 @@ def test_get_escaneos_count_excluye_soft_deleted(client, store):
     r = client.get("/escaneos/count?filtro=todos&token_api=test-token")
     total = r.json()["total"]
     assert total == 0, "count debe ignorar rows con deleted_at set"
+
+
+def test_get_escaneos_count_positivo_total_real(client):
+    """Bug C2 fix: 2 escaneos (sin soft-delete) → total == 2, no 1."""
+    _crear_escaneo(client)
+    _crear_escaneo(client)
+    r = client.get("/escaneos/count?filtro=todos&token_api=test-token")
+    assert r.status_code == 200, r.text
+    assert r.json()["total"] == 2, (
+        f"count debe reflejar el total real (2). Recibido: {r.json()}"
+    )
 
 
 # ============================================================================
