@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'backend/**'
+      - '.github/workflows/deploy-backend.yml'
   workflow_dispatch:
 
 jobs:
@@ -22,6 +23,38 @@ jobs:
 
       - name: Install Vercel CLI
         run: npm install -g vercel@latest
+
+      - name: Sync DATABASE_URL env var to Vercel (production)
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_PROJECT_ID: prj_cfwX1wu6WtGLQ7lFDikST33Blfjh
+          VERCEL_DATABASE_URL: ${{ secrets.VERCEL_DATABASE_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${VERCEL_DATABASE_URL:-}" ]; then
+            echo "::error::GitHub Secret VERCEL_DATABASE_URL is not set. Create it in repo Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+          echo "Listing existing DATABASE_URL env vars in Vercel project..."
+          EXISTING_IDS=$(curl -fsSL -H "Authorization: Bearer ${VERCEL_TOKEN}" \
+            "https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}/env" \
+            | jq -r '.envs[]? | select(.key=="DATABASE_URL") | .id' || true)
+          if [ -n "${EXISTING_IDS}" ]; then
+            for id in ${EXISTING_IDS}; do
+              echo "Deleting existing DATABASE_URL env var (id=${id})"
+              curl -fsSL -X DELETE -H "Authorization: Bearer ${VERCEL_TOKEN}" \
+                "https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}/env/${id}" >/dev/null || true
+            done
+          fi
+          echo "Creating DATABASE_URL env var scoped to production (encrypted)..."
+          jq -n --arg val "${VERCEL_DATABASE_URL}" \
+            '{key:"DATABASE_URL", value:$val, target:["production"], type:"encrypted"}' \
+            | curl -fsSL -X POST \
+              -H "Authorization: Bearer ${VERCEL_TOKEN}" \
+              -H "Content-Type: application/json" \
+              --data @- \
+              "https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}/env" >/dev/null
+          echo "DATABASE_URL env var synced."
 
       - name: Deploy to Vercel (production)
         working-directory: backend
