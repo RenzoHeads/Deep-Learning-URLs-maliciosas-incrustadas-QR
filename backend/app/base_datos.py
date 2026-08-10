@@ -82,14 +82,6 @@ async def obtener_pool() -> asyncpg.Pool:
                 min_size=0,
                 max_size=5,
                 command_timeout=30,
-                # Health-check: cada 30s asyncpg hace un ``SELECT 1`` en las
-                # conexiones idle del pool. Neon cierra conexiones inactivas
-                # tras ~30s (serverless compute suspend); sin health-check,
-                # la primera peticion que reutiliza una conexion stale recibe
-                # ``ConnectionDoesNotExistError``. Con 30s nos mantenemos por
-                # debajo del idle timeout de Neon y reciclamos conexiones
-                # antes de que el server las cierre.
-                health_check_interval=30,
             )
         except Exception as e:
             logger.exception("No se pudo crear el pool de conexiones a Neon: %s", type(e).__name__)
