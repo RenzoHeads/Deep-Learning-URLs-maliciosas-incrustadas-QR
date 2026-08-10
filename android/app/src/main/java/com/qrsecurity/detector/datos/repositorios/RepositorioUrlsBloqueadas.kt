@@ -382,6 +382,15 @@ class RepositorioUrlsBloqueadas(
                     db.pendingOpDao().borrarPorId(op.id)
                 }
                 true
+            } else if (e.codigo == 400) {
+                // m10 fix (audit, espejo de RepositorioDenuncias m8 y
+                // RepositorioEscaneos m10): 400 = peticion invalida
+                // permanente (p.ej. URL > 2048 chars tras M6/M7).
+                // Reintentar jamas tendra exito — marcar fallida permanente
+                // para sacarlo de la cola (evita el retry loop infinito
+                // hasta MAX_INTENTOS_OP).
+                db.pendingOpDao().marcarFallida(op.id)
+                true
             } else {
                 // 401/403/404/429/5xx/IOException no-HTTP: transitorio.
                 false

@@ -27,7 +27,7 @@ import javax.inject.Singleton
  * reciben la misma instancia Hilt directamente — sin companion bridge.
  */
 @Singleton
-class SesionUsuario @Inject constructor(
+open class SesionUsuario @Inject constructor(
     private val context: Context
 ) {
 
@@ -53,11 +53,11 @@ class SesionUsuario @Inject constructor(
     // Sesion activa — token + correo + flag logueado
     // ──────────────────────────────────────────────────────────────
 
-    fun estaLogueado(): Boolean =
+    open fun estaLogueado(): Boolean =
         prefs().getBoolean(KEY_LOGUEADO, false) &&
             !prefs().getString(KEY_TOKEN, null).isNullOrBlank()
 
-    fun obtenerToken(): String? =
+    open fun obtenerToken(): String? =
         prefs().getString(KEY_TOKEN, null)
 
     /**
@@ -78,7 +78,7 @@ class SesionUsuario @Inject constructor(
     fun obtenerCorreo(): String? =
         prefs().getString(KEY_CORREO, null)
 
-    fun guardarSesion(token: String, usuario: String, correo: String = "") {
+    open fun guardarSesion(token: String, usuario: String, correo: String = "") {
         prefs().edit()
             .putString(KEY_TOKEN, token)
             .putString(KEY_USUARIO, usuario)
@@ -87,7 +87,7 @@ class SesionUsuario @Inject constructor(
             .apply()
     }
 
-    fun cerrarSesion() {
+    open fun cerrarSesion() {
         prefs().edit()
             .remove(KEY_TOKEN)
             .remove(KEY_USUARIO)
