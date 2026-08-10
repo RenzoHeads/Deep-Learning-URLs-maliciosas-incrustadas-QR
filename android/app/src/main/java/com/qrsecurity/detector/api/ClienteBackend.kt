@@ -31,6 +31,7 @@ import java.util.concurrent.TimeUnit
  *  - `DELETE /urls-bloqueadas/{id}`   → [desbloquearUrl]
  *  - `GET  /denuncias/categorias`     → [listarCategoriasDenuncia]
  *  - `POST /denuncias`                → [crearDenuncia]
+ *  - `DELETE /denuncias/{id}`         → [eliminarDenuncia]
  *
  * Bug A15 fix: el token_via se manda en el header estandar REST
  * `Authorization: Bearer <token>` en vez del query param `?token_api=...`.
@@ -172,7 +173,8 @@ class ClienteBackend(
     @Serializable
     data class CategoriaDenuncia(
         val id: Int,
-        val nombre: String
+        val nombre: String,
+        val descripcion: String? = null
     )
 
     @Serializable
@@ -432,6 +434,17 @@ class ClienteBackend(
     /** Bug A15 fix: auth via header. */
     suspend fun desbloquearUrl(token: String, idUrl: String): Unit = withContext(Dispatchers.IO) {
         delete("$base/urls-bloqueadas/$idUrl", token)
+        Unit
+    }
+
+    /**
+     * M10 fix (audit contrato): elimina una denuncia en el backend
+     * (`DELETE /denuncias/{id}`, soft-delete → 204). El endpoint YA existe
+     * en el server (antes el repo comentaba "no hay endpoint DELETE en v1").
+     * Respuestas: 204 éxito, 404 si no existe o ya eliminada.
+     */
+    suspend fun eliminarDenuncia(token: String, denunciaId: String): Unit = withContext(Dispatchers.IO) {
+        delete("$base/denuncias/$denunciaId", token)
         Unit
     }
 

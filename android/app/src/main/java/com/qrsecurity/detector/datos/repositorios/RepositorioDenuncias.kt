@@ -209,13 +209,60 @@ class RepositorioDenuncias(
     }
 
     /**
-     * PUSH: procesa un pending op CREATE contra el backend.
-     * Las denuncias no se eliminan en v1 (no hay endpoint DELETE).
+     * M10 fix (audit contrato): elimina una denuncia localmente. Simetrico
+     * con [RepositorioEscaneos.eliminarLocal] y
+     * [RepositorioUrlsBloqueadas.desbloquearLocal].
+     *
+     * - Fila dirty (CREATE pendiente, nunca llego al backend): borra el op
+     *   CREATE y la fila local, sin encolar DELETE.
+     * - Fila synced: elimina la fila local y encola un op DELETE para que
+     *   el SyncWorker llame `DELETE /denuncias/{id}` en el backend.
+     * - Fila inexistente: no-op (Bug M3 fix: no encolar DELETE huerfano que
+     *   el backend rechazaria con 404 tratado como exito).
+     */
+    suspend fun eliminarLocal(id: String) = withContext(ioDispatcher) {
+        db.withTransaction {
+            val fila = db.denunciaDao().obtenerPorId(id)
+            if (fila == null) {
+                return@withTransaction
+            }
+            if (fila.dirty) {
+                val opCreate = db.pendingOpDao().findExisting(
+                    tabla = "denuncias",
+                    idLocal = id,
+                    tipoOperacion = "CREATE"
+                )
+                if (opCreate != null) {
+                    db.pendingOpDao().borrarPorId(opCreate.id)
+                }
+                db.denunciaDao().eliminarPorId(id)
+            } else {
+                val op = PendingOpEntity(
+                    tabla = "denuncias",
+                    tipoOperacion = "DELETE",
+                    idLocal = id,
+                    payloadJson = null,
+                    creadoEnMillis = System.currentTimeMillis()
+                )
+                db.denunciaDao().eliminarPorId(id)
+                db.pendingOpDao().insertar(op)
+            }
+        }
+    }
+
+    /**
+     * PUSH: procesa un pending op CREATE/DELETE contra el backend.
+     * Llamado por SyncWorker al vaciar la cola.
+     *
+     * @param op el pending op a procesar.
+     * @param token token_api del usuario.
+     * @return true si el op fue procesado con exito (eliminar de cola), false si debe retry.
      */
     suspend fun procesarPendingOp(op: PendingOpEntity, token: String): Boolean =
         withContext(ioDispatcher) {
             when (op.tipoOperacion) {
                 "CREATE" -> procesarCreate(op, token)
+                "DELETE" -> procesarDelete(op, token)
                 else -> false
             }
         }
@@ -296,8 +343,61 @@ class RepositorioDenuncias(
                     db.pendingOpDao().borrarPorId(op.id)
                 }
                 true
+            } else if (e.codigo == 400) {
+                // m8 fix (audit): 400 = peticion invalida permanente (p.ej.
+                // id_categoria inexistente o URL > 2048 chars tras M6/M7).
+                // Reintentar jamas tendra exito — marcar fallida permanente
+                // para sacarlo de la cola (evita retry loop infinito).
+                db.pendingOpDao().marcarFallida(op.id)
+                true
             } else {
                 // 401/403/404/429/5xx: transitorio — SyncWorker reintentara.
+                false
+            }
+        } catch (e: Exception) {
+            // C-04 — intentos ya incrementado por claim atomico en SyncWorker.
+            false
+        }
+    }
+
+    /**
+     * M10 fix: procesa un pending op DELETE contra el backend
+     * (`DELETE /denuncias/{id}`, soft-delete → 204).
+     *
+     * Simetrico con [RepositorioUrlsBloqueadas.procesarDelete]: tras
+     * confirmar el DELETE en el backend se elimina tambien el row local —
+     * sin esto, el PULL previo (corre antes que el PUSH en SyncWorker)
+     * reinserta la fila via `insertarTodos(REPLACE)` y, al borrar el
+     * pending_op, el filtro `NOT IN (pending_ops DELETE)` de
+     * `observarTodas()` deja de ocultarla → la denuncia "reaparece" en la UI.
+     */
+    private suspend fun procesarDelete(op: PendingOpEntity, token: String): Boolean {
+        return try {
+            backend.eliminarDenuncia(token, op.idLocal)
+            db.withTransaction {
+                db.pendingOpDao().borrarPorId(op.id)
+                // Bug delete-reaparece: eliminar tambien el row local tras
+                // confirmar el DELETE en el backend (ver KDoc del metodo).
+                db.denunciaDao().eliminarPorId(op.idLocal)
+            }
+            true
+        } catch (e: ClienteBackend.HttpBackendException) {
+            // Bug D2-P2 (fix Lote H, simetrico a UrlsBloqueadas): idempotencia
+            // en DELETE. Si el servidor reporta 404 (la denuncia ya fue
+            // eliminada por un DELETE previo exitoso cuyo ack se perdio, o por
+            // otro cliente), el efecto deseado ya esta alcanzado — borrar op y
+            // fila local y tratar como exito.
+            if (e.codigo == 404) {
+                db.withTransaction {
+                    db.pendingOpDao().borrarPorId(op.id)
+                    // Defensive: el row local deberia estar ya eliminado (se
+                    // elimina al encolar el DELETE en `eliminarLocal`), pero
+                    // por si la transaccion original fallo a medias.
+                    db.denunciaDao().eliminarPorId(op.idLocal)
+                }
+                true
+            } else {
+                // 401/403/409/429/5xx/IOException no-HTTP: transitorio.
                 false
             }
         } catch (e: Exception) {
