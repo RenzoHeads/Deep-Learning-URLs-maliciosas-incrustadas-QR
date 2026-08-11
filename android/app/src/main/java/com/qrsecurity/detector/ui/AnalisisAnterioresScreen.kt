@@ -2,16 +2,19 @@ package com.qrsecurity.detector.ui
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
@@ -20,12 +23,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.QrCode2
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -46,6 +49,7 @@ import com.qrsecurity.detector.ui.theme.CyberCyan
 import com.qrsecurity.detector.ui.theme.CyberFondo
 import com.qrsecurity.detector.ui.theme.CyberGlass
 import com.qrsecurity.detector.ui.theme.CyberGlassAlto
+import com.qrsecurity.detector.ui.theme.CyberGlassBorde
 import com.qrsecurity.detector.ui.theme.CyberRojo
 import com.qrsecurity.detector.ui.theme.CyberTextoPrincipal
 import com.qrsecurity.detector.ui.theme.CyberTextoSecundario
@@ -69,6 +73,10 @@ import java.util.concurrent.TimeUnit
  *
  * Muestra la lista de versiones anteriores de una URL (reescaneos) con
  * notas de analisis. Wire a [AnalisisAnterioresViewModel].
+ *
+ * Rediseño F3: timeline visual con rail vertical + dots de color por
+ * veredicto, versiones con badge V1/V2, % probabilidad, y empty state
+ * rico con ilustración vectorial.
  *
  * BUG #2 fix (audit): migrado de `Column { verticalScroll { forEachIndexed {} } }`
  * a `LazyColumn { itemsIndexed(...) }` con `key = { it.id }`. La version
@@ -115,23 +123,27 @@ fun PantallaAnalisisAnteriores(
         ),
         verticalArrangement = Arrangement.spacedBy(Espaciado.lg)
     ) {
-        // ─── Back Row ───
+        // ─── Glass Pill Back Button ───
         item(key = "back_row") {
             Row(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(CyberGlass)
+                    .clickable(onClick = onVolver)
+                    .padding(horizontal = Espaciado.md, vertical = Espaciado.sm),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Espaciado.xs)
+                horizontalArrangement = Arrangement.spacedBy(Espaciado.sm)
             ) {
-                IconButton(onClick = onVolver) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Volver",
-                        tint = CyberTextoPrincipal
-                    )
-                }
+                Icon(
+                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = "Volver",
+                    tint = CyberTextoSecundario,
+                    modifier = Modifier.size(TamanosIcono.estandar)
+                )
                 Text(
                     text = "Volver",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = CyberTextoPrincipal
+                    color = CyberTextoSecundario
                 )
             }
         }
@@ -185,43 +197,43 @@ fun PantallaAnalisisAnteriores(
 
         // ─── URL Summary Card ───
         item(key = "url_summary") {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(RadioBorde.xxl),
-                colors = CardDefaults.cardColors(containerColor = CyberGlass),
-                elevation = CardDefaults.cardElevation(defaultElevation = Elevacion.ninguna)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(RadioBorde.xxl))
+                    .background(CyberGlass)
+                    .border(
+                        width = 1.dp,
+                        color = CyberGlassBorde,
+                        shape = RoundedCornerShape(RadioBorde.xxl)
+                    )
+                    .padding(Espaciado.lg),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Espaciado.md)
             ) {
-                Row(
+                Box(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(Espaciado.lg),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(Espaciado.md)
+                        .size(TamanosIcono.mediano)
+                        .clip(CircleShape)
+                        .background(CyberGlassAlto),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(TamanosIcono.mediano)
-                            .clip(CircleShape)
-                            .background(CyberGlassAlto),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.QrCode2,
-                            contentDescription = null,
-                            tint = CyberCyan,
-                            modifier = Modifier.size(TamanosIcono.estandar)
-                        )
-                    }
-                    Text(
-                        text = urlLimpia,
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Medium,
-                        color = CyberTextoPrincipal,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f)
+                    Icon(
+                        imageVector = Icons.Filled.QrCode2,
+                        contentDescription = null,
+                        tint = CyberCyan,
+                        modifier = Modifier.size(TamanosIcono.estandar)
                     )
                 }
+                Text(
+                    text = urlLimpia,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = CyberTextoPrincipal,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
             }
         }
 
@@ -265,18 +277,34 @@ fun PantallaAnalisisAnteriores(
                             .fillMaxWidth()
                             .padding(vertical = Espaciado.gigante),
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(Espaciado.md)
+                        verticalArrangement = Arrangement.spacedBy(Espaciado.lg)
                     ) {
-                        Icon(
-                            imageVector = Icons.Filled.History,
-                            contentDescription = null,
-                            tint = CyberTextoSecundario,
-                            modifier = Modifier.size(TamanosIcono.mediano)
-                        )
+                        // Ilustración: círculo glass con History icon
+                        Box(
+                            modifier = Modifier
+                                .size(TamanosIcono.heroContenedor)
+                                .clip(CircleShape)
+                                .background(CyberGlass),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Filled.History,
+                                contentDescription = null,
+                                tint = CyberTextoSecundario,
+                                modifier = Modifier.size(TamanosIcono.grande)
+                            )
+                        }
                         Text(
                             text = "No hay análisis anteriores",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = CyberTextoPrincipal
+                        )
+                        Text(
+                            text = "Esta URL solo tiene una versión.\nEscanea de nuevo para crear un historial.",
                             style = MaterialTheme.typography.bodyMedium,
-                            color = CyberTextoSecundario
+                            color = CyberTextoSecundario,
+                            textAlign = androidx.compose.ui.text.style.TextAlign.Center
                         )
                     }
                 }
@@ -290,9 +318,11 @@ fun PantallaAnalisisAnteriores(
                     key = { _, escaneo -> escaneo.id }
                 ) { index, escaneo ->
                     val version = total - index
+                    val esUltimo = index == listaOrdenada.lastIndex
                     EntradaLineaTiempo(
                         escaneo = escaneo,
                         version = version,
+                        esUltimo = esUltimo,
                         onClick = { onVerDetalle(escaneo.id) }
                     )
                 }
@@ -312,12 +342,22 @@ fun PantallaAnalisisAnteriores(
                         .fillMaxWidth()
                         .height(TamanosToque.boton),
                     shape = RoundedCornerShape(RadioBorde.lg),
-                    border = BorderStroke(Elevacion.sutil, CyberCyan)
+                    border = BorderStroke(Elevacion.sutil, CyberCyan),
+                    colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
+                        containerColor = CyberGlass,
+                        contentColor = CyberCyan
+                    )
                 ) {
+                    Icon(
+                        imageVector = Icons.Filled.Refresh,
+                        contentDescription = null,
+                        modifier = Modifier.size(TamanosIcono.estandar)
+                    )
+                    Spacer(modifier = Modifier.size(Espaciado.sm))
                     Text(
                         text = "Reanalizar ahora",
                         style = MaterialTheme.typography.labelLarge,
-                        color = CyberCyan
+                        fontWeight = FontWeight.Bold
                     )
                 }
                 Text(
@@ -332,10 +372,16 @@ fun PantallaAnalisisAnteriores(
 
 // ── Composables y helpers privados ──
 
+/**
+ * Entrada del timeline — dot de color + rail vertical + glass card
+ * con version badge (V1, V2...), % probabilidad, veredicto chip y
+ * nota de análisis.
+ */
 @Composable
 private fun EntradaLineaTiempo(
     escaneo: EscaneoEntity,
     version: Int,
+    esUltimo: Boolean,
     onClick: () -> Unit = {}
 ) {
     val color = when (escaneo.nivelAlerta) {
@@ -348,36 +394,39 @@ private fun EntradaLineaTiempo(
         "SOSPECHOSO" -> "Sospechosa"
         else -> "Bloqueada"
     }
+    val valorPct = Math.round(escaneo.probabilidad * 100f)
 
-    Column(verticalArrangement = Arrangement.spacedBy(Espaciado.sm)) {
-        // Entry Header: verdict dot + date chip
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Espaciado.md)
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(Espaciado.md)
+    ) {
+        // ─── Timeline Rail (dot + connector) ───
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(Espaciado.xs)
         ) {
+            // Dot de color con glow sutil
             Box(
                 modifier = Modifier
-                    .size(12.dp)
+                    .size(16.dp)
                     .clip(CircleShape)
                     .background(color)
             )
-            Box(
-                modifier = Modifier
-                    .background(CyberGlassAlto, RoundedCornerShape(RadioBorde.lg))
-                    .padding(horizontal = Espaciado.md, vertical = Espaciado.xs)
-            ) {
-                Text(
-                    text = fechaRelativa(escaneo.creadoEnMillis),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = CyberTextoSecundario
+            // Connector vertical (no en el último item)
+            if (!esUltimo) {
+                Box(
+                    modifier = Modifier
+                        .width(2.dp)
+                        .height(48.dp)
+                        .background(CyberGlassBorde)
                 )
             }
         }
 
-        // Analysis Card
+        // ─── Analysis Card ───
         Card(
             modifier = Modifier
-                .fillMaxWidth()
+                .weight(1f)
                 .clickable(onClick = onClick),
             shape = RoundedCornerShape(RadioBorde.xl),
             colors = CardDefaults.cardColors(containerColor = CyberGlass),
@@ -386,20 +435,30 @@ private fun EntradaLineaTiempo(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(Espaciado.md),
+                    .padding(Espaciado.lg),
                 verticalArrangement = Arrangement.spacedBy(Espaciado.sm)
             ) {
+                // Row 1: Version badge + verdict chip
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "Versión $version",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        color = CyberTextoPrincipal
-                    )
+                    // Version badge: "V1", "V2", etc.
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(RadioBorde.sm))
+                            .background(CyberGlassAlto)
+                            .padding(horizontal = Espaciado.md, vertical = Espaciado.xs)
+                    ) {
+                        Text(
+                            text = "V$version",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = CyberTextoPrincipal
+                        )
+                    }
+                    // Verdict chip
                     Box(
                         modifier = Modifier
                             .background(color.copy(alpha = 0.18f), RoundedCornerShape(RadioBorde.sm))
@@ -408,35 +467,65 @@ private fun EntradaLineaTiempo(
                         Text(
                             text = etiqueta,
                             style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
                             color = color
                         )
                     }
                 }
-                // Meta Row
+
+                // Row 2: % probabilidad + timestamp
                 Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(Espaciado.xs)
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Icon(
-                        imageVector = Icons.Filled.Schedule,
-                        contentDescription = null,
-                        tint = CyberTextoSecundario,
-                        modifier = Modifier.size(14.dp)
-                    )
                     Text(
-                        text = "Análisis refrescado a las ${formatoHora(escaneo.creadoEnMillis)}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = CyberTextoSecundario
+                        text = "$valorPct% probabilidad",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = CyberTextoPrincipal
                     )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Espaciado.xs)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Schedule,
+                            contentDescription = null,
+                            tint = CyberTextoSecundario,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Text(
+                            text = fechaRelativa(escaneo.creadoEnMillis),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = CyberTextoSecundario
+                        )
+                    }
                 }
-                // Note (notasAnalisis si no es null ni vacio)
+
+                // Row 3:Hora exacta del análisis
+                Text(
+                    text = "Análisis refrescado a las ${formatoHora(escaneo.creadoEnMillis)}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = CyberTextoSecundario
+                )
+
+                // Row 4: Note (notasAnalisis si no es null ni vacio)
                 val nota = escaneo.notasAnalisis
                 if (!nota.isNullOrEmpty()) {
-                    Text(
-                        text = nota,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = CyberTextoSecundario
-                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(RadioBorde.sm))
+                            .background(CyberGlassAlto)
+                            .padding(Espaciado.md)
+                    ) {
+                        Text(
+                            text = nota,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = CyberTextoSecundario
+                        )
+                    }
                 }
             }
         }

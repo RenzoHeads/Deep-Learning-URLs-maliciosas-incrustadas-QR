@@ -16,12 +16,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.QrCode
@@ -57,6 +59,7 @@ import com.qrsecurity.detector.ui.theme.CyberAmbar
 import com.qrsecurity.detector.ui.theme.CyberCyan
 import com.qrsecurity.detector.ui.theme.CyberFondo
 import com.qrsecurity.detector.ui.theme.CyberGlass
+import com.qrsecurity.detector.ui.theme.CyberGlassAlto
 import com.qrsecurity.detector.ui.theme.CyberGlassBorde
 import com.qrsecurity.detector.ui.theme.CyberRojo
 import com.qrsecurity.detector.ui.theme.CyberTextoPrincipal
@@ -80,6 +83,10 @@ import com.qrsecurity.detector.ui.theme.TamanosToque
  * NOTA: El desbloqueo de URL es manual y permanente (no existe desbloqueo
  * temporal). Tras confirmar el desbloqueo se muestra
  * [ModalDesbloqueoOk].
+ *
+ * Rediseño F3: UI premium dark-glassmorphism con URL card prominente,
+ * gauge 140dp centrado con border glow, botones seccionados en grid 2-col,
+ * y "Ver versiones" como glass card.
  *
  * @param id Id del escaneo (nav argument).
  * @param onVerAnalisisAnteriores Callback con (urlLimpia, idActual) para
@@ -257,12 +264,13 @@ private fun ContenidoDetalle(
             .padding(horizontal = Espaciado.lg, vertical = Espaciado.lg),
         verticalArrangement = Arrangement.spacedBy(Espaciado.lg)
     ) {
-        // ─── Back Row ───
+        // ─── Glass Pill Back Button ───
         Row(
             modifier = Modifier
-                .fillMaxWidth()
+                .clip(RoundedCornerShape(50))
+                .background(CyberGlass)
                 .clickable(onClick = onBack)
-                .padding(vertical = Espaciado.xs),
+                .padding(horizontal = Espaciado.md, vertical = Espaciado.sm),
             horizontalArrangement = Arrangement.spacedBy(Espaciado.sm),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -287,28 +295,8 @@ private fun ContenidoDetalle(
             color = CyberTextoPrincipal
         )
 
-        // URL Row: QR icon + URL + chip
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(Espaciado.sm),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = Icons.Filled.QrCode,
-                contentDescription = null,
-                tint = CyberTextoSecundario,
-                modifier = Modifier.size(TamanosIcono.estandar)
-            )
-            Text(
-                text = escaneo.urlOriginal.ifBlank { escaneo.urlLimpia },
-                style = MaterialTheme.typography.bodyMedium,
-                color = CyberTextoPrincipal,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
-            )
-            ChipEstadoUrl(estado = estado)
-        }
+        // ─── URL Card ───
+        TarjetaUrl(estado = estado)
 
         // ─── Verdict Card ───
         TarjetaVeredicto(estado = estado)
@@ -325,32 +313,60 @@ private fun ContenidoDetalle(
             )
         }
 
-        // ─── Versions Link ───
+        // ─── Versions Card ───
         if (estado.totalReescaneos > 0) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable {
-                        onVerAnalisisAnteriores(escaneo.urlLimpia, escaneo.id)
-                    }
-                    .padding(vertical = Espaciado.sm),
-                horizontalArrangement = Arrangement.spacedBy(Espaciado.sm),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "Ver versiones de este análisis",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = CyberCyan,
-                    modifier = Modifier.weight(1f)
-                )
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                    contentDescription = null,
-                    tint = CyberCyan,
-                    modifier = Modifier.size(TamanosIcono.estandar)
-                )
-            }
+            TarjetaVersiones(
+                totalReescaneos = estado.totalReescaneos,
+                onClick = { onVerAnalisisAnteriores(escaneo.urlLimpia, escaneo.id) }
+            )
         }
+    }
+}
+
+/**
+ * Tarjeta URL — glass card con QR icon en círculo + URL + chip de estado.
+ */
+@Composable
+private fun TarjetaUrl(estado: DetalleUrlUiState.Cargado) {
+    val escaneo = estado.escaneo
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(RadioBorde.xxl))
+            .background(CyberGlass)
+            .border(
+                width = 1.dp,
+                color = CyberGlassBorde,
+                shape = RoundedCornerShape(RadioBorde.xxl)
+            )
+            .padding(Espaciado.lg),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Espaciado.md)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(TamanosIcono.mediano)
+                .clip(CircleShape)
+                .background(CyberGlassAlto),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Filled.QrCode,
+                contentDescription = null,
+                tint = CyberCyan,
+                modifier = Modifier.size(TamanosIcono.estandar)
+            )
+        }
+        Text(
+            text = escaneo.urlOriginal.ifBlank { escaneo.urlLimpia },
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+            color = CyberTextoPrincipal,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+        ChipEstadoUrl(estado = estado)
     }
 }
 
@@ -379,6 +395,10 @@ private fun ChipEstadoUrl(estado: DetalleUrlUiState.Cargado) {
     }
 }
 
+/**
+ * Tarjeta de veredicto — gauge 140dp centrado con border glow del color
+ * del veredicto. Label y subtitle pill debajo del gauge.
+ */
 @Composable
 private fun TarjetaVeredicto(estado: DetalleUrlUiState.Cargado) {
     val escaneo = estado.escaneo
@@ -393,56 +413,109 @@ private fun TarjetaVeredicto(estado: DetalleUrlUiState.Cargado) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(RadioBorde.xl))
+            .clip(RoundedCornerShape(RadioBorde.xxl))
+            .background(CyberGlass)
+            .border(
+                width = 1.dp,
+                color = colorVeredicto.copy(alpha = 0.25f),
+                shape = RoundedCornerShape(RadioBorde.xxl)
+            )
+            .padding(Espaciado.xxl),
+        verticalArrangement = Arrangement.spacedBy(Espaciado.lg),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        // Gauge — centrado, 140dp
+        MedidorGauge(
+            progreso = escaneo.probabilidad,
+            colorArco = colorVeredicto,
+            colorTrack = CyberGlassBorde,
+            valorTexto = valorPct.toString(),
+            colorTexto = CyberTextoPrincipal,
+            modifier = Modifier.size(140.dp)
+        )
+        // Verdict label
+        Text(
+            text = amenazaLabel,
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = CyberTextoPrincipal
+        )
+        // Subtitle pill
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(RadioBorde.sm))
+                .background(colorVeredicto.copy(alpha = 0.16f))
+                .padding(horizontal = Espaciado.md, vertical = Espaciado.xs)
+        ) {
+            Text(
+                text = amenazaSubtitulo,
+                style = MaterialTheme.typography.labelMedium,
+                color = colorVeredicto
+            )
+        }
+    }
+}
+
+/**
+ * Tarjeta "Ver versiones" — glass card con History icon, contador de
+ * versiones y arrow. Reemplaza el text link del diseño anterior.
+ */
+@Composable
+private fun TarjetaVersiones(
+    totalReescaneos: Int,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(RadioBorde.xxl))
             .background(CyberGlass)
             .border(
                 width = 1.dp,
                 color = CyberGlassBorde,
-                shape = RoundedCornerShape(RadioBorde.xl)
+                shape = RoundedCornerShape(RadioBorde.xxl)
             )
-            .padding(Espaciado.xl),
-        verticalArrangement = Arrangement.spacedBy(Espaciado.lg),
-        horizontalAlignment = Alignment.CenterHorizontally
+            .clickable(onClick = onClick)
+            .padding(Espaciado.lg),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Espaciado.md)
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(Espaciado.xl),
-            verticalAlignment = Alignment.CenterVertically
+        Box(
+            modifier = Modifier
+                .size(TamanosIcono.mediano)
+                .clip(CircleShape)
+                .background(CyberGlassAlto),
+            contentAlignment = Alignment.Center
         ) {
-            // Gauge
-            MedidorGauge(
-                progreso = escaneo.probabilidad,
-                colorArco = colorVeredicto,
-                colorTrack = CyberGlassBorde,
-                valorTexto = valorPct.toString(),
-                colorTexto = CyberTextoPrincipal,
-                modifier = Modifier.size(TamanosIcono.heroContenedor)
+            Icon(
+                imageVector = Icons.Filled.History,
+                contentDescription = null,
+                tint = CyberCyan,
+                modifier = Modifier.size(TamanosIcono.estandar)
             )
-            // Verdict Info
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(Espaciado.sm)
-            ) {
-                Text(
-                    text = amenazaLabel,
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                    color = CyberTextoPrincipal
-                )
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(RadioBorde.sm))
-                        .background(colorVeredicto.copy(alpha = 0.16f))
-                        .padding(horizontal = Espaciado.md, vertical = Espaciado.xs)
-                ) {
-                    Text(
-                        text = amenazaSubtitulo,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = colorVeredicto
-                    )
-                }
-            }
         }
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(Espaciado.xs)
+        ) {
+            Text(
+                text = "Ver versiones de este análisis",
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = CyberTextoPrincipal
+            )
+            Text(
+                text = "$totalReescaneos ${if (totalReescaneos == 1) "versión anterior" else "versiones anteriores"}",
+                style = MaterialTheme.typography.labelSmall,
+                color = CyberTextoSecundario
+            )
+        }
+        Icon(
+            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = CyberCyan,
+            modifier = Modifier.size(TamanosIcono.estandar)
+        )
     }
 }
 
@@ -485,96 +558,108 @@ private fun SeccionAcciones(
             )
         }
 
-        // ─── Secondary Button: Compartir ───
-        OutlinedButton(
-            onClick = { compartirUrl(contexto, urlParaAbrir(escaneo.urlOriginal, escaneo.urlLimpia) ?: escaneo.urlLimpia) },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(TamanosToque.boton),
-            shape = RoundedCornerShape(RadioBorde.lg),
-            colors = ButtonDefaults.outlinedButtonColors(
-                containerColor = CyberGlass,
-                contentColor = CyberTextoPrincipal
-            ),
-            border = androidx.compose.foundation.BorderStroke(1.dp, CyberGlassBorde)
+        // ─── Secondary Buttons: grid 2 columnas ───
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(Espaciado.md)
         ) {
-            Icon(
-                imageVector = Icons.Filled.Share,
-                contentDescription = null,
-                modifier = Modifier.size(TamanosIcono.estandar)
-            )
-            Spacer(modifier = Modifier.size(Espaciado.sm))
-            Text(
-                text = "Compartir",
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Bold
-            )
-        }
+            // Compartir — siempre visible (weight 1f; si hay Lock/Unlock
+            // companion, ambos comparten el row пополам)
+            OutlinedButton(
+                onClick = {
+                    compartirUrl(
+                        contexto,
+                        urlParaAbrir(escaneo.urlOriginal, escaneo.urlLimpia) ?: escaneo.urlLimpia
+                    )
+                },
+                modifier = Modifier
+                    .weight(1f)
+                    .height(TamanosToque.boton),
+                shape = RoundedCornerShape(RadioBorde.lg),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    containerColor = CyberGlass,
+                    contentColor = CyberTextoPrincipal
+                ),
+                border = androidx.compose.foundation.BorderStroke(1.dp, CyberGlassBorde)
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Share,
+                    contentDescription = null,
+                    modifier = Modifier.size(TamanosIcono.estandar)
+                )
+                Spacer(modifier = Modifier.size(Espaciado.sm))
+                Text(
+                    text = "Compartir",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold
+                )
+            }
 
-        // ─── Lock/Unlock Toggle ─── (solo en URLs MALICIOSAS)
-        //
-        // El auto-bloqueo sucede al escanear una URL MALICIOSO (ver
-        // [com.qrsecurity.detector.pipeline.Pipeline.registrarEscaneoLocal]).
-        // Este toggle permite al usuario revertir (desbloquear) o volver a
-        // bloquear manualmente si previamente lo desbloqueó. Solo aplica a
-        // URLs MALICIOSAS — las URLs SEGURO/SOSPECHOSO no se bloquean.
-        //
-        // Ambos estados usan el modal de confirmacion correspondiente
-        // ([ModalBloqueoConfirmar] / [ModalDesbloqueoConfirmar]) antes de
-        // mutar el estado — el usuario confirma explícitamente.
-        if (escaneo.nivelAlerta == "MALICIOSO") {
-            if (!estado.urlBloqueada) {
-                // Bloquear esta URL
-                OutlinedButton(
-                    onClick = onSolicitarBloqueo,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(TamanosToque.boton),
-                    shape = RoundedCornerShape(RadioBorde.lg),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        containerColor = CyberRojo.copy(alpha = 0.12f),
-                        contentColor = CyberRojo
-                    ),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, CyberRojo.copy(alpha = 0.4f))
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Lock,
-                        contentDescription = null,
-                        modifier = Modifier.size(TamanosIcono.estandar)
-                    )
-                    Spacer(modifier = Modifier.size(Espaciado.sm))
-                    Text(
-                        text = "Bloquear esta URL",
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            } else {
-                // Desbloquear esta URL (ya estaba bloqueada — el usuario
-                // confirmará via [ModalDesbloqueoConfirmar]).
-                OutlinedButton(
-                    onClick = onSolicitarDesbloqueo,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(TamanosToque.boton),
-                    shape = RoundedCornerShape(RadioBorde.lg),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        containerColor = CyberRojo.copy(alpha = 0.12f),
-                        contentColor = CyberRojo
-                    ),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, CyberRojo.copy(alpha = 0.4f))
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.LockOpen,
-                        contentDescription = null,
-                        modifier = Modifier.size(TamanosIcono.estandar)
-                    )
-                    Spacer(modifier = Modifier.size(Espaciado.sm))
-                    Text(
-                        text = "Desbloquear esta URL",
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.Bold
-                    )
+            // ─── Lock/Unlock Toggle ─── (solo URLs MALICIOSAS)
+            //
+            // El auto-bloqueo sucede al escanear una URL MALICIOSO (ver
+            // [com.qrsecurity.detector.pipeline.Pipeline.registrarEscaneoLocal]).
+            // Este toggle permite al usuario revertir (desbloquear) o volver a
+            // bloquear manualmente si previamente lo desbloqueó. Solo aplica a
+            // URLs MALICIOSAS — las URLs SEGURO/SOSPECHOSO no se bloquean.
+            //
+            // Ambos estados usan el modal de confirmacion correspondiente
+            // ([ModalBloqueoConfirmar] / [ModalDesbloqueoConfirmar]) antes de
+            // mutar el estado — el usuario confirma explícitamente.
+            if (escaneo.nivelAlerta == "MALICIOSO") {
+                if (!estado.urlBloqueada) {
+                    // Bloquear esta URL
+                    OutlinedButton(
+                        onClick = onSolicitarBloqueo,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(TamanosToque.boton),
+                        shape = RoundedCornerShape(RadioBorde.lg),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = CyberRojo.copy(alpha = 0.12f),
+                            contentColor = CyberRojo
+                        ),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, CyberRojo.copy(alpha = 0.4f))
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Lock,
+                            contentDescription = null,
+                            modifier = Modifier.size(TamanosIcono.estandar)
+                        )
+                        Spacer(modifier = Modifier.size(Espaciado.sm))
+                        Text(
+                            text = "Bloquear",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                } else {
+                    // Desbloquear esta URL (ya estaba bloqueada — el usuario
+                    // confirmará via [ModalDesbloqueoConfirmar]).
+                    OutlinedButton(
+                        onClick = onSolicitarDesbloqueo,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(TamanosToque.boton),
+                        shape = RoundedCornerShape(RadioBorde.lg),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = CyberRojo.copy(alpha = 0.12f),
+                            contentColor = CyberRojo
+                        ),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, CyberRojo.copy(alpha = 0.4f))
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.LockOpen,
+                            contentDescription = null,
+                            modifier = Modifier.size(TamanosIcono.estandar)
+                        )
+                        Spacer(modifier = Modifier.size(Espaciado.sm))
+                        Text(
+                            text = "Desbloquear",
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
             }
         }

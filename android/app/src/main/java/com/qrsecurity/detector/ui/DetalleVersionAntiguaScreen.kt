@@ -15,11 +15,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -46,15 +48,16 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import com.qrsecurity.detector.datos.local.entidades.EscaneoEntity
+import com.qrsecurity.detector.ui.theme.CyberAmbar
 import com.qrsecurity.detector.ui.theme.CyberCyan
 import com.qrsecurity.detector.ui.theme.CyberFondo
 import com.qrsecurity.detector.ui.theme.CyberGlass
+import com.qrsecurity.detector.ui.theme.CyberGlassAlto
 import com.qrsecurity.detector.ui.theme.CyberGlassBorde
 import com.qrsecurity.detector.ui.theme.CyberRojo
 import com.qrsecurity.detector.ui.theme.CyberTextoPrincipal
-import com.qrsecurity.detector.ui.theme.CyberTextoSecundario
 import com.qrsecurity.detector.ui.theme.CyberVerdeAlerta
-import com.qrsecurity.detector.ui.theme.CyberAmbar
+import com.qrsecurity.detector.ui.theme.CyberTextoSecundario
 import com.qrsecurity.detector.ui.theme.Espaciado
 import com.qrsecurity.detector.ui.theme.PencilOverlay
 import com.qrsecurity.detector.ui.theme.PencilModalFondo
@@ -88,6 +91,9 @@ import java.util.Locale
  *  - Boton unico: "Eliminar esta version" → elimina el escaneo
  *    individual por id (NO cascada por urlLimpia como hace
  *    [DetalleUrlAction.EliminarUrl]).
+ *
+ * Rediseño F3: glass pill back, URL card, date card con Calendar icon,
+ * verdict 140dp centrado con border glow, delete button destructivo.
  *
  * @param id UUID del escaneo (version historica) a visualizar.
  * @param onBack Callback para volver atras (popBackStack a
@@ -215,12 +221,12 @@ private fun ContenidoNoEncontradoVersionAntigua(onBack: () -> Unit) {
  * Contenido principal del detalle de version antigua.
  *
  * Layout (de arriba a abajo):
- *  1. Back Row (Volver)
+ *  1. Glass Pill Back (Volver)
  *  2. Title: "Detalle del análisis"
- *  3. URL Row (QR icon + URL truncada + Chip nivel alerta)
- *  4. Fecha del escaneo (diferenciador entre versiones)
- *  5. Tarjeta de veredicto (gauge + amenaza label), estilo Cyber
- *  6. Boton "Eliminar esta versión" (rojo)
+ *  3. URL Card (QR icon + URL + chip nivel alerta)
+ *  4. Date Card (Calendar icon + fecha formateada)
+ *  5. Verdict Card (gauge 140dp centrado + amenaza label)
+ *  6. Boton destructivo "Eliminar esta versión"
  */
 @Composable
 private fun ContenidoDetalleVersionAntigua(
@@ -235,12 +241,13 @@ private fun ContenidoDetalleVersionAntigua(
             .padding(horizontal = Espaciado.lg, vertical = Espaciado.lg),
         verticalArrangement = Arrangement.spacedBy(Espaciado.lg)
     ) {
-        // ─── Back Row ───
+        // ─── Glass Pill Back Button ───
         Row(
             modifier = Modifier
-                .fillMaxWidth()
+                .clip(RoundedCornerShape(50))
+                .background(CyberGlass)
                 .clickable(onClick = onBack)
-                .padding(vertical = Espaciado.xs),
+                .padding(horizontal = Espaciado.md, vertical = Espaciado.sm),
             horizontalArrangement = Arrangement.spacedBy(Espaciado.sm),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -265,39 +272,101 @@ private fun ContenidoDetalleVersionAntigua(
             color = CyberTextoPrincipal
         )
 
-        // ─── URL Row ───
+        // ─── URL Card ───
         Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(Espaciado.sm),
-            verticalAlignment = Alignment.CenterVertically
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(RadioBorde.xxl))
+                .background(CyberGlass)
+                .border(
+                    width = 1.dp,
+                    color = CyberGlassBorde,
+                    shape = RoundedCornerShape(RadioBorde.xxl)
+                )
+                .padding(Espaciado.lg),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Espaciado.md)
         ) {
-            Icon(
-                imageVector = Icons.Filled.QrCode,
-                contentDescription = null,
-                tint = CyberTextoSecundario,
-                modifier = Modifier.size(TamanosIcono.estandar)
-            )
+            Box(
+                modifier = Modifier
+                    .size(TamanosIcono.mediano)
+                    .clip(CircleShape)
+                    .background(CyberGlassAlto),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.QrCode,
+                    contentDescription = null,
+                    tint = CyberCyan,
+                    modifier = Modifier.size(TamanosIcono.estandar)
+                )
+            }
             Text(
                 text = escaneo.urlOriginal.ifBlank { escaneo.urlLimpia },
                 style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
                 color = CyberTextoPrincipal,
-                maxLines = 1,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f)
             )
             ChipNivelAlerta(nivelAlerta = escaneo.nivelAlerta)
         }
 
-        // ─── Fecha del escaneo ───
+        // ─── Date Card ───
         // Diferenciador clave entre versiones: DetalleUrl no lo muestra
         // porque para la ultima version no es informativo. Aqui es
         // critico para que el usuario sepa QUE version esta viendo.
-        FormatoFechaEscaneo(creadoEnMillis = escaneo.creadoEnMillis)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(RadioBorde.xxl))
+                .background(CyberGlass)
+                .border(
+                    width = 1.dp,
+                    color = CyberGlassBorde,
+                    shape = RoundedCornerShape(RadioBorde.xxl)
+                )
+                .padding(Espaciado.lg),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(Espaciado.md)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(TamanosIcono.mediano)
+                    .clip(CircleShape)
+                    .background(CyberGlassAlto),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Schedule,
+                    contentDescription = null,
+                    tint = CyberCyan,
+                    modifier = Modifier.size(TamanosIcono.estandar)
+                )
+            }
+            Column(
+                verticalArrangement = Arrangement.spacedBy(Espaciado.xs)
+            ) {
+                Text(
+                    text = "Fecha del escaneo",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = CyberTextoSecundario
+                )
+                Text(
+                    text = formatoFechaEscaneo(escaneo.creadoEnMillis),
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = CyberTextoPrincipal
+                )
+            }
+        }
 
         // ─── Verdict Card (gauge + amenaza) ───
         TarjetaVeredictoVersionAntigua(escaneo = escaneo)
 
-        // ─── Eliminar button ───
+        // ─── Delete Button (destructivo) ───
         // Unica accion disponible en esta pantalla. Elimina SOLO esta
         // version (por id), no todas las versiones de la URL.
         Spacer(modifier = Modifier.height(Espaciado.lg))
@@ -360,34 +429,24 @@ private fun ChipNivelAlerta(nivelAlerta: String) {
 }
 
 /**
- * Formato de fecha del escaneo - muestra la etiqueta "Fecha del escaneo"
- * con el timestamp formateado. Usado para diferenciar visualmente entre
- * versiones del mismo escaneo (mismo urlLimpia, distintos ids y fechas).
+ * Formato de fecha del escaneo — devuelve el timestamp formateado.
+ * Usado para diferenciar visualmente entre versiones del mismo escaneo
+ * (mismo urlLimpia, distintos ids y fechas).
  *
- * Formato: "Fecha del escaneo: dd MMM yyyy, HH:mm"
- * Ej: "Fecha del escaneo: 11 ago 2026, 14:30"
+ * Formato: "dd MMM yyyy, HH:mm"
+ * Ej: "11 ago 2026, 14:30"
  */
-@Composable
-private fun FormatoFechaEscaneo(creadoEnMillis: Long) {
-    val formato = remember {
-        SimpleDateFormat("dd MMM yyyy, HH:mm", Locale("es"))
-    }
-    val fechaTexto = remember(creadoEnMillis) {
-        formato.format(Date(creadoEnMillis))
-    }
-    Text(
-        text = "Fecha del escaneo: $fechaTexto",
-        style = MaterialTheme.typography.bodySmall,
-        color = CyberTextoSecundario
-    )
+private fun formatoFechaEscaneo(creadoEnMillis: Long): String {
+    val formato = SimpleDateFormat("dd MMM yyyy, HH:mm", Locale("es"))
+    return formato.format(Date(creadoEnMillis))
 }
 
 /**
- * Tarjeta de veredicto (gauge + amenaza label) - replica de
- * [DetalleUrlScreen.TarjetaVeredicto] (privada ahi), simplificada para
- * tomar directamente [EscaneoEntity] en lugar de [DetalleUrlUiState.Cargado]
- * (que incluye flags de bloqueo/esUltimaVersion/totalReescaneos no
- * necesarios aqui).
+ * Tarjeta de veredicto (gauge 140dp centrado + amenaza label) - replica
+ * del diseño de [DetalleUrlScreen.TarjetaVeredicto] (privada ahi),
+ * simplificada para tomar directamente [EscaneoEntity] en lugar de
+ * [DetalleUrlUiState.Cargado] (que incluye flags de
+ * bloqueo/esUltimaVersion/totalReescaneos no necesarios aqui).
  *
  * Reusa [MedidorGauge] (publico en [Medidores.kt]) y los helpers
  * [colorPorNivel] / [etiquetaAmenazaPorNivel] / [subtituloPorNivel]
@@ -405,55 +464,45 @@ private fun TarjetaVeredictoVersionAntigua(escaneo: EscaneoEntity) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(RadioBorde.xl))
+            .clip(RoundedCornerShape(RadioBorde.xxl))
             .background(CyberGlass)
             .border(
                 width = 1.dp,
-                color = CyberGlassBorde,
-                shape = RoundedCornerShape(RadioBorde.xl)
+                color = colorVeredicto.copy(alpha = 0.25f),
+                shape = RoundedCornerShape(RadioBorde.xxl)
             )
-            .padding(Espaciado.xl),
+            .padding(Espaciado.xxl),
         verticalArrangement = Arrangement.spacedBy(Espaciado.lg),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(Espaciado.xl),
-            verticalAlignment = Alignment.CenterVertically
+        // Gauge — centrado, 140dp
+        MedidorGauge(
+            progreso = escaneo.probabilidad,
+            colorArco = colorVeredicto,
+            colorTrack = CyberGlassBorde,
+            valorTexto = valorPct.toString(),
+            colorTexto = CyberTextoPrincipal,
+            modifier = Modifier.size(140.dp)
+        )
+        // Verdict label
+        Text(
+            text = amenazaLabel,
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            color = CyberTextoPrincipal
+        )
+        // Subtitle pill
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(RadioBorde.sm))
+                .background(colorVeredicto.copy(alpha = 0.16f))
+                .padding(horizontal = Espaciado.md, vertical = Espaciado.xs)
         ) {
-            // Gauge
-            MedidorGauge(
-                progreso = escaneo.probabilidad,
-                colorArco = colorVeredicto,
-                colorTrack = CyberGlassBorde,
-                valorTexto = valorPct.toString(),
-                colorTexto = CyberTextoPrincipal,
-                modifier = Modifier.size(TamanosIcono.heroContenedor)
+            Text(
+                text = amenazaSubtitulo,
+                style = MaterialTheme.typography.labelMedium,
+                color = colorVeredicto
             )
-            // Verdict Info
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(Espaciado.sm)
-            ) {
-                Text(
-                    text = amenazaLabel,
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                    color = CyberTextoPrincipal
-                )
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(RadioBorde.sm))
-                        .background(colorVeredicto.copy(alpha = 0.16f))
-                        .padding(horizontal = Espaciado.md, vertical = Espaciado.xs)
-                ) {
-                    Text(
-                        text = amenazaSubtitulo,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = colorVeredicto
-                    )
-                }
-            }
         }
     }
 }

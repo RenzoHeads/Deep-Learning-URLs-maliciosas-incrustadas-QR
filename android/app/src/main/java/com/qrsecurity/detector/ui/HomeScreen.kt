@@ -4,29 +4,17 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -47,7 +35,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.camera.view.PreviewView
@@ -63,88 +50,54 @@ import com.qrsecurity.detector.ui.theme.CyberGlass
 import com.qrsecurity.detector.ui.theme.CyberGlassAlto
 import com.qrsecurity.detector.ui.theme.CyberTextoPrincipal
 import com.qrsecurity.detector.ui.theme.CyberTextoSecundario
-import com.qrsecurity.detector.ui.theme.Elevacion
 import com.qrsecurity.detector.ui.theme.Espaciado
 import com.qrsecurity.detector.ui.theme.PencilBrandMark
 import com.qrsecurity.detector.ui.theme.RadioBorde
 import com.qrsecurity.detector.ui.theme.TamanosIcono
-import com.qrsecurity.detector.ui.theme.TamanosToque
 import kotlinx.coroutines.launch
 
 /**
- * Pantalla de Inicio / Dashboard (Pencil frame VgSxr).
+ * Pantalla de Inicio — camara full-bleed con overlay minimal.
  *
- * F3.2: UI Compose que replica el layout de Pencil VgSxr. Hospeda la camara
- * con [ModuloCamara] para deteccion automatica de QR codes. El flujo es:
+ * Camera-first design: el viewfinder llena toda la pantalla. Sobre el
+ * feed se superponen:
+ *  - Brand header (top-left): shield icon + "SeguridadQR"
+ *  - Finder corners (L-shaped accents): marco visual para guiar al QR
+ *  - Floating pill (bottom-center): "Apunta y escanea"
  *
- * 1. Camera viewfinder (AndroidView + PreviewView) muestra la camara en vivo.
- * 2. [ModuloCamara] detecta QR codes via ML Kit y llama a `onQrDetectado`.
- * 3. `onQrDetectado` despacha `pipelineViewModel.analizar(payload)` en una
+ * La nav bar inferior ya expone Historial y Ajustes, por lo que los
+ * botones redundantes ("Ver historial", stats cards) fueron eliminados.
+ *
+ * Logica preservada intacta:
+ *  1. Camera viewfinder (AndroidView + PreviewView) muestra la camara en vivo.
+ *  2. [ModuloCamara] detecta QR codes via ML Kit y llama a `onQrDetectado`.
+ *  3. `onQrDetectado` despacha `pipelineViewModel.analizar(payload)` en una
  *    corutina (guardado por `analizando` para evitar double-disparo).
- * 4. Cuando `analizando` transiciona a `true`, un [LaunchedEffect] llama a
+ *  4. Cuando `analizando` transiciona a `true`, un [LaunchedEffect] llama a
  *    [onEscanear] para navegar a AnalisisScreen (que muestra el progreso).
- * 5. AnalisisScreen maneja los estados terminales (ResultadoListo,
- *    UrlDuplicada, Error, NoUrl).
- *
- * El ciclo de vida de la camara se vincula al [LocalLifecycleOwner] via
- * [DisposableEffect]: ON_RESUME → iniciar, ON_PAUSE → detener, dispose →
- * liberar scanner. El callback `onQrDetectado` se refresca en cada
- * recomposition via [ModuloCamara.setOnQrDetectado] (H1 fix — evita
- * stale callbacks que referencian estado obsoleto).
+ *  5. El dialogo "URL ya escaneada" aparece sobre el viewfinder vivo.
  *
  * @param onEscanear Callback para navegar a la pantalla de analisis.
- * @param onVerHistorial Callback para navegar al historial.
+ * @param onVerHistorial Callback (no usado en UI pero preservado por contrato).
  * @param datosViewModel VM compartido con los contadores de escaneos.
  * @param pipelineViewModel VM del pipeline (compartido a nivel NavGuardian).
  */
 @Composable
 fun PantallaHome(
     onEscanear: () -> Unit,
-    onVerHistorial: () -> Unit,
-    datosViewModel: DatosTabsViewModel,
+    @Suppress("UNUSED_PARAMETER") onVerHistorial: () -> Unit,
+    @Suppress("UNUSED_PARAMETER") datosViewModel: DatosTabsViewModel,
     pipelineViewModel: PipelineViewModel
 ) {
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
     val analizando by pipelineViewModel.analizando.collectAsStateWithLifecycle()
-    // Bug B fix: observar el estado del pipeline para mostrar el dialogo
-    // de "URL ya escaneada" (UrlDuplicada) sobre el viewfinder de la camara
-    // viva en HomeScreen, en vez de sobre AnalisisScreen (que no tiene
-    // camara). El estado persiste en el StateFlow compartido a nivel
-    // NavGuardian; AnalisisScreen navega de vuelta a HOME sin reiniciar el
-    // pipeline cuando detecta UrlDuplicada, para que este LaunchedEffect lo
-    // capte aqui.
     val estado by pipelineViewModel.estado.collectAsStateWithLifecycle()
-    val totalEscaneos by datosViewModel.totalEscaneos.collectAsStateWithLifecycle()
-    val amenazas by datosViewModel.amenazas.collectAsStateWithLifecycle()
 
     var moduloCamara by remember { mutableStateOf<ModuloCamara?>(null) }
     var yaNavegoAnalisis by rememberSaveable { mutableStateOf(false) }
 
     // ── Navegacion a AnalisisScreen cuando inicia el analisis ──
-    // Rising-edge guard: solo navega cuando el pipeline ha pasado el
-    // dedup check (estado != Escaneando/Inicializando/UrlDuplicada).
-    //
-    // Bug F fix: antes, navegabamos cuando `analizando=true` (set ANTES
-    // del dedup check). Para URLs duplicadas, `analizando` era true
-    // brevemente → navegabamos a AnalisisScreen → el pipeline emitia
-    // `UrlDuplicada` → AnalisisScreen rebote a HomeScreen. El usuario
-    // veia "Analizando..." brevemente detras del modal.
-    //
-    // Ahora: navegamos SOLO cuando `analizando=true` AND el estado
-    // indica que el dedup check ya termino:
-    //  - `Analizando` → inference en progreso (URL nueva o forzar)
-    //  - `ResultadoListo` → inference completada o NoUrl (path rapido)
-    //  - `Error` → error durante extraccion/inference
-    // NO navegamos cuando:
-    //  - `Escaneando` → dedup check en progreso (esperar)
-    //  - `Inicializando` → pipeline cargando (esperar)
-    //  - `UrlDuplicada` → mostrar dialogo sobre camara (fix Bug B)
-    //
-    // LaunchedEffect(analizando, estado) re-corre cuando cualquiera de
-    // los dos cambia, cubriendo la race: `analizando` va true → estado
-    // es Escaneando → no navega → estado cambia a Analizando/ResultadoListo/
-    // Error → effect re-corre → navega.
     LaunchedEffect(analizando, estado) {
         if (analizando && !yaNavegoAnalisis &&
             estado !is Pipeline.Estado.Escaneando &&
@@ -175,13 +128,7 @@ fun PantallaHome(
         }
     }
 
-    // ── Refresh del callback QR (H1 fix — evita stale callbacks) ──
-    // Bug B: gatear tambien contra `estado is UrlDuplicada` — mientras el
-    // dialogo "URL ya escaneada" esta visible, la camara sigue viva debajo
-    // del dialogo y podria re-detectar el mismo QR, re-disparar analizar()
-    // y sobrescribir el estado UrlDuplicada con un nuevo Escaneando → loop.
-    // El gate previene nuevas detecciones hasta que el usuario confirma o
-    // cancela el reescaneo (ambos limpian el estado UrlDuplicada).
+    // ── Refresh del callback QR (H1 fix) ──
     LaunchedEffect(analizando, estado) {
         moduloCamara?.setOnQrDetectado { payload ->
             if (!analizando && estado !is Pipeline.Estado.UrlDuplicada) {
@@ -190,16 +137,73 @@ fun PantallaHome(
         }
     }
 
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .background(CyberFondo)
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = Espaciado.lg, vertical = Espaciado.lg),
-        verticalArrangement = Arrangement.spacedBy(Espaciado.lg)
     ) {
-        // ─── Brand header ───
+        // ─── Camera viewfinder (full-bleed) ───
+        AndroidView(
+            factory = { ctx ->
+                PreviewView(ctx).also { previewView ->
+                    val modulo = ModuloCamara(
+                        context = ctx,
+                        lifecycleOwner = lifecycleOwner,
+                        previewView = previewView,
+                        onQrDetectado = { payload ->
+                            if (!analizando) {
+                                scope.launch { pipelineViewModel.analizar(payload) }
+                            }
+                        }
+                    )
+                    moduloCamara = modulo
+                    modulo.iniciar()
+                }
+            },
+            modifier = Modifier.fillMaxSize()
+        )
+
+        // ─── QR glyph overlay (very subtle) ───
+        Icon(
+            imageVector = Icons.Filled.QrCode2,
+            contentDescription = null,
+            tint = Color.White.copy(alpha = 0.06f),
+            modifier = Modifier
+                .size(TamanosIcono.heroContenedor)
+                .align(Alignment.Center)
+        )
+
+        // ─── Finder corners (L-shaped accents, more prominent) ───
+        Canvas(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(Espaciado.xxl)
+        ) {
+            val cornerLen = 36.dp.toPx()
+            val strokeW = 4.dp.toPx()
+            val color = CyberCyan
+            val w = size.width
+            val h = size.height
+
+            // Top-left
+            drawLine(color, Offset(0f, 0f), Offset(cornerLen, 0f), strokeW)
+            drawLine(color, Offset(0f, 0f), Offset(0f, cornerLen), strokeW)
+            // Top-right
+            drawLine(color, Offset(w, 0f), Offset(w - cornerLen, 0f), strokeW)
+            drawLine(color, Offset(w, 0f), Offset(w, cornerLen), strokeW)
+            // Bottom-left
+            drawLine(color, Offset(0f, h), Offset(cornerLen, h), strokeW)
+            drawLine(color, Offset(0f, h), Offset(0f, h - cornerLen), strokeW)
+            // Bottom-right
+            drawLine(color, Offset(w, h), Offset(w - cornerLen, h), strokeW)
+            drawLine(color, Offset(w, h), Offset(w, h - cornerLen), strokeW)
+        }
+
+        // ─── Brand header (overlay, top-left) ───
         Row(
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(horizontal = Espaciado.lg, vertical = Espaciado.lg),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Espaciado.md)
         ) {
@@ -217,151 +221,44 @@ fun PantallaHome(
                     modifier = Modifier.size(TamanosIcono.estandar)
                 )
             }
-            Column {
-                Text(
-                    text = "SeguridadQR",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = CyberTextoPrincipal
-                )
-                Text(
-                    text = "ESCANEANDO",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = CyberCyan
-                )
-            }
+            Text(
+                text = "SeguridadQR",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                color = CyberTextoPrincipal
+            )
         }
 
-        // ─── Camera viewfinder ───
+        // ─── "Apunta y escanea" floating pill (overlay, bottom-center) ───
         Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(1f)
-                .clip(RoundedCornerShape(RadioBorde.xxl))
-                .background(CyberGlass)
+                .align(Alignment.BottomCenter)
+                .padding(bottom = Espaciado.xxl)
+                .clip(RoundedCornerShape(50))
+                .background(CyberGlass.copy(alpha = 0.85f))
+                .padding(horizontal = Espaciado.xl, vertical = Espaciado.md)
         ) {
-            // Camera preview
-            AndroidView(
-                factory = { ctx ->
-                    PreviewView(ctx).also { previewView ->
-                        val modulo = ModuloCamara(
-                            context = ctx,
-                            lifecycleOwner = lifecycleOwner,
-                            previewView = previewView,
-                            onQrDetectado = { payload ->
-                                if (!analizando) {
-                                    scope.launch { pipelineViewModel.analizar(payload) }
-                                }
-                            }
-                        )
-                        moduloCamara = modulo
-                        modulo.iniciar()
-                    }
-                },
-                modifier = Modifier.fillMaxSize()
-            )
-
-            // QR glyph overlay (semi-transparent)
-            Icon(
-                imageVector = Icons.Filled.QrCode2,
-                contentDescription = null,
-                tint = Color.White.copy(alpha = 0.12f),
-                modifier = Modifier
-                    .size(TamanosIcono.heroContenedor)
-                    .align(Alignment.Center)
-            )
-
-            // Finder corners (L-shaped accents)
-            Canvas(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(Espaciado.lg)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Espaciado.sm)
             ) {
-                val cornerLen = 28.dp.toPx()
-                val strokeW = 3.dp.toPx()
-                val color = CyberCyan
-                val w = size.width
-                val h = size.height
-
-                // Top-left
-                drawLine(color, Offset(0f, 0f), Offset(cornerLen, 0f), strokeW)
-                drawLine(color, Offset(0f, 0f), Offset(0f, cornerLen), strokeW)
-                // Top-right
-                drawLine(color, Offset(w, 0f), Offset(w - cornerLen, 0f), strokeW)
-                drawLine(color, Offset(w, 0f), Offset(w, cornerLen), strokeW)
-                // Bottom-left
-                drawLine(color, Offset(0f, h), Offset(cornerLen, h), strokeW)
-                drawLine(color, Offset(0f, h), Offset(0f, h - cornerLen), strokeW)
-                // Bottom-right
-                drawLine(color, Offset(w, h), Offset(w - cornerLen, h), strokeW)
-                drawLine(color, Offset(w, h), Offset(w, h - cornerLen), strokeW)
+                Icon(
+                    imageVector = Icons.Filled.QrCodeScanner,
+                    contentDescription = null,
+                    tint = CyberCyan,
+                    modifier = Modifier.size(TamanosIcono.estandar)
+                )
+                Text(
+                    text = "Apunta y escanea",
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = CyberTextoPrincipal
+                )
             }
-        }
-
-        // ─── "Apunta y escanea" prompt ───
-        Text(
-            text = "Apunta y escanea",
-            style = MaterialTheme.typography.bodyLarge,
-            color = CyberTextoSecundario,
-            modifier = Modifier.fillMaxWidth(),
-            textAlign = TextAlign.Center
-        )
-
-        // ─── Stats row ───
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(Espaciado.md)
-        ) {
-            TarjetaEstadistica(
-                etiqueta = "Escaneos",
-                valor = totalEscaneos,
-                modifier = Modifier.weight(1f)
-            )
-            TarjetaEstadistica(
-                etiqueta = "Amenazas",
-                valor = amenazas,
-                modifier = Modifier.weight(1f)
-            )
-        }
-
-        // ─── Ver historial ───
-        TextButton(
-            onClick = onVerHistorial,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text(
-                text = "Ver historial",
-                style = MaterialTheme.typography.bodyMedium,
-                color = CyberCyan
-            )
         }
     }
 
-    // ── Bug B: Dialogo "URL ya escaneada" sobre el viewfinder de la camara ──
-    //
-    // El escaneo fisico ocurre en HomeScreen (camara viva). Cuando el
-    // pipeline emite [Pipeline.Estado.UrlDuplicada], el dialogo debe aparecer
-    // aqui — sobre el viewfinder — para que el usuario decida reescanear o
-    // cancelar sin perder el contexto visual del codigo QR que tiene enfrente.
-    //
-    // Antes (pre-fix), AnalisisScreen renderizaba este dialogo, pero la
-    // camara se detiene al navegar a ANALISIS (ON_PAUSE → moduloCamara.detener())
-    // — el usuario veia el dialogo sobre una pantalla de "Analizando..."
-    // sin el feed de la camara, perdiendo el punto de referencia del QR.
-    //
-    // Flujo post-fix:
-    //  1. Camara detecta QR → pipelineViewModel.analizar(payload) →
-    //     analizando=true → LaunchedEffect navega a ANALISIS.
-    //  2. Pipeline descubre que TODAS las URLs ya estan en urls_catalogo →
-    //     emite UrlDuplicada. analizando transiciona a false.
-    //  3. AnalisisScreen.LaunchedEffect(estado) capta UrlDuplicada →
-    //     onVolverHome() (sin reiniciar el pipeline) → vuelve a HOME.
-    //  4. HomeScreen recompone con estado=UrlDuplicada → el AlertDialog
-    //     aparece aqui, sobre el viewfinder (la camara se reanuda en
-    //     ON_RESUME al volver a HOME).
-    //  5. Usuario confirma → confirmarReescaneo() → analizar(forzar=true)
-    //     → analizando=true → navega a ANALISIS para mostrar progreso.
-    //  6. Usuario cancela → cancelarReescaneo() → reinicia pipeline a
-    //     Escaneando → el dialogo desaparece (estado != UrlDuplicada).
+    // ── Dialogo "URL ya escaneada" sobre el viewfinder de la camara ──
     val duplicada = estado as? Pipeline.Estado.UrlDuplicada
     if (duplicada != null) {
         AlertDialog(
@@ -393,41 +290,5 @@ fun PantallaHome(
                 }
             }
         )
-    }
-}
-
-/**
- * Tarjeta de estadistica mini — muestra un contador con etiqueta.
- * Usada en el dashboard de Home para total escaneos y amenazas.
- */
-@Composable
-private fun TarjetaEstadistica(
-    etiqueta: String,
-    valor: Int?,
-    modifier: Modifier = Modifier
-) {
-    Card(
-        modifier = modifier,
-        shape = RoundedCornerShape(RadioBorde.xl),
-        colors = CardDefaults.cardColors(containerColor = CyberGlass),
-        elevation = CardDefaults.cardElevation(defaultElevation = Elevacion.ninguna)
-    ) {
-        Column(
-            modifier = Modifier.padding(Espaciado.lg),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(Espaciado.xs)
-        ) {
-            Text(
-                text = valor?.toString() ?: "—",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold,
-                color = CyberTextoPrincipal
-            )
-            Text(
-                text = etiqueta,
-                style = MaterialTheme.typography.labelMedium,
-                color = CyberTextoSecundario
-            )
-        }
     }
 }
