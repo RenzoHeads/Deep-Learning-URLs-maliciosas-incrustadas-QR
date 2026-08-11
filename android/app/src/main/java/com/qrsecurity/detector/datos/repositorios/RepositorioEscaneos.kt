@@ -119,6 +119,39 @@ class RepositorioEscaneos(
     suspend fun obtenerPorId(id: String): EscaneoEntity? =
         withContext(ioDispatcher) { db.escaneoDao().obtenerPorId(id) }
 
+    /**
+     * Devuelve el id de la fila viva mas reciente de [urlLimpia] (la "ultima
+     * version" actual). Usado por [AnalisisAnterioresViewModel] para resolver
+     * el `idActual` real cuando el SyncWorker hace `reKey` (client UUID ->
+     * server UUID).
+     *
+     * Motivacion: tras un reKey, el id cacheado por DetalleUrlViewModel
+     * (preservado por el Bug A fix) queda obsoleto — la fila fisica en la BD
+     * ya tiene un nuevo PK (serverUUID). Si la consulta SQL de versiones
+     * anteriores filtra por `id != :idActual` con el id viejo, NO excluye la
+     * version actual (que ahora tiene un id distinto) y aparece como una
+     * "version anterior" extra en la UI.
+     *
+     * Resolviendo el ultimo id vivo desde la BD, la exclusion siempre
+     * corresponde a la verdadera version actual sin importar si el reKey ya
+     * ocurrio (la fila viva mas reciente siempre tiene el serverUUID actual).
+     */
+    suspend fun ultimoIdVivoPorUrlLimpia(urlLimpia: String): String? =
+        withContext(ioDispatcher) { db.escaneoDao().ultimoPorUrlLimpia(urlLimpia)?.id }
+
+    /**
+     * Version reactiva (Flow) de [obtenerPorId]. Room re-emite cuando la
+     * fila del escaneo cambia (p.ej. tras un sync). Usado por
+     * DetalleUrlViewModel para refrescar el detalle en vivo.
+     *
+     * V-6 fix: elimina el stale-cache en CacheDetalleEscaneos cuando un
+     * sync actualiza los datos del escaneo mientras el usuario mira el
+     * detalle. Antes, el VM usaba [obtenerPorId] (suspend one-shot) y el
+     * cache mostraba datos viejos hasta que el usuario salia y re-entraba.
+     */
+    fun observarPorId(id: String): Flow<EscaneoEntity?> =
+        db.escaneoDao().observarPorId(id)
+
     // Bug 3 fix: stats cuentan URLs unicas (DISTINCT urlLimpia), no filas.
     // Un reescaneo de una URL ya contada NO incrementa el contador.
     fun observarTotal(): Flow<Int> = db.escaneoDao().observarTotalUnicos()
@@ -292,6 +325,76 @@ class RepositorioEscaneos(
                 db.escaneoDao().eliminarPorId(id)
                 db.pendingOpDao().insertar(op)
             }
+            // ── BUG-C1 fix: sync urls_catalogo tras eliminar un escaneo ──
+            //
+            // Antes, `eliminarLocal(id)` borraba la fila de `escaneos` pero NO
+            // tocaba `urls_catalogo`. El cache maestro de dedup quedaba
+            // estancado: si el usuario borraba la unica fila de una URL, el
+            // cache seguia diciendo "URL ya escaneada" → el siguiente escaneo
+            // de la misma URL respondia `UrlDuplicada` y el usuario tenia que
+            // confirmar "reescanear" aunque la URL no tuviera NINGUN escaneo en
+            // el historial. Peor aun, `ultimoNivelAlerta`/`ultimaProbabilidad`
+            // del cache seguian reflejando el escaneo borrado, asi que el
+            // pipeline mostraba estado obsoleto.
+            //
+            // Tras borrar la fila, dentro de ESTA misma transaccion:
+            //  1. `contarPorUrlLimpia(urlLimpia)` cuenta las filas vivas
+            //     (excluye rows con DELETE pendiente en pending_ops — esos ya
+            //     estan "logicamente borrados" aunque el row fisico aguante
+            //     hasta el PUSH).
+            //  2. Si count == 0 → la URL ya no tiene ningun escaneo en el log
+            //     → `eliminarPorHash` borra la entrada del cache. El siguiente
+            //     escaneo de la misma URL sera tratado como nueva (no
+            //     duplicada) — comportamiento correcto.
+            //  3. Si count > 0 → quedan reescaneos vivos de la misma URL →
+            //     `ultimoPorUrlLimpia` devuelve la nueva "ultima version" y
+            //     hacemos `upsert` con sus campos denormalizados. El cache
+            //     refleja la version mas reciente, no la borrada.
+            //
+            // Casos cubiertos:
+            //  - Borrar la ultima version de una URL con reescaneos → count>0,
+            //    cache se recompute con el reescaneo que ahora es el mas
+            //    reciente (ORDER BY creadoEnMillis DESC LIMIT 1).
+            //  - Borrar un reescaneo antiguo (no la ultima version) → count>0,
+            //    `ultimoPorUrlLimpia` devuelve la misma fila que ya era la
+            //    ultima → `upsert` es no-op sobre los campos (REPLACE con
+            //    valores identicos).
+            //  - Borrar la unica fila de una URL → count==0, cache borrado.
+            //
+            // Atomicidad: cache y log se actualizan en la misma transaccion
+            // Room — nunca quedan inconsistentes (igual que `registrarLocal`).
+            //
+            // `eliminarLocalPorUrlLimpia` no necesita este bloque porque borra
+            // TODAS las filas de la URL y siempre hace `eliminarPorHash` al
+            // final (linea ~353, WAVE 15 fix) — count siempre sera 0.
+            val urlLimpia = fila.urlLimpia
+            val restantes = db.escaneoDao().contarPorUrlLimpia(urlLimpia)
+            if (restantes == 0) {
+                db.urlCatalogoDao().eliminarPorHash(sha256Hex(urlLimpia))
+            } else {
+                val ultimaViva = db.escaneoDao().ultimoPorUrlLimpia(urlLimpia)
+                if (ultimaViva != null) {
+                    val urlHash = sha256Hex(urlLimpia)
+                    db.urlCatalogoDao().upsert(
+                        UrlCatalogoEntity(
+                            urlHash = urlHash,
+                            urlLimpia = urlLimpia,
+                            ultimoNivelAlerta = ultimaViva.nivelAlerta,
+                            ultimaProbabilidad = ultimaViva.probabilidad,
+                            ultimoEscaneoMillis = ultimaViva.creadoEnMillis,
+                            // vecesEscaneada = restantes (vivos): el cache
+                            // debe reflejar el conteo de escaneos VIVOS, no el
+                            // historico total. Un escaneo borrado NO cuenta —
+                            // al alinearlo con el backend
+                            // (recompute_url_catalogo_after_delete seteaba
+                            // veces_escaneada = N vivos), el dialogo Android
+                            // "URL ya escaneada X vez(es)" muestra un numero
+                            // significativo. Bug catalogo-stuck fix.
+                            vecesEscaneada = restantes
+                        )
+                    )
+                }
+            }
         }
     }
 
@@ -316,14 +419,35 @@ class RepositorioEscaneos(
      */
     suspend fun eliminarLocalPorUrlLimpia(urlLimpia: String) = withContext(ioDispatcher) {
         db.withTransaction {
-            val ids = db.escaneoDao().idsPorUrlLimpia(urlLimpia)
-            for (id in ids) {
-                val fila = db.escaneoDao().obtenerPorId(id)
+            // ── BUG-C3 fix: batch load en 1 query (antes N+1) ──
+            //
+            // Antes: `idsPorUrlLimpia` (= 1 query) devolvia N ids, luego por
+            // cada id hacia `obtenerPorId(id)` (= N queries) para revisar
+            // `dirty` y decidir el分支. Resultado: N+1 queries para N filas.
+            // Con URLs escaneadas cientos de veces (vecesEscaneada alto),
+            // esto generaba cientos de round-trips a SQLite en una sola
+            // operacion de borrado, bloqueando el thread IO y causando
+            // jank en la UI.
+            //
+            // Fix: `todosPorUrlLimpia` hace un solo SELECT * con el mismo
+            // filtro NOT IN (pending_ops DELETE) que `idsPorUrlLimpia`, y
+            // devuelve las entidades completas. El branch dirty/synced se
+            // hace en memoria Kotlin (zero queries adicionales). Solo
+            // quedan los writes: `borrarPorId`/`eliminarPorId` por fila
+            // (Room los agrupa dentro de la transaccion, que ya es
+            // atomico).
+            //
+            // El `orden` (creadoEnMillis DESC, id DESC) no es relevante para
+            // el DELETE (todas las filas se borran igual), pero mantiene
+            // consistencia con `ultimoPorUrlLimpia` y facilita diagnostico
+            // si se inspecciona el orden de pending_ops generados.
+            val filas = db.escaneoDao().todosPorUrlLimpia(urlLimpia)
+            for (fila in filas) {
+                val id = fila.id
                 // Bug M3 fix: fila desaparecio entre el listado y el fetch
-                // (race de doble-tap) → skip, no encolar DELETE huerfano.
-                if (fila == null) {
-                    continue
-                }
+                // ya no es posible (cargamos la entidad completa en una
+                // query), pero el branch dirty sigue siendo necesario para
+                // decidir CREATE-borrar vs DELETE-encolar.
                 if (fila.dirty) {
                     val opCreate = db.pendingOpDao().findExisting(
                         tabla = "escaneos",
@@ -453,6 +577,36 @@ class RepositorioEscaneos(
      * Aplica un batch de escaneos (tombstones + upsert + cursor) en una
      * transaccion Room. Devuelve los ids de las filas vivas para control
      * de huerfanos.
+     *
+     * D-3 sibling fix: ademas de aplicar el batch al log `escaneos`,
+     * sincroniza el cache maestro `urls_catalogo` para cada `urlLimpia`
+     * afectada por el batch (tombstones o vivos). Esto mantiene la
+     * invariante cache+log atomica en el path PULL — la misma invariante
+     * que [registrarLocal] / [eliminarLocal] garantizan en el path local.
+     *
+     * Sin este fix, [EscaneoDao.observarTotalUnicos] y
+     * [EscaneoDao.observarAmenazasUnicas] (que ahora leen `urls_catalogo`
+     * — fix D-3) subcontarian (vivos del servidor nunca llegaban al cache)
+     * o sobrecontarian (tombstones borraban del log pero no del cache).
+     *
+     * Estrategia: tras aplicar todos los deletes + inserts del batch al
+     * log `escaneos`, para cada `urlLimpia` afectada correr la misma
+     * reconciliacion que usa [eliminarLocal]:
+     *  - `contarPorUrlLimpia` == 0 → `eliminarPorHash` (URL ya no tiene
+     *    ningun escaneo vivo).
+     *  - `contarPorUrlLimpia` > 0 → `ultimoPorUrlLimpia` devuelve la
+     *    fila mas reciente (LWW por `creadoEnMillis DESC, id DESC`,
+     *    mismo orden que el dedup del historial) y hacemos `upsert` con
+     *    sus campos denormalizados. Esto maneja correctamente el caso
+     *    donde el batch trae un escaneo MAS ANTIGUO que el que ya esta en
+     *    el log — `ultimoPorUrlLimpia` siempre encuentra la verdadera
+     *    ultima fila independientemente del orden del batch.
+     *
+     * `vecesEscaneada`: preservamos el valor existente si ya hay entrada
+     * en el cache (el contador historico nunca disminuye — los escaneos
+     * borrados siguen contando). Si la entrada es nueva (no existia
+     * porque la URL vino por PULL antes de este fix), usamos
+     * `contarPorUrlLimpia` como valor inicial (todas las filas vivas).
      */
     private suspend fun aplicarBatchEscaneos(
         delta: List<Escaneo>,
@@ -461,12 +615,55 @@ class RepositorioEscaneos(
         val tombstones = delta.filter { it.deletedAt != null }
         val vivos = delta.filter { it.deletedAt == null }
 
+        // Collect affected urlLimpia BEFORE any modification (for catalog
+        // reconciliation after inserts/deletes). tombstones carry urlLimpia
+        // too — the Escaneo DTO requires it (non-nullable, no default).
+        val urlLimpiaAfectadas = delta.map { it.urlLimpia }.toSet()
+
         if (tombstones.isNotEmpty()) {
             db.escaneoDao().eliminarPorIds(tombstones.map { it.id })
         }
         if (vivos.isNotEmpty()) {
             val entidades = vivos.map { it.aEntidad(ahora) }
             db.escaneoDao().insertarTodos(entidades)
+        }
+
+        // ── D-3 sibling fix: sync urls_catalogo for each affected URL ──
+        //
+        // Misma logica que [eliminarLocal] (l.350-374): para cada urlLimpia
+        // afectada, contar las filas vivas restantes y reconciliar el cache.
+        // `ultimoPorUrlLimpia` hace ORDER BY creadoEnMillis DESC, id DESC
+        // LIMIT 1 — explota el indice `idx_escaneos_dedup` (D-2 fix) y
+        // siempre devuelve la verdadera ultima fila, sin importar el orden
+        // o la antiguedad de los escaneos en el batch.
+        for (urlLimpia in urlLimpiaAfectadas) {
+            val restantes = db.escaneoDao().contarPorUrlLimpia(urlLimpia)
+            if (restantes == 0) {
+                // URL ya no tiene ningun escaneo vivo en el log → borrar
+                // la entrada del cache. La proxima vez que el usuario
+                // escanee esta URL, sera tratada como nueva (no duplicada).
+                db.urlCatalogoDao().eliminarPorHash(sha256Hex(urlLimpia))
+            } else {
+                val ultimaViva = db.escaneoDao().ultimoPorUrlLimpia(urlLimpia)
+                if (ultimaViva != null) {
+                    val urlHash = sha256Hex(urlLimpia)
+                    val existente = db.urlCatalogoDao().buscarPorHash(urlHash)
+                    db.urlCatalogoDao().upsert(
+                        UrlCatalogoEntity(
+                            urlHash = urlHash,
+                            urlLimpia = urlLimpia,
+                            ultimoNivelAlerta = ultimaViva.nivelAlerta,
+                            ultimaProbabilidad = ultimaViva.probabilidad,
+                            ultimoEscaneoMillis = ultimaViva.creadoEnMillis,
+                            // Preservar vecesEscaneada historico si ya existe
+                            // (escaneos borrados siguen contando). Si la
+                            // entrada es nueva (PULL de URL nunca escaneada
+                            // localmente), usar el conteo de filas vivas.
+                            vecesEscaneada = existente?.vecesEscaneada ?: restantes
+                        )
+                    )
+                }
+            }
         }
 
         // Bug A1 fix: cursor keyset compuesto "ts|id" de la ultima fila del
@@ -483,27 +680,124 @@ class RepositorioEscaneos(
     /**
      * Bug M10 fix: limpia rows locales **no dirty** ausentes en [idsServidor].
      *
-     * Tras un PULL exitoso, el backend puede haber eliminado rows que el cliente
-     * todavia tiene. Sin este cleanup, esos rows se quedan como zombies locales
-     * (visible bug: historial muestra escaneos borrados del servidor).
+     * BUG #6 audit fix: antes cargaba `idsNoDirty()` (TODOS los ids no-dirty
+     * locales) en una List de Kotlin, luego `filterNot` creaba otra, luego
+     * `eliminarPorIds` otra — triple copia de miles de UUIDs en heap. Con
+     * miles de escaneos por usuario, esto generaba picos de memoria durante
+     * cada PULL exitoso.
      *
-     * Estrategia:
-     *  1. Listar ids locales no dirty (drity=0): rows synced previamente.
-     *  2. Diferencia: ids locales no dirty NO presentes en [idsServidor].
-     *  3. Eliminar esos orphans via `eliminarPorIds`.
+     * Nueva estrategia (stream-based, O(0) orphan IDs en Kotlin):
+     *  1. Inserta los [idsServidor] (acotados a MAX_PAGINAS_POR_RUN *
+     *     LIMITE_PAGINA = 1000) en una tabla temporal `_tmp_ids_serv`.
+     *  2. `DELETE FROM escaneos WHERE dirty = 0 AND NOT EXISTS
+     *     (SELECT 1 FROM _tmp_ids_serv t WHERE t.id = escaneos.id)` —
+     *     SQLite hace el diff internamente usando el PK index de `escaneos`
+     *     y el PK index de la temp table. Ningún id se carga en Kotlin.
+     *  3. DROP de la temp table (cleanup dentro de la misma transaccion).
      *
-     * Rows dirty (dirty=1) se preservan — el outbox las sincronizara y daran
-     * su id de servidor en el siguiente PULL, en cuyo momento ya no seran orphan.
+     * `NOT EXISTS` (en vez de `NOT IN`) es NULL-safe: si la temp table
+     * estuviese vacía (idsServidor vacio en un full pull), `NOT EXISTS`
+     * evalúa TRUE para todos los rows → elimina todos los no-dirty (correcto
+     * — el servidor no tiene nada, todos los locales son zombies).
+     *
+     * Rows dirty (dirty=1) se preservan — el outbox los sincronizara.
      *
      * Llamado por [com.qrsecurity.detector.datos.sync.SyncWorker] inmediatamente
      * despues de cada PULL, pasando los ids que el servidor reporto.
+     * Guardado por BUG #1: solo se invoca en full pull completo.
      */
     suspend fun limpiarHuerfanos(idsServidor: List<String>) = withContext(ioDispatcher) {
-        val idsServidorSet = idsServidor.toSet()
-        val idsNoDirtyLocales = db.escaneoDao().idsNoDirty()
-        val orphans = idsNoDirtyLocales.filterNot { it in idsServidorSet }
-        if (orphans.isNotEmpty()) {
-            db.escaneoDao().eliminarPorIds(orphans)
+        db.withTransaction {
+            val sqliteDb = db.openHelper.writableDatabase
+            // 1. Tabla temporal con los ids del servidor
+            sqliteDb.execSQL(
+                "CREATE TEMP TABLE IF NOT EXISTS _tmp_ids_serv (id TEXT NOT NULL)"
+            )
+            sqliteDb.execSQL("DELETE FROM _tmp_ids_serv")
+            idsServidor.chunked(500).forEach { chunk ->
+                sqliteDb.execSQL(
+                    "INSERT INTO _tmp_ids_serv (id) VALUES " +
+                        chunk.joinToString(",") { "(?)" },
+                    chunk.toTypedArray()
+                )
+            }
+
+            // ── D-3 sibling fix: BEFORE deleting orphans, collect the urlLimpia
+            // values of rows about to be deleted — for catalog reconciliation
+            // after the DELETE. ──
+            //
+            // Sin este fix, `limpiarHuerfanos` borra rows de `escaneos` pero
+            // NO sincroniza `urls_catalogo` → el cache queda estancado con
+            // entradas para URLs que ya no tienen ningun escaneo vivo en el
+            // log. Como [observarTotalUnicos] / [observarAmenazasUnicas]
+            // ahora leen `urls_catalogo` (fix D-3), esas entradas huerfanas
+            // inflarian los contadores.
+            //
+            // La query usa la temp table (ya poblada) → zero-copy en Kotlin,
+            // mismo patron stream-based que el DELETE. `DISTINCT urlLimpia`
+            // porque un orphan puede tener multiples rows (reescaneos) de la
+            // misma URL — solo necesitamos reconciliar el cache una vez por
+            // URL afectada.
+            val urlLimpiaAfectadas = mutableListOf<String>()
+            val cursorAfectadas = sqliteDb.query(
+                "SELECT DISTINCT urlLimpia FROM escaneos WHERE dirty = 0 " +
+                    "AND NOT EXISTS (SELECT 1 FROM _tmp_ids_serv t WHERE t.id = escaneos.id)"
+            )
+            cursorAfectadas.use {
+                while (it.moveToNext()) {
+                    urlLimpiaAfectadas.add(it.getString(0))
+                }
+            }
+
+            // 2. Eliminar orphans: rows no-dirty locales NO presentes en el servidor.
+            //    NOT EXISTS es NULL-safe y usa ambos PK indexes (escaneos.id, _tmp.id).
+            sqliteDb.execSQL(
+                "DELETE FROM escaneos WHERE dirty = 0 " +
+                    "AND NOT EXISTS (SELECT 1 FROM _tmp_ids_serv t WHERE t.id = escaneos.id)"
+            )
+
+            // 3. D-3 sibling fix: reconcile urls_catalogo for each affected URL.
+            //
+            // Misma logica que [eliminarLocal] (l.350-374) y
+            // [aplicarBatchEscaneos]: para cada urlLimpia afectada, contar
+            // las filas vivas restantes y reconciliar el cache. Si count==0,
+            // borrar la entrada del cache (URL ya no tiene escaneos). Si
+            // count>0, hacer upsert con la ultima fila viva (LWW por
+            // creadoEnMillis DESC, id DESC — `ultimoPorUrlLimpia` explota
+            // idx_escaneos_dedup del fix D-2).
+            //
+            // Nota: rows dirty (dirty=1) se preservan — el outbox los
+            // sincronizara. Si una URL solo tenia rows dirty y orphans no-dirty
+            // fueron borrados, los rows dirty siguen vivos → count>0 → el
+            // cache se actualiza con la ultima fila dirty (correcto: el
+            // cache refleja el ultimo estado conocido, dirty o synced).
+            for (urlLimpia in urlLimpiaAfectadas) {
+                val restantes = db.escaneoDao().contarPorUrlLimpia(urlLimpia)
+                if (restantes == 0) {
+                    db.urlCatalogoDao().eliminarPorHash(sha256Hex(urlLimpia))
+                } else {
+                    val ultimaViva = db.escaneoDao().ultimoPorUrlLimpia(urlLimpia)
+                    if (ultimaViva != null) {
+                        val urlHash = sha256Hex(urlLimpia)
+                        db.urlCatalogoDao().upsert(
+                            UrlCatalogoEntity(
+                                urlHash = urlHash,
+                                urlLimpia = urlLimpia,
+                                ultimoNivelAlerta = ultimaViva.nivelAlerta,
+                                ultimaProbabilidad = ultimaViva.probabilidad,
+                                ultimoEscaneoMillis = ultimaViva.creadoEnMillis,
+                                // vecesEscaneada = restantes (vivos) — alineado
+                                // con eliminarLocal y el backend
+                                // (recompute_url_catalogo_after_delete).
+                                vecesEscaneada = restantes
+                            )
+                        )
+                    }
+                }
+            }
+
+            // 4. Cleanup de la temp table (misma transaccion — atomico)
+            sqliteDb.execSQL("DROP TABLE IF EXISTS _tmp_ids_serv")
         }
     }
 
