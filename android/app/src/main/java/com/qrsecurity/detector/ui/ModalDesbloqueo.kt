@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -48,6 +49,145 @@ import com.qrsecurity.detector.ui.theme.PencilSuccessTint
 import com.qrsecurity.detector.ui.theme.RadioBorde
 import com.qrsecurity.detector.ui.theme.TamanosIcono
 import com.qrsecurity.detector.ui.theme.TamanosToque
+
+/**
+ * Modal de confirmacion de BLOQUEO de URL maliciosa.
+ *
+ * Espejo de [ModalDesbloqueoConfirmar] pero para la accion inversa (bloquear
+ * manualmente una URL MALICIOSA desde DetalleUrlScreen). El auto-bloqueo
+ * sucede automaticamente al escanear URL MALICIOSO (ver [com.qrsecurity.detector.pipeline.Pipeline.registrarEscaneoLocal]);
+ * este modal cubre el caso de que el usuario haya desbloqueado antes y quiera
+ * volver a bloquear sin reescanear.
+ *
+ * @param onConfirmar Callback al confirmar el bloqueo manual.
+ * @param onCancelar Callback al cancelar.
+ * @param modifier Modifier opcional.
+ */
+@Composable
+fun ModalBloqueoConfirmar(
+    onConfirmar: () -> Unit,
+    onCancelar: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(PencilOverlay),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Espaciado.xxl)
+                .clip(RoundedCornerShape(RadioBorde.xl))
+                .background(PencilModalFondo)
+                .border(
+                    width = 1.dp,
+                    color = CyberGlassBorde,
+                    shape = RoundedCornerShape(RadioBorde.xl)
+                )
+                .padding(Espaciado.xxl),
+            verticalArrangement = Arrangement.spacedBy(Espaciado.lg),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // ─── Step Indicator ───
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(Espaciado.sm),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(4.dp)
+                        .clip(RoundedCornerShape(RadioBorde.sm))
+                        .background(CyberRojo)
+                )
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(4.dp)
+                        .clip(RoundedCornerShape(RadioBorde.sm))
+                        .background(CyberGlassBorde)
+                )
+            }
+            Text(
+                text = "PASO 1 DE 2",
+                style = MaterialTheme.typography.labelMedium,
+                color = CyberTextoSecundario,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            // ─── Title ───
+            Text(
+                text = "¿Bloquear esta URL?",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                color = CyberTextoPrincipal,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            // ─── Body ───
+            Text(
+                text = "Esta URL ha sido detectada como maliciosa.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = CyberTextoSecundario,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            // ─── Consecuencias List ───
+            Column(
+                verticalArrangement = Arrangement.spacedBy(Espaciado.md),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                FilaRiesgo("No se podrá abrir en el navegador")
+                FilaRiesgo("Permanecerá bloqueada hasta que la desbloquees")
+            }
+
+            Spacer(modifier = Modifier.height(Espaciado.xs))
+
+            // ─── Block Button ───
+            Button(
+                onClick = onConfirmar,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(TamanosToque.boton),
+                shape = RoundedCornerShape(RadioBorde.lg),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = CyberRojo,
+                    contentColor = CyberFondo
+                )
+            ) {
+                Text(
+                    text = "Bloquear",
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            // ─── Cancel Button ───
+            OutlinedButton(
+                onClick = onCancelar,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(TamanosToque.boton),
+                shape = RoundedCornerShape(RadioBorde.lg),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    containerColor = CyberGlass,
+                    contentColor = CyberTextoSecundario
+                ),
+                border = androidx.compose.foundation.BorderStroke(0.dp, Color.Transparent)
+            ) {
+                Text(
+                    text = "Cancelar",
+                    style = MaterialTheme.typography.labelLarge
+                )
+            }
+        }
+    }
+}
 
 /**
  * Modal de confirmacion de desbloqueo de URL (Pencil frame WMtvW).
@@ -320,10 +460,158 @@ fun ModalDesbloqueoOk(
                     contentColor = CyberFondo
                 )
             ) {
+            Text(
+                text = "Listo",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Modal de confirmacion de eliminacion de URL del historial.
+ *
+ * Elimina TODOS los escaneos (ultima version + reescaneos) de la URL
+ * del historial local y encola DELETEs al backend via SyncWorker.
+ * Es una accion destructiva e irreversible — por eso requiere confirmacion
+ * explicita del usuario.
+ *
+ * Sigue el mismo patron visual que [ModalBloqueoConfirmar] y
+ * [ModalDesbloqueoConfirmar] (overlay + card con step indicator, titulo,
+ * cuerpo, lista de consecuencias, boton de accion rojo, boton de cancelar).
+ *
+ * @param onConfirmar Callback al confirmar la eliminacion.
+ * @param onCancelar Callback al cancelar.
+ * @param modifier Modifier opcional.
+ */
+@Composable
+fun ModalEliminarUrl(
+    onConfirmar: () -> Unit,
+    onCancelar: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(PencilOverlay),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = Espaciado.xxl)
+                .clip(RoundedCornerShape(RadioBorde.xl))
+                .background(PencilModalFondo)
+                .border(
+                    width = 1.dp,
+                    color = CyberGlassBorde,
+                    shape = RoundedCornerShape(RadioBorde.xl)
+                )
+                .padding(Espaciado.xxl),
+            verticalArrangement = Arrangement.spacedBy(Espaciado.lg),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // ─── Step Indicator ───
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(Espaciado.sm),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(4.dp)
+                        .clip(RoundedCornerShape(RadioBorde.sm))
+                        .background(CyberRojo)
+                )
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(4.dp)
+                        .clip(RoundedCornerShape(RadioBorde.sm))
+                        .background(CyberGlassBorde)
+                )
+            }
+            Text(
+                text = "PASO 1 DE 2",
+                style = MaterialTheme.typography.labelMedium,
+                color = CyberTextoSecundario,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            // ─── Title ───
+            Text(
+                text = "¿Eliminar esta URL?",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold,
+                color = CyberTextoPrincipal,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            // ─── Body ───
+            Text(
+                text = "Se eliminarán todos los análisis de esta URL del historial.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = CyberTextoSecundario,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            // ─── Consecuencias List ───
+            Column(
+                verticalArrangement = Arrangement.spacedBy(Espaciado.md),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                FilaRiesgo("Se borrarán todos los reescaneos de esta URL")
+                FilaRiesgo("La acción no se puede deshacer")
+            }
+
+            Spacer(modifier = Modifier.height(Espaciado.xs))
+
+            // ─── Delete Button ───
+            Button(
+                onClick = onConfirmar,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(TamanosToque.boton),
+                shape = RoundedCornerShape(RadioBorde.lg),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = CyberRojo,
+                    contentColor = CyberFondo
+                )
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Delete,
+                    contentDescription = null,
+                    modifier = Modifier.size(TamanosIcono.estandar)
+                )
+                Spacer(modifier = Modifier.size(Espaciado.sm))
                 Text(
-                    text = "Listo",
+                    text = "Eliminar",
                     style = MaterialTheme.typography.labelLarge,
                     fontWeight = FontWeight.Bold
+                )
+            }
+
+            // ─── Cancel Button ───
+            OutlinedButton(
+                onClick = onCancelar,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(TamanosToque.boton),
+                shape = RoundedCornerShape(RadioBorde.lg),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    containerColor = CyberGlass,
+                    contentColor = CyberTextoSecundario
+                ),
+                border = androidx.compose.foundation.BorderStroke(0.dp, Color.Transparent)
+            ) {
+                Text(
+                    text = "Cancelar",
+                    style = MaterialTheme.typography.labelLarge
                 )
             }
         }

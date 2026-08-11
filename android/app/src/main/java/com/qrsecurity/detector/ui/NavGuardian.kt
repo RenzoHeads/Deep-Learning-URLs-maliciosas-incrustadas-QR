@@ -25,6 +25,7 @@ import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -34,12 +35,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import android.net.Uri
 import com.qrsecurity.detector.pipeline.PipelineViewModel
 import com.qrsecurity.detector.sesion.SessionViewModel
 import com.qrsecurity.detector.ui.theme.CyberCyan
@@ -62,6 +65,7 @@ import kotlinx.coroutines.launch
     val pipelineViewModel: PipelineViewModel,
     val datosViewModel: DatosTabsViewModel,
     val analisisAnterioresViewModel: AnalisisAnterioresViewModel,
+    val detalleVersionAntiguaViewModel: DetalleVersionAntiguaViewModel,
     val sessionViewModel: SessionViewModel,
 )
 
@@ -79,8 +83,21 @@ object Rutas {
     const val ANALISIS = "analisis"
     const val HOME = "home"
     const val HISTORIAL = "historial"
-    const val URL_SEGURA = "url_segura/{id}"
     const val DETALLE_URL = "detalle_url/{id}"
+    /**
+     * Pantalla dedicada para visualizar UNA version historica especifica
+     * de una URL (NO la ultima version — esa va por [DETALLE_URL]).
+     *
+     * Esta ruta rompe el loop DetalleUrl → AnalisisAnteriores →
+     * DetalleUrl → ... : el callback `onVerDetalle(id)` de
+     * [PantallaAnalisisAnteriores] navega a esta ruta (no a
+     * [DETALLE_URL]) porque la pantalla de DetalleUrl renderiza el
+     * boton "Ver versiones de este analisis", que re-abriria
+     * AnalisisAnteriores y formaria un ciclo infinito.
+     *
+     * Toma el id del escaneo (UUID) como parametro.
+     */
+    const val DETALLE_VERSION_ANTIGUA = "detalle_version_antigua/{id}"
     const val ANALISIS_ANTERIORES =
         "analisis_anteriores?urlLimpia={urlLimpia}&idActual={idActual}"
     const val AJUSTES = "ajustes"
@@ -114,10 +131,31 @@ fun NavGuardian() {
     val pipelineViewModel: PipelineViewModel = hiltViewModel()
     val datosViewModel: DatosTabsViewModel = hiltViewModel()
     val analisisAnterioresViewModel: AnalisisAnterioresViewModel = hiltViewModel()
+    val detalleVersionAntiguaViewModel: DetalleVersionAntiguaViewModel = hiltViewModel()
     val sessionViewModel: SessionViewModel = hiltViewModel()
 
-    val logueado = remember { sessionViewModel.estaLogueado() }
+    // Bug 3 (pieza a): logueado reactivo — antes era
+    // `remember { sessionViewModel.estaLogueado() }` (snapshot no reactivo).
+    // Tras logout, `logueado` seguia true (stale) y NavGuardian no
+    // reaccionaba. Ahora `estadoSesion` es un StateFlow<Boolean> que
+    // SesionUsuario actualiza en guardarSesion()/cerrarSesion(); al
+    // recolectarlo con collectAsStateWithLifecycle, Compose recompondra
+    // NavGuardian automaticamente cuando el estado cambie.
+    val logueado by sessionViewModel.estadoSesion.collectAsStateWithLifecycle()
     val destinoInicial = remember { calcularDestinoInicial(logueado = logueado) }
+
+    // Bug 3 (pieza b): resetear PipelineViewModel cuando la sesion pasa a
+    // false. LogoutCoordinator (Singleton) no puede inyectar
+    // PipelineViewModel (@HiltViewModel) — la UI reacciona al estado
+    // reactivo de sesion. PipelineViewModel.reiniciar() limpia
+    // _resultadoCacheado (SavedStateHandle) y poner estado en Escaneando.
+    // Esto cubre la pieza (d) desde la UI: el _resultadoCacheado del
+    // usuario anterior no sobrevive al logout.
+    LaunchedEffect(logueado) {
+        if (!logueado) {
+            pipelineViewModel.reiniciar()
+        }
+    }
 
     val backStackEntry by navController.currentBackStackEntryAsState()
     val rutaActual = backStackEntry?.destination?.route
@@ -151,6 +189,7 @@ fun NavGuardian() {
                 pipelineViewModel = pipelineViewModel,
                 datosViewModel = datosViewModel,
                 analisisAnterioresViewModel = analisisAnterioresViewModel,
+                detalleVersionAntiguaViewModel = detalleVersionAntiguaViewModel,
                 sessionViewModel = sessionViewModel,
             ),
             contexto = NavGuardianContexto(
@@ -211,10 +250,19 @@ private fun NavGuardianRutas(
         composable(Rutas.ANALISIS) {
             PantallaAnalisis(
                 onResultadoMalicioso = { idEscaneo ->
-                    navController.navigate(Rutas.DETALLE_URL.replace("{id}", idEscaneo))
+                    navController.navigate(Rutas.DETALLE_URL.replace("{id}", idEscaneo)) {
+                        popUpTo(Rutas.ANALISIS) { inclusive = true }
+                    }
                 },
                 onResultadoSeguro = { idEscaneo ->
-                    navController.navigate(Rutas.URL_SEGURA.replace("{id}", idEscaneo))
+                    navController.navigate(Rutas.DETALLE_URL.replace("{id}", idEscaneo)) {
+                        popUpTo(Rutas.ANALISIS) { inclusive = true }
+                    }
+                },
+                onVolverHome = {
+                    navController.navigate(Rutas.HOME) {
+                        popUpTo(Rutas.ANALISIS) { inclusive = true }
+                    }
                 },
                 onMensaje = contexto.mostrarMensaje,
                 pipelineViewModel = viewModels.pipelineViewModel,
@@ -231,25 +279,13 @@ private fun NavGuardianRutas(
         composable(Rutas.HISTORIAL) {
             PantallaHistorial(
                 datosViewModel = viewModels.datosViewModel,
-                onEscanear = { navController.navigate(Rutas.ANALISIS) },
+                onEscanear = {
+                    navController.navigate(Rutas.HOME) {
+                        popUpTo(Rutas.HOME) { inclusive = true }
+                    }
+                },
                 onVerDetalle = { idEscaneo ->
                     navController.navigate(Rutas.DETALLE_URL.replace("{id}", idEscaneo))
-                },
-                onMensaje = contexto.mostrarMensaje,
-            )
-        }
-        composable(
-            route = Rutas.URL_SEGURA,
-            arguments = listOf(
-                navArgument("id") { type = NavType.StringType },
-            ),
-        ) { backStackEntry ->
-            val idEscaneo = backStackEntry.arguments?.getString("id").orEmpty()
-            PantallaUrlSegura(
-                id = idEscaneo,
-                onEscanearOtro = { navController.navigate(Rutas.ANALISIS) },
-                onVerDetalle = { id ->
-                    navController.navigate(Rutas.DETALLE_URL.replace("{id}", id))
                 },
                 onMensaje = contexto.mostrarMensaje,
             )
@@ -265,12 +301,35 @@ private fun NavGuardianRutas(
                 id = idEscaneo,
                 onBack = { navController.popBackStack() },
                 onVerAnalisisAnteriores = { urlLimpia, idActual ->
+                    // BUG #8 audit fix: Uri.encode(urlLimpia) antes de
+                    // sustituirlo en la ruta. Las URLs pueden contener
+                    // caracteres reservados (':', '/', '?', '&', '#') que
+                    // rompen el parseo de navArguments si se sustituyen
+                    // literalmente. Sin encode, una urlLimpia como
+                    // "https://example.com/path?q=a&b=c" inyecta el '?' y
+                    // el '&' en la ruta, creando args fantasma o rompiendo
+                    // el match del route pattern. idActual (UUID) no
+                    // necesita encode (solo hex+guiones).
                     val ruta = Rutas.ANALISIS_ANTERIORES
-                        .replace("{urlLimpia}", urlLimpia)
+                        .replace("{urlLimpia}", Uri.encode(urlLimpia))
                         .replace("{idActual}", idActual)
                     navController.navigate(ruta)
                 },
                 onMensaje = contexto.mostrarMensaje,
+            )
+        }
+        composable(
+            route = Rutas.DETALLE_VERSION_ANTIGUA,
+            arguments = listOf(
+                navArgument("id") { type = NavType.StringType },
+            ),
+        ) { backStackEntry ->
+            val idEscaneo = backStackEntry.arguments?.getString("id").orEmpty()
+            PantallaDetalleVersionAntigua(
+                id = idEscaneo,
+                onBack = { navController.popBackStack() },
+                onMensaje = contexto.mostrarMensaje,
+                viewModel = viewModels.detalleVersionAntiguaViewModel,
             )
         }
         composable(
@@ -292,14 +351,30 @@ private fun NavGuardianRutas(
                 urlLimpia = urlLimpia,
                 idActual = idActual,
                 onVolver = { navController.popBackStack() },
+                onEscanear = {
+                    navController.navigate(Rutas.HOME) {
+                        popUpTo(Rutas.HOME) { inclusive = true }
+                    }
+                },
+                onVerDetalle = { idEscaneo ->
+                    navController.navigate(Rutas.DETALLE_VERSION_ANTIGUA.replace("{id}", idEscaneo))
+                },
                 viewModel = viewModels.analisisAnterioresViewModel,
             )
         }
         composable(Rutas.AJUSTES) {
             PantallaAjustes(
                 onCerrarSesion = {
+                    // Bug 3 (pieza b): popUpTo(0) limpia la pila COMPLETA
+                    // (todas las pantallas: HOME, HISTORIAL, DETALLE_URL,
+                    // ANALISIS_ANTERIORES, AJUSTES) antes de navegar a
+                    // LOGIN. Antes popUpTo(Rutas.HOME) { inclusive = true }
+                    // solo eliminaba HOME — si el usuario estaba en
+                    // AJUSTES habiendo venido via DETALLE_URL, esa entrada
+                    // quedaba en la pila y al volver a loguear aparecia
+                    // el detalle stale del usuario anterior.
                     navController.navigate(Rutas.LOGIN) {
-                        popUpTo(Rutas.HOME) { inclusive = true }
+                        popUpTo(0) { inclusive = true }
                     }
                 },
                 onMensaje = contexto.mostrarMensaje,

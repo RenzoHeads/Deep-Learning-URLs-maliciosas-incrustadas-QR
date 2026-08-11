@@ -169,69 +169,44 @@ class DatosTabsViewModelTest {
     @Test
     fun totalEscaneos_emiteContadorTrasInsertMultiple() = runTest(testDispatcher) {
         subscribirTodos()
-        db.escaneoDao().insertarTodos(
-            listOf(
-                EscaneoEntity(
-                    id = "e-1",
-                    urlOriginal = "https://a.example.com",
-                    urlLimpia = "a.example.com",
-                    probabilidad = 0.1f,
-                    nivelAlerta = "SEGURO",
-                    delegado = null,
-                    esMalicioso = false,
-                    creadoEnMillis = System.currentTimeMillis(),
-                    dirty = false,
-                    syncedAtMillis = System.currentTimeMillis()
-                ),
-                EscaneoEntity(
-                    id = "e-2",
-                    urlOriginal = "https://b.example.com",
-                    urlLimpia = "b.example.com",
-                    probabilidad = 0.9f,
-                    nivelAlerta = "MALICIOSO",
-                    delegado = "NNAPI",
-                    esMalicioso = true,
-                    creadoEnMillis = System.currentTimeMillis(),
-                    dirty = false,
-                    syncedAtMillis = System.currentTimeMillis()
-                )
-            )
+        // Bug 3 fix: totalEscaneos consulta urls_catalogo (cache dedup), no
+        // escaneos. Usar registrarLocal (no insertarTodos directo) para que
+        // la transaccion atomica llene ambas tablas — escaneos + urls_catalogo.
+        repoEscaneos.registrarLocal(
+            urlOriginal = "https://a.example.com",
+            urlLimpia = "a.example.com",
+            probabilidad = 0.1f,
+            nivelAlerta = "SEGURO"
+        )
+        repoEscaneos.registrarLocal(
+            urlOriginal = "https://b.example.com",
+            urlLimpia = "b.example.com",
+            probabilidad = 0.9f,
+            nivelAlerta = "MALICIOSO",
+            delegado = "NNAPI"
         )
         drenarRoomYDispatcher()
 
-        assertEquals("totalEscaneos debe emitir 2 tras insert dos escaneos", 2, viewModel.totalEscaneos.value)
+        assertEquals("totalEscaneos debe emitir 2 tras insert dos URLs unicas", 2, viewModel.totalEscaneos.value)
     }
 
     @Test
     fun amenazas_emiteContadorSoloMaliciosos() = runTest(testDispatcher) {
         subscribirTodos()
-        db.escaneoDao().insertarTodos(
-            listOf(
-                EscaneoEntity(
-                    id = "s-1",
-                    urlOriginal = "https://safe.example.com",
-                    urlLimpia = "safe.example.com",
-                    probabilidad = 0.1f,
-                    nivelAlerta = "SEGURO",
-                    delegado = null,
-                    esMalicioso = false,
-                    creadoEnMillis = System.currentTimeMillis(),
-                    dirty = false,
-                    syncedAtMillis = System.currentTimeMillis()
-                ),
-                EscaneoEntity(
-                    id = "m-1",
-                    urlOriginal = "https://mal.example.com",
-                    urlLimpia = "mal.example.com",
-                    probabilidad = 0.9f,
-                    nivelAlerta = "MALICIOSO",
-                    delegado = "NNAPI",
-                    esMalicioso = true,
-                    creadoEnMillis = System.currentTimeMillis(),
-                    dirty = false,
-                    syncedAtMillis = System.currentTimeMillis()
-                )
-            )
+        // Bug 3 fix: amenazas consulta urls_catalogo WHERE ultimoNivelAlerta =
+        // 'MALICIOSO'. Usar registrarLocal para llenar el cache dedup.
+        repoEscaneos.registrarLocal(
+            urlOriginal = "https://safe.example.com",
+            urlLimpia = "safe.example.com",
+            probabilidad = 0.1f,
+            nivelAlerta = "SEGURO"
+        )
+        repoEscaneos.registrarLocal(
+            urlOriginal = "https://mal.example.com",
+            urlLimpia = "mal.example.com",
+            probabilidad = 0.9f,
+            nivelAlerta = "MALICIOSO",
+            delegado = "NNAPI"
         )
         drenarRoomYDispatcher()
 
@@ -256,5 +231,56 @@ class DatosTabsViewModelTest {
 
         assertEquals("urlsBloqueadas debe emitir 1 tras insert", 1, viewModel.urlsBloqueadas.value.size)
         assertEquals("evil.example.com", viewModel.urlsBloqueadas.value[0].url)
+    }
+
+    @Test
+    fun filtrarHistorial_aplicaFiltroDeBloqueadasYBusquedaSinDistinguirMayusculas() {
+        val items = listOf(
+            EscaneoEntity(
+                id = "evil-1",
+                urlOriginal = "https://evil.example.com/login",
+                urlLimpia = "evil.example.com/login",
+                probabilidad = 0.99f,
+                nivelAlerta = "MALICIOSO",
+                delegado = "NNAPI",
+                esMalicioso = true,
+                creadoEnMillis = 3L,
+                dirty = false,
+                syncedAtMillis = 3L
+            ),
+            EscaneoEntity(
+                id = "evil-2",
+                urlOriginal = "https://other.example.com/login",
+                urlLimpia = "other.example.com/login",
+                probabilidad = 0.95f,
+                nivelAlerta = "MALICIOSO",
+                delegado = "NNAPI",
+                esMalicioso = true,
+                creadoEnMillis = 2L,
+                dirty = false,
+                syncedAtMillis = 2L
+            ),
+            EscaneoEntity(
+                id = "safe-1",
+                urlOriginal = "https://evil.example.com/about",
+                urlLimpia = "evil.example.com/about",
+                probabilidad = 0.01f,
+                nivelAlerta = "SEGURO",
+                delegado = null,
+                esMalicioso = false,
+                creadoEnMillis = 1L,
+                dirty = false,
+                syncedAtMillis = 1L
+            )
+        )
+
+        val result = filtrarHistorial(
+            historial = items,
+            filtro = "BLOQUEADAS",
+            busqueda = "EVIL",
+            bloqueadasUrls = setOf("evil.example.com/login", "safe.example.com")
+        )
+
+        assertEquals(listOf("evil-1"), result.map { it.id })
     }
 }
