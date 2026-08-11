@@ -21,6 +21,7 @@ from fastapi.responses import JSONResponse
 
 from app.base_datos import cerrar_pool
 from app.config import obtener_ajustes
+from app.rate_limit import RateLimitMiddleware
 from app.routers import auth, historial, bloqueadas, denuncias
 
 logger = logging.getLogger(__name__)
@@ -59,6 +60,13 @@ app.add_middleware(
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
+
+# BUG #3 fix: rate limiting middleware. Se registra DESPUES de CORS en
+# codigo → es la middleware OUTER → procesa el request ANTES que CORS.
+# Esto bloquea floods / brute-force en /auth antes de cualquier trabajo,
+# incluyendo el preflight OPTIONS. En Vercel serverless el contador es
+# por-instancia (ver rate_limit.py para caveats).
+app.add_middleware(RateLimitMiddleware)
 
 # Registrar routers
 app.include_router(auth.router)
