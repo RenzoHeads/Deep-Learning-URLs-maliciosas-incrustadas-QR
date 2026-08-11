@@ -290,19 +290,27 @@ async def existe_url(
     id_usuario: Annotated[str, Depends(verificar_token)],
     url_limpia: Annotated[str, Query(
         description="URL limpia (sin protocolo, sin www., sin / final) "
-                    "cuya existencia en el cache maestro se quiere verificar."
+                    "cuya existencia en el historial del usuario se quiere "
+                    "verificar."
     )],
 ):
-    """Verifica si una URL ya fue escaneada antes (cache maestro urls_catalogo).
+    """Verifica si una URL ya fue escaneada antes por el usuario actual.
 
-    Patrón cache+log (deduplicación): consulta SOLO el cache maestro
-    ``urls_catalogo`` (O(log n) por PK ``url_hash``), sin tocar el log
-    append-only ``historial_escaneos``. El cliente Android consulta el
-    cache local Room ``urls_catalogo`` primero (offline-first); si hay red
-    y quiere dedup cross-device, llama este endpoint.
+    Dedup per-user: consulta ``historial_escaneos`` filtrando por
+    ``id_usuario`` + ``deleted_at IS NULL``. Solo los propios escaneos
+    vivos del usuario disparan el dedup — los escaneos de otros usuarios
+    ya NO influyen.
 
-    El endpoint computa ``url_hash = SHA-256(url_limpia)`` del mismo modo
-    que el cliente Android (``HashingUrls.sha256Hex``) y busca por esa PK.
+    Antes consultaba el cache maestro global ``urls_catalogo`` (crowd-sourced
+    cross-device), pero eso provocaba que si OTRO usuario escaneaba una URL,
+    el usuario actual viera "ya escaneada X vez(es)" aunque él la hubiera
+    borrado por completo. El dedup cross-device fue retirado a favor del
+    dedup per-user, que es el comportamiento esperado por los usuarios.
+
+    El cliente Android consulta el cache local Room ``urls_catalogo``
+    primero (offline-first); si hay red, llama este endpoint para dedup
+    cross-device **del mismo usuario** (escaneos hechos en otro dispositivo
+    con la misma cuenta).
 
     Args:
         url_limpia: URL limpia (query param). El caller es responsable
@@ -310,18 +318,38 @@ async def existe_url(
 
     Returns:
         [UrlCatalogoRespuesta] con ``existe=True`` + ``url_limpia`` y
-        ``ultimo_nivel_alerta`` del último escaneo si la URL ya fue
-        escaneada, o ``existe=False`` + campos nulos si no.
+        ``ultimo_nivel_alerta`` del último escaneo vivo del usuario si
+        la URL ya fue escaneada por él, o ``existe=False`` + campos nulos
+        si no.
 
-        Nota de seguridad: el cache maestro ``urls_catalogo`` almacena
-        adicionalemente ``ultima_probabilidad``, ``ultimo_escaneo_millis``
-        y ``veces_escaneada``, pero este endpoint **no** los devuelve
-        (defense in depth — ver ``buscar_url_catalogo``).
+        Nota de seguridad: la respuesta solo expone ``existe``,
+        ``url_limpia`` (que el caller ya envió) y ``ultimo_nivel_alerta``
+        (veredicto discreto, coarse). Los campos sensibles
+        (``ultima_probabilidad``, ``ultimo_escaneo_millis``,
+        ``veces_escaneada``) no se devuelven — defense in depth.
     """
     pool = await obtener_pool()
     async with pool.acquire() as conexion:
-        fila = await buscar_url_catalogo(conexion, url_limpia)
-    return fila_a_url_catalogo(fila)
+        fila = await conexion.fetchrow(
+            """
+            SELECT url_limpia, nivel_alerta
+            FROM historial_escaneos
+            WHERE id_usuario = $1
+              AND url_limpia = $2
+              AND deleted_at IS NULL
+            ORDER BY creado_en DESC, id DESC
+            LIMIT 1
+            """,
+            id_usuario,
+            url_limpia,
+        )
+    if fila is None:
+        return UrlCatalogoRespuesta(existe=False)
+    return UrlCatalogoRespuesta(
+        existe=True,
+        url_limpia=fila["url_limpia"],
+        ultimo_nivel_alerta=fila["nivel_alerta"],
+    )
 
 
 @router.get(

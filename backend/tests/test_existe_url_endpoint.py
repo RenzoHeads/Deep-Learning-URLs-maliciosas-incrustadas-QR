@@ -1,22 +1,25 @@
 """Tests del endpoint ``GET /escaneos/existe-url``.
 
-Patrón cache+log (deduplicación): el endpoint consulta SOLO el cache maestro
-``urls_catalogo`` (O(log n) por PK ``url_hash = SHA-256(url_limpia)``) sin
-tocar el log append-only ``historial_escaneos``. El backend computa el
-mismo hash que el cliente Android (``HashingUrls.sha256Hex``).
+Dedup per-user: el endpoint consulta ``historial_escaneos`` filtrando por
+``id_usuario`` + ``deleted_at IS NULL``. Solo los propios escaneos vivos
+del usuario disparan el dedup — los escaneos de otros usuarios no influyen.
 
 Casos cubiertos:
   - URL nunca escaneada → 200 con ``existe=False`` y campos nulos.
-  - URL ya escaneada → 200 con ``existe=True`` + ``ultimo_nivel_alerta``
-    (veredicto discreto, coarse — necesario para que el cliente decida
-    si reescanear).
+  - URL ya escaneada por el usuario → 200 con ``existe=True`` +
+    ``ultimo_nivel_alerta`` (veredicto discreto, coarse — necesario para
+    que el cliente decida si reescanear).
   - Re-escanear (POST /escaneos) debe reflejarse en el next GET existe-url.
-  - URLs distintas no se confunden (hashes distintos).
+  - URLs distintas no se confunden.
+  - Borrar el único escaneo vivo → ``existe=False`` (soft-delete respeta
+    el dedup).
+  - Per-user isolation: un escaneo de OTRO usuario no disparar ``existe=True``
+    para el usuario actual.
 
 Security fix: la respuesta ya NO expone ``ultima_probabilidad``,
 ``ultimo_escaneo_millis`` ni ``veces_escaneada`` — esos campos permitían
-cross-user data leak (CWE-639 + CWE-200) porque ``urls_catalogo`` es
-global (sin ``id_usuario``). Los asserts de esos campos se eliminaron.
+cross-user data leak (CWE-639 + CWE-200). Los asserts de esos campos se
+eliminaron.
 """
 from __future__ import annotations
 
@@ -71,7 +74,7 @@ def test_existe_url_escaneada_devuelve_ultimo_resultado(client):
 
 
 def test_existe_url_refleja_reescaneo_con_nuevo_veredicto(client):
-    """Re-escanear la misma URL actualiza el cache maestro → GET refleja."""
+    """Re-escanear la misma URL actualiza → GET refleja el último veredicto."""
     # Primer escaneo: SEGURO.
     _crear_escaneo(client, _payload(url_limpia="flip.com/a",
                                     nivel="SEGURO", prob=0.05))
@@ -86,7 +89,7 @@ def test_existe_url_refleja_reescaneo_con_nuevo_veredicto(client):
 
 
 def test_existe_url_no_confunde_urls_distintas(client):
-    """URLs distintas no se cruzan: hashes distintos → entradas distintas."""
+    """URLs distintas no se cruzan: entradas distintas en el log."""
     _crear_escaneo(client, _payload(url_limpia="a.com/x", nivel="MALICIOSO", prob=0.95))
     _crear_escaneo(client, _payload(url_limpia="b.com/y", nivel="SEGURO", prob=0.05))
     a = _existe_url(client, "a.com/x")
@@ -95,15 +98,27 @@ def test_existe_url_no_confunde_urls_distintas(client):
     assert b["ultimo_nivel_alerta"] == "SEGURO"
 
 
-def test_existe_url_consulta_cache_no_log(client, store):
-    """El endpoint consulta urls_catalogo, no historial_escaneos."""
-    _crear_escaneo(client, _payload(nivel="SEGURO", prob=0.10))
-    # Vaciar el log append-only manualmente para confirmar que el endpoint
-    # NO depende de historial_escaneos.
-    store["historial_escaneos"].clear()
-    data = _existe_url(client, "example.com/foo")
-    assert data["existe"] is True, (
-        "existe-url debe consultar urls_catalogo (cache maestro), no "
-        "historial_escaneos. Si tras limpiar el log sigue existiendo, "
-        "el endpoint está consultando el cache correctamente."
+def test_existe_url_soft_delete_hace_existe_false(client, store):
+    """Borrar el único escaneo vivo → existe=False (el dedup respeta deletes).
+
+    Antes (con urls_catalogo global): borrar el escaneo del log no borraba
+    la entrada del cache maestro, así que existe-url seguía devolviendo
+    True. Ahora el endpoint consulta historial_escaneos con
+    deleted_at IS NULL, así que un soft-delete hace que la URL deja de
+    existir para el dedup.
+    """
+    escaneo = _crear_escaneo(client, _payload(url_limpia="deleteme.com/x",
+                                              nivel="SEGURO", prob=0.10))
+    # Confirmar que existe antes de borrar.
+    data_antes = _existe_url(client, "deleteme.com/x")
+    assert data_antes["existe"] is True
+    # Soft-delete via DELETE /escaneos/{id}.
+    r = client.delete(f"/escaneos/{escaneo['id']}?token_api=test-token")
+    assert r.status_code == 204
+    # Ahora ninguna fila viva → existe=False.
+    data_despues = _existe_url(client, "deleteme.com/x")
+    assert data_despues["existe"] is False, (
+        "Tras borrar el único escaneo vivo, existe-url debe devolver "
+        "existe=False. Si sigue True, el endpoint no está filtrando "
+        "deleted_at IS NULL correctamente."
     )
