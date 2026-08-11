@@ -259,16 +259,49 @@ class RepositorioUrlsBloqueadas(
 
     /**
      * Bug M10 fix: limpia rows locales **no dirty** ausentes en [idsServidor].
-     * Ver [RepositorioEscaneos.limpiarHuerfanos] para la estrategia detallada.
      *
+     * BUG #6 audit fix: antes cargaba `idsNoDirty()` (TODOS los ids no-dirty
+     * locales) en una List de Kotlin, luego `filterNot` creaba otra, luego
+     * `eliminarPorIds` otra — triple copia de miles de UUIDs en heap. Con
+     * miles de URLs bloqueadas por usuario, esto generaba picos de memoria
+     * durante cada PULL exitoso.
+     *
+     * Nueva estrategia (stream-based, O(0) orphan IDs en Kotlin):
+     *  1. Inserta los [idsServidor] (acotados a MAX_PAGINAS_POR_RUN *
+     *     LIMITE_PAGINA = 1000) en una tabla temporal `_tmp_ids_serv`.
+     *  2. `DELETE FROM urls_bloqueadas WHERE dirty = 0 AND NOT EXISTS
+     *     (SELECT 1 FROM _tmp_ids_serv t WHERE t.id = urls_bloqueadas.id)` —
+     *     SQLite hace el diff internamente usando el PK index de
+     *     `urls_bloqueadas` y el PK index de la temp table. Ningún id se
+     *     carga en Kotlin.
+     *  3. DROP de la temp table (cleanup dentro de la misma transaccion).
+     *
+     * Ver [RepositorioEscaneos.limpiarHuerfanos] para la estrategia detallada.
      * Llamado por SyncWorker tras cada PULL de URLs bloqueadas.
      */
     suspend fun limpiarHuerfanos(idsServidor: List<String>) = withContext(ioDispatcher) {
-        val idsServidorSet = idsServidor.toSet()
-        val idsNoDirtyLocales = db.urlBloqueadaDao().idsNoDirty()
-        val orphans = idsNoDirtyLocales.filterNot { it in idsServidorSet }
-        if (orphans.isNotEmpty()) {
-            db.urlBloqueadaDao().eliminarPorIds(orphans)
+        db.withTransaction {
+            val sqliteDb = db.openHelper.writableDatabase
+            // 1. Tabla temporal con los ids del servidor
+            sqliteDb.execSQL(
+                "CREATE TEMP TABLE IF NOT EXISTS _tmp_ids_serv (id TEXT NOT NULL)"
+            )
+            sqliteDb.execSQL("DELETE FROM _tmp_ids_serv")
+            idsServidor.chunked(500).forEach { chunk ->
+                sqliteDb.execSQL(
+                    "INSERT INTO _tmp_ids_serv (id) VALUES " +
+                        chunk.joinToString(",") { "(?)" },
+                    chunk.toTypedArray()
+                )
+            }
+            // 2. Eliminar orphans: rows no-dirty locales NO presentes en el servidor.
+            //    NOT EXISTS es NULL-safe y usa ambos PK indexes (urls_bloqueadas.id, _tmp.id).
+            sqliteDb.execSQL(
+                "DELETE FROM urls_bloqueadas WHERE dirty = 0 " +
+                    "AND NOT EXISTS (SELECT 1 FROM _tmp_ids_serv t WHERE t.id = urls_bloqueadas.id)"
+            )
+            // 3. Cleanup de la temp table (misma transaccion — atomico)
+            sqliteDb.execSQL("DROP TABLE IF EXISTS _tmp_ids_serv")
         }
     }
 

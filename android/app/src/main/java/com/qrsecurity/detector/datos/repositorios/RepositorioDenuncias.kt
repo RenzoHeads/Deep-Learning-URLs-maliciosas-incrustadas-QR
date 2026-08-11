@@ -195,16 +195,48 @@ class RepositorioDenuncias(
 
     /**
      * Bug M10 fix: limpia rows locales **no dirty** ausentes en [idsServidor].
-     * Ver [RepositorioEscaneos.limpiarHuerfanos] para la estrategia detallada.
      *
+     * BUG #6 audit fix: antes cargaba `idsNoDirty()` (TODOS los ids no-dirty
+     * locales) en una List de Kotlin, luego `filterNot` creaba otra, luego
+     * `eliminarPorIds` otra — triple copia de miles de UUIDs en heap. Con
+     * miles de denuncias por usuario, esto generaba picos de memoria durante
+     * cada PULL exitoso.
+     *
+     * Nueva estrategia (stream-based, O(0) orphan IDs en Kotlin):
+     *  1. Inserta los [idsServidor] (acotados a MAX_PAGINAS_POR_RUN *
+     *     LIMITE_PAGINA = 1000) en una tabla temporal `_tmp_ids_serv`.
+     *  2. `DELETE FROM denuncias WHERE dirty = 0 AND NOT EXISTS
+     *     (SELECT 1 FROM _tmp_ids_serv t WHERE t.id = denuncias.id)` —
+     *     SQLite hace el diff internamente usando el PK index de `denuncias`
+     *     y el PK index de la temp table. Ningún id se carga en Kotlin.
+     *  3. DROP de la temp table (cleanup dentro de la misma transaccion).
+     *
+     * Ver [RepositorioEscaneos.limpiarHuerfanos] para la estrategia detallada.
      * Llamado por SyncWorker tras cada PULL de denuncias.
      */
     suspend fun limpiarHuerfanos(idsServidor: List<String>) = withContext(ioDispatcher) {
-        val idsServidorSet = idsServidor.toSet()
-        val idsNoDirtyLocales = db.denunciaDao().idsNoDirty()
-        val orphans = idsNoDirtyLocales.filterNot { it in idsServidorSet }
-        if (orphans.isNotEmpty()) {
-            db.denunciaDao().eliminarPorIds(orphans)
+        db.withTransaction {
+            val sqliteDb = db.openHelper.writableDatabase
+            // 1. Tabla temporal con los ids del servidor
+            sqliteDb.execSQL(
+                "CREATE TEMP TABLE IF NOT EXISTS _tmp_ids_serv (id TEXT NOT NULL)"
+            )
+            sqliteDb.execSQL("DELETE FROM _tmp_ids_serv")
+            idsServidor.chunked(500).forEach { chunk ->
+                sqliteDb.execSQL(
+                    "INSERT INTO _tmp_ids_serv (id) VALUES " +
+                        chunk.joinToString(",") { "(?)" },
+                    chunk.toTypedArray()
+                )
+            }
+            // 2. Eliminar orphans: rows no-dirty locales NO presentes en el servidor.
+            //    NOT EXISTS es NULL-safe y usa ambos PK indexes (denuncias.id, _tmp.id).
+            sqliteDb.execSQL(
+                "DELETE FROM denuncias WHERE dirty = 0 " +
+                    "AND NOT EXISTS (SELECT 1 FROM _tmp_ids_serv t WHERE t.id = denuncias.id)"
+            )
+            // 3. Cleanup de la temp table (misma transaccion — atomico)
+            sqliteDb.execSQL("DROP TABLE IF EXISTS _tmp_ids_serv")
         }
     }
 
@@ -412,7 +444,14 @@ private fun Denuncia.aEntidad(syncedAt: Long): DenunciaEntity {
     val creadoMillis = try {
         Instant.parse(creadoEn).toEpochMilli()
     } catch (e: Exception) {
-        System.currentTimeMillis()  // fallback si ISO parse falla
+        // BUG-M4 fix: antes `System.currentTimeMillis()` dominaba el
+        // `creadoEnMillis` en cualquier parseo ISO fallido (timestamp
+        // ISO malformado en el backend, clock skew, o campo null). Al
+        // marcar como Long.MIN_VALUE preservamos la señal explicita de
+        // "valor desconocido" — los ordenamientos UI por createdAt
+        // envian estas filas al fondo, y los dedup/checks de antiguedad
+        // las tratan como "sin timestamp valido" en vez de asumir "ahora".
+        Long.MIN_VALUE
     }
     return DenunciaEntity(
         id = id,
