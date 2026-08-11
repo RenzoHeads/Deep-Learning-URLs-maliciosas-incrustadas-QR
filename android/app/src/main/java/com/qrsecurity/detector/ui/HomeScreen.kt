@@ -22,6 +22,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -54,10 +55,12 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.qrsecurity.detector.camera.ModuloCamara
+import com.qrsecurity.detector.pipeline.Pipeline
 import com.qrsecurity.detector.pipeline.PipelineViewModel
 import com.qrsecurity.detector.ui.theme.CyberCyan
 import com.qrsecurity.detector.ui.theme.CyberFondo
 import com.qrsecurity.detector.ui.theme.CyberGlass
+import com.qrsecurity.detector.ui.theme.CyberGlassAlto
 import com.qrsecurity.detector.ui.theme.CyberTextoPrincipal
 import com.qrsecurity.detector.ui.theme.CyberTextoSecundario
 import com.qrsecurity.detector.ui.theme.Elevacion
@@ -104,6 +107,14 @@ fun PantallaHome(
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
     val analizando by pipelineViewModel.analizando.collectAsStateWithLifecycle()
+    // Bug B fix: observar el estado del pipeline para mostrar el dialogo
+    // de "URL ya escaneada" (UrlDuplicada) sobre el viewfinder de la camara
+    // viva en HomeScreen, en vez de sobre AnalisisScreen (que no tiene
+    // camara). El estado persiste en el StateFlow compartido a nivel
+    // NavGuardian; AnalisisScreen navega de vuelta a HOME sin reiniciar el
+    // pipeline cuando detecta UrlDuplicada, para que este LaunchedEffect lo
+    // capte aqui.
+    val estado by pipelineViewModel.estado.collectAsStateWithLifecycle()
     val totalEscaneos by datosViewModel.totalEscaneos.collectAsStateWithLifecycle()
     val amenazas by datosViewModel.amenazas.collectAsStateWithLifecycle()
 
@@ -111,12 +122,35 @@ fun PantallaHome(
     var yaNavegoAnalisis by rememberSaveable { mutableStateOf(false) }
 
     // ── Navegacion a AnalisisScreen cuando inicia el analisis ──
-    // Rising-edge guard: solo navega en la transicion false→true de
-    // `analizando`. Sin este guard, al volver a HOME con un analisis
-    // todavia en vuelo, `analizando=true` re-dispararia onEscanear()
-    // y crearia un loop de navegacion HOME→ANALISIS→HOME→...
-    LaunchedEffect(analizando) {
-        if (analizando && !yaNavegoAnalisis) {
+    // Rising-edge guard: solo navega cuando el pipeline ha pasado el
+    // dedup check (estado != Escaneando/Inicializando/UrlDuplicada).
+    //
+    // Bug F fix: antes, navegabamos cuando `analizando=true` (set ANTES
+    // del dedup check). Para URLs duplicadas, `analizando` era true
+    // brevemente → navegabamos a AnalisisScreen → el pipeline emitia
+    // `UrlDuplicada` → AnalisisScreen rebote a HomeScreen. El usuario
+    // veia "Analizando..." brevemente detras del modal.
+    //
+    // Ahora: navegamos SOLO cuando `analizando=true` AND el estado
+    // indica que el dedup check ya termino:
+    //  - `Analizando` → inference en progreso (URL nueva o forzar)
+    //  - `ResultadoListo` → inference completada o NoUrl (path rapido)
+    //  - `Error` → error durante extraccion/inference
+    // NO navegamos cuando:
+    //  - `Escaneando` → dedup check en progreso (esperar)
+    //  - `Inicializando` → pipeline cargando (esperar)
+    //  - `UrlDuplicada` → mostrar dialogo sobre camara (fix Bug B)
+    //
+    // LaunchedEffect(analizando, estado) re-corre cuando cualquiera de
+    // los dos cambia, cubriendo la race: `analizando` va true → estado
+    // es Escaneando → no navega → estado cambia a Analizando/ResultadoListo/
+    // Error → effect re-corre → navega.
+    LaunchedEffect(analizando, estado) {
+        if (analizando && !yaNavegoAnalisis &&
+            estado !is Pipeline.Estado.Escaneando &&
+            estado !is Pipeline.Estado.Inicializando &&
+            estado !is Pipeline.Estado.UrlDuplicada
+        ) {
             yaNavegoAnalisis = true
             onEscanear()
         } else if (!analizando) {
@@ -142,9 +176,15 @@ fun PantallaHome(
     }
 
     // ── Refresh del callback QR (H1 fix — evita stale callbacks) ──
-    LaunchedEffect(analizando) {
+    // Bug B: gatear tambien contra `estado is UrlDuplicada` — mientras el
+    // dialogo "URL ya escaneada" esta visible, la camara sigue viva debajo
+    // del dialogo y podria re-detectar el mismo QR, re-disparar analizar()
+    // y sobrescribir el estado UrlDuplicada con un nuevo Escaneando → loop.
+    // El gate previene nuevas detecciones hasta que el usuario confirma o
+    // cancela el reescaneo (ambos limpian el estado UrlDuplicada).
+    LaunchedEffect(analizando, estado) {
         moduloCamara?.setOnQrDetectado { payload ->
-            if (!analizando) {
+            if (!analizando && estado !is Pipeline.Estado.UrlDuplicada) {
                 scope.launch { pipelineViewModel.analizar(payload) }
             }
         }
@@ -155,8 +195,8 @@ fun PantallaHome(
             .fillMaxSize()
             .background(CyberFondo)
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = Espaciado.xxl, vertical = Espaciado.xxxl),
-        verticalArrangement = Arrangement.spacedBy(Espaciado.xxl)
+            .padding(horizontal = Espaciado.lg, vertical = Espaciado.lg),
+        verticalArrangement = Arrangement.spacedBy(Espaciado.lg)
     ) {
         // ─── Brand header ───
         Row(
@@ -226,7 +266,7 @@ fun PantallaHome(
                 contentDescription = null,
                 tint = Color.White.copy(alpha = 0.12f),
                 modifier = Modifier
-                    .size(120.dp)
+                    .size(TamanosIcono.heroContenedor)
                     .align(Alignment.Center)
             )
 
@@ -266,30 +306,6 @@ fun PantallaHome(
             textAlign = TextAlign.Center
         )
 
-        // ─── Scan button ───
-        Button(
-            onClick = onEscanear,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(TamanosToque.boton),
-            shape = RoundedCornerShape(RadioBorde.lg),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = CyberCyan,
-                contentColor = CyberFondo
-            )
-        ) {
-            Icon(
-                imageVector = Icons.Filled.QrCodeScanner,
-                contentDescription = null,
-                modifier = Modifier.size(TamanosIcono.estandar)
-            )
-            Spacer(modifier = Modifier.width(Espaciado.sm))
-            Text(
-                text = "Escanear",
-                style = MaterialTheme.typography.labelLarge
-            )
-        }
-
         // ─── Stats row ───
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -318,6 +334,65 @@ fun PantallaHome(
                 color = CyberCyan
             )
         }
+    }
+
+    // ── Bug B: Dialogo "URL ya escaneada" sobre el viewfinder de la camara ──
+    //
+    // El escaneo fisico ocurre en HomeScreen (camara viva). Cuando el
+    // pipeline emite [Pipeline.Estado.UrlDuplicada], el dialogo debe aparecer
+    // aqui — sobre el viewfinder — para que el usuario decida reescanear o
+    // cancelar sin perder el contexto visual del codigo QR que tiene enfrente.
+    //
+    // Antes (pre-fix), AnalisisScreen renderizaba este dialogo, pero la
+    // camara se detiene al navegar a ANALISIS (ON_PAUSE → moduloCamara.detener())
+    // — el usuario veia el dialogo sobre una pantalla de "Analizando..."
+    // sin el feed de la camara, perdiendo el punto de referencia del QR.
+    //
+    // Flujo post-fix:
+    //  1. Camara detecta QR → pipelineViewModel.analizar(payload) →
+    //     analizando=true → LaunchedEffect navega a ANALISIS.
+    //  2. Pipeline descubre que TODAS las URLs ya estan en urls_catalogo →
+    //     emite UrlDuplicada. analizando transiciona a false.
+    //  3. AnalisisScreen.LaunchedEffect(estado) capta UrlDuplicada →
+    //     onVolverHome() (sin reiniciar el pipeline) → vuelve a HOME.
+    //  4. HomeScreen recompone con estado=UrlDuplicada → el AlertDialog
+    //     aparece aqui, sobre el viewfinder (la camara se reanuda en
+    //     ON_RESUME al volver a HOME).
+    //  5. Usuario confirma → confirmarReescaneo() → analizar(forzar=true)
+    //     → analizando=true → navega a ANALISIS para mostrar progreso.
+    //  6. Usuario cancela → cancelarReescaneo() → reinicia pipeline a
+    //     Escaneando → el dialogo desaparece (estado != UrlDuplicada).
+    val duplicada = estado as? Pipeline.Estado.UrlDuplicada
+    if (duplicada != null) {
+        AlertDialog(
+            onDismissRequest = { pipelineViewModel.cancelarReescaneo() },
+            containerColor = CyberGlassAlto,
+            titleContentColor = CyberTextoPrincipal,
+            textContentColor = CyberTextoSecundario,
+            shape = RoundedCornerShape(RadioBorde.lg),
+            title = { Text("URL ya escaneada") },
+            text = {
+                Text(
+                    text = "Esta URL ya fue escaneada " +
+                        "${duplicada.vecesEscaneadaMaxima} vez(es). " +
+                        "\u00bfDeseas reescanearla de todas formas?"
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    scope.launch { pipelineViewModel.confirmarReescaneo() }
+                }) {
+                    Text("Reescanear", color = CyberCyan)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    pipelineViewModel.cancelarReescaneo()
+                }) {
+                    Text("Cancelar", color = CyberTextoSecundario)
+                }
+            }
+        )
     }
 }
 

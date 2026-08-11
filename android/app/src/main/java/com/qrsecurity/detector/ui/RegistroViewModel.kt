@@ -96,6 +96,19 @@ class RegistroViewModel @Inject constructor(
             }
             return
         }
+        // BUG-M5 fix: validacion de formato de correo en el cliente.
+        // Antes, un correo malformado (p.ej. "abc" o "abc@@def") llegaba
+        // al backend y devolvia 400 tras ~1-3 s de red. Rechazamos rapido
+        // con un patron RFC-lite (algo@algo.algo) — el backend sigue
+        // haciendo validacion estricta, este check solo filtra obviously
+        // broken inputs.
+        val patronEmail = Regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")
+        if (!patronEmail.matches(correo)) {
+            viewModelScope.launch {
+                _eventos.send(RegistroEvento.Error("El correo no tiene un formato valido"))
+            }
+            return
+        }
         if (password != confirmarPassword) {
             viewModelScope.launch {
                 _eventos.send(RegistroEvento.Error("Las contrasenas no coinciden"))

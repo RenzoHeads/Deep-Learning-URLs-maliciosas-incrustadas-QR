@@ -3,12 +3,15 @@ package com.qrsecurity.detector.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.qrsecurity.detector.datos.sync.MediadorSincronizacion
+import com.qrsecurity.detector.sesion.LogoutCoordinator
 import com.qrsecurity.detector.sesion.SesionUsuario
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -34,6 +37,17 @@ sealed interface AjustesAction {
 }
 
 /**
+ * Eventos one-shot emitidos por el VM hacia la UI (patron Channel + receiveAsFlow).
+ *
+ * - [LogoutCompletado]: el logout (limpieza completa via [LogoutCoordinator])
+ *   termino; la UI puede navegar al login con seguridad de que DB, cursores,
+ *   prefs y SyncWorker quedaron en estado consistente.
+ */
+sealed interface AjustesEvento {
+    data object LogoutCompletado : AjustesEvento
+}
+
+/**
  * ViewModel para la pantalla de Ajustes.
  *
  * F2.6: nueva. Muesta la informacion del usuario (nombre + correo desde
@@ -48,10 +62,14 @@ sealed interface AjustesAction {
 @HiltViewModel
 class AjustesViewModel @Inject constructor(
     private val sesionUsuario: SesionUsuario,
-    private val mediadorSincronizacion: MediadorSincronizacion
+    private val mediadorSincronizacion: MediadorSincronizacion,
+    private val logoutCoordinator: LogoutCoordinator
 ) : ViewModel() {
 
     private val _infoUsuario = MutableStateFlow(AjustesUiState())
+
+    private val _eventos = Channel<AjustesEvento>(Channel.BUFFERED)
+    val eventos = _eventos.receiveAsFlow()
 
     /**
      * Estado de UI combinado: info del usuario (snapshot) + sync (reactivo).
@@ -100,7 +118,19 @@ class AjustesViewModel @Inject constructor(
 
     private fun cerrarSesion() {
         viewModelScope.launch {
-            sesionUsuario.cerrarSesion()
+            // LogoutCoordinator.logout() hace la limpieza COMPLETA:
+            // - sesionUsuario.cerrarSesion() (borra token)
+            // - clearAllTables() (vacia Room, incluida sync_state con cursores)
+            // - reset PREFS_SYNC.KEY_INITIAL_SYNC_COMPLETED = false
+            // - reset PREFS_SYNC.KEY_ULTIMO_SYNC = 0L
+            // - cancela SyncWorker encolado
+            // - limpia cache del Pipeline
+            // Esto garantiza que el siguiente login dispare sync incremental
+            // completo (DB vacia + cursor reseteado -> backend envia todo el
+            // historial). Antes solo se borraba el token, dejando cursores
+            // avanzados que hacian que el backend respondiera "no hay cambios".
+            logoutCoordinator.logout()
+            _eventos.send(AjustesEvento.LogoutCompletado)
         }
     }
 

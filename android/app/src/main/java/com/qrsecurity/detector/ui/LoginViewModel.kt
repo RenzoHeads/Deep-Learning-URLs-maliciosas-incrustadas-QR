@@ -102,6 +102,19 @@ class LoginViewModel @Inject constructor(
         password: String
     ) {
         if (_uiState.value.procesando) return
+
+        // BUG-M5 fix: validacion local antes de gastar red/timeout.
+        // Antes, campos vacios llegaban al backend que devolvia 400/422
+        // (o peor, 401 si el usuario era blank pero la password NO) tras
+        // ~1-3 s de espera — UX pobre y request inutil. Ahora fallamos
+        // rapido en el cliente con un mensaje claro.
+        if (nombreUsuario.isBlank() || password.isBlank()) {
+            viewModelScope.launch {
+                _eventos.send(LoginEvento.Error("Completa todos los campos"))
+            }
+            return
+        }
+
         _uiState.update { it.copy(procesando = true) }
         viewModelScope.launch {
             try {

@@ -118,8 +118,8 @@ fun PantallaLogin(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = Espaciado.xxl, vertical = Espaciado.xxxl),
-        verticalArrangement = Arrangement.spacedBy(Espaciado.xxl)
+            .padding(horizontal = Espaciado.lg, vertical = Espaciado.lg),
+        verticalArrangement = Arrangement.spacedBy(Espaciado.lg)
     ) {
         // ─── Brand Intro ───
         Column(verticalArrangement = Arrangement.spacedBy(Espaciado.md)) {
@@ -287,7 +287,7 @@ fun PantallaLogin(
                 ) {
                     if (uiState.procesando) {
                         CircularProgressIndicator(
-                            modifier = Modifier.size(24.dp),
+                            modifier = Modifier.size(TamanosIcono.estandar),
                             color = CyberFondo,
                             strokeWidth = 2.dp
                         )

@@ -34,6 +34,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -86,12 +87,26 @@ fun PantallaAjustes(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     var escaneoAutomatico by rememberSaveable { mutableStateOf(true) }
 
+    // Escucha eventos one-shot del VM. Solo navega al login cuando el
+    // logout completo (LogoutCoordinator: clearAllTables + reset cursores
+    // + prefs + cancel work + clear cache) ha terminado. Antes se llamaba
+    // onCerrarSesion() en paralelo con viewModel.onAction(CerrarSesion),
+    // lo que navegaba ANTES de que la limpieza completara, dejando DB,
+    // cursores y SyncWorker en estado inconsistente.
+    LaunchedEffect(Unit) {
+        viewModel.eventos.collect { evento ->
+            when (evento) {
+                AjustesEvento.LogoutCompletado -> onCerrarSesion()
+            }
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(CyberFondo)
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = Espaciado.xl, vertical = Espaciado.xxxl),
+            .padding(horizontal = Espaciado.lg, vertical = Espaciado.lg),
         verticalArrangement = Arrangement.spacedBy(Espaciado.lg)
     ) {
         // --- Header ---
@@ -171,8 +186,10 @@ fun PantallaAjustes(
         // --- Cerrar sesion ---
         Button(
             onClick = {
+                // Solo dispara el logout en el VM. La navegacion al login
+                // la dispara el LaunchedEffect cuando llega
+                // AjustesEvento.LogoutCompletado (tras limpieza completa).
                 viewModel.onAction(AjustesAction.CerrarSesion)
-                onCerrarSesion()
             },
             modifier = Modifier
                 .fillMaxWidth()
