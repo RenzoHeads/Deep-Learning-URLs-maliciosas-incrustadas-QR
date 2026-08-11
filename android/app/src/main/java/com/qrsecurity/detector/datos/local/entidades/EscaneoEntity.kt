@@ -24,12 +24,31 @@ import kotlinx.serialization.Serializable
  * Indices:
  *   - creadoEnMillis DESC: ordering del historial
  *   - dirty parcial: sync engine busca rows pendientes
+ *   - urlLimpia: lookup de dedup (AnalisisAnteriores por URL, urls_catalogo
+ *     cross-check). BUG #4 audit fix — sin este indice, un SELECT ... WHERE
+ *     urlLimpia = ? sobre miles de filas hace full table scan.
+ *   - (urlLimpia, creadoEnMillis, id) compuesto: D-2 audit fix — las queries
+ *     de deduplicacion `observarTodosUnicos / observarSegurosUnicos /
+ *     observarMaliciososUnicos` buscan la ultima version de cada URL via
+ *     subquery escalar ORDER BY creadoEnMillis DESC, id DESC LIMIT 1. Sin
+ *     indice compuesto, SQLite solo puede usar idx_escaneos_urlLimpia para
+ *     localizar la particion, pero debe escanear todas sus filas (hasta K
+ *     rescansos de la misma URL) ordenando en memoria. Con el compuesto, el
+ *     seek a (urlLimpia=?, *) + reverse-scan indexado obtiene la ultima
+ *     fila en O(log n). Con 2 URLs escaneadas 10.000 veces cada una = 20.000
+ *     filas, se pasa de O(N^2) = ~4*10^8 ops a O(N log N) = ~3*10^5 ops.
  */
 @Entity(
     tableName = "escaneos",
     indices = [
         Index(value = ["creadoEnMillis"], name = "idx_escaneos_creadoEnMillis_desc"),
-        Index(value = ["dirty"], name = "idx_escaneos_dirty")
+        Index(value = ["dirty"], name = "idx_escaneos_dirty"),
+        Index(value = ["urlLimpia"], name = "idx_escaneos_urlLimpia"),
+        // D-2 audit fix — subqueries de dedup buscan la ultima version de
+        // cada URL. El orden de columnas sigue la selectividad + el patron
+        // de acceso de `observarTodosUnicos` (seek urlLimpia = ?, reverse
+        // scan por (creadoEnMillis, id) DESC). Idempotente via migration v7->v8.
+        Index(value = ["urlLimpia", "creadoEnMillis", "id"], name = "idx_escaneos_dedup")
     ]
 )
 @Serializable

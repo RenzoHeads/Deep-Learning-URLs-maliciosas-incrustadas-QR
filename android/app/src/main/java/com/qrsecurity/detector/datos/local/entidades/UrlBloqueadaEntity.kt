@@ -22,7 +22,13 @@ import kotlinx.serialization.Serializable
         Index(value = ["dirty"], name = "idx_urls_bloqueadas_dirty"),
         // Hot lookup path: DenunciarScreen verifica si una URL ya esta bloqueada
         // antes de ofrecer la accion. Sin este indice cada check es full table scan.
-        Index(value = ["url"], name = "idx_urls_bloqueadas_url")
+        Index(value = ["url"], name = "idx_urls_bloqueadas_url"),
+        // D-6 audit fix — observarTodos() ordena por creadoEnMillis DESC. Sin
+        // indice, SQLite hace filesort (full table scan + sort) en cada
+        // emision del Flow. Con M URLs bloqueadas y N re-emit del Flow, coste
+        // era O(M log M) por emision vs. O(M) index walk ahora. Idempotente
+        // via migration v7->v8.
+        Index(value = ["creadoEnMillis"], name = "idx_urls_bloqueadas_creadoEnMillis")
     ]
 )
 @Serializable
