@@ -167,15 +167,19 @@ class CacheResultados(
      */
     fun obtenerOActualizar(
         urlLimpia: String,
+        forzar: Boolean = false,
         calcular: () -> EntradaCache
     ): EntradaCache {
         // Primera verificacion: seccion critica corta. Aplica la mismo logica TTL
         // que [obtener] (entrada expirada -> expulsar y re-computar), pero sin
         // anidar otra `withLock` (reentrancia innecesaria): se opera directo sobre
         // [mapaInterno] bajo el candado actual.
+        // Si [forzar] es true (re-escaneo manual del usuario), saltamos el cache
+        // get: queremos re-ejecutar la inferencia aunque la entrada este fresca,
+        // porque el usuario pidio explicitamente volver a analizar.
         candado.withLock {
             val existente = mapaInterno[urlLimpia]
-            if (existente != null) {
+            if (existente != null && !forzar) {
                 if (reloj() - existente.timestampMs > TTL_MS) {
                     mapaInterno.remove(urlLimpia)
                     // miss: cae al bloque de calculo fuera del lock.
@@ -192,11 +196,13 @@ class CacheResultados(
         // Segunda verificacion + insercion bajo el candado: si otra corutina gano la
         // carrera mientras esta calculaba `nueva`, descartamos `nueva` y devolvemos
         // la existente (winner-takes-all). Solo si sigue ausente insertamos la nueva.
+        // Con [forzar]=true sobreescribimos la entrada existente con el nuevo
+        // resultado de la re-inferencia (no descartamos [nueva]).
         candado.withLock {
             val existente = mapaInterno[urlLimpia]
             // Re-aplica TTL: si la entrada existente expiro entre la primera y la
             // segunda verificacion, tratala como ausente e inserta la nueva.
-            if (existente != null && reloj() - existente.timestampMs <= TTL_MS) {
+            if (existente != null && !forzar && reloj() - existente.timestampMs <= TTL_MS) {
                 return existente
             }
             mapaInterno[urlLimpia] = nueva

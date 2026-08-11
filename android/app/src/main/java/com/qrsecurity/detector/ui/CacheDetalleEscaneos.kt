@@ -53,9 +53,31 @@ class CacheDetalleEscaneos @Inject constructor() {
     /**
      * Guarda (o actualiza si ya existia) el estado [estado] en el cache,
      * indexado por `estado.escaneo.id`.
+     *
+     * BUG-M2 fix: eviccion LRU por orden de insercion. Antes el cache
+     * crecia sin limite — cada id de escaneo visitado en la sesion
+     * acumulaba una entrada en `[_cache]`, y en una sesion larga ( usuario
+     * que navega muchos detalles) el mapa llegaba a cientos de entradas,
+     * cada una reteniendo un [DetalleUrlUiState.Cargado] con sus flags
+     * derivados. Aunque cada entrada es pequena (~bytes), el conjunto no
+     * tenia techo y sobrevivia al scope de la pantalla (Singleton app-
+     * level). Ahora, tras cada insercion, si el tamano supera
+     * [MAX_ENTRADAS], se elimina la entrada mas antigua (first key del
+     * LinkedHashMap que produce el operador `+` sobre Map en Kotlin).
      */
     fun guardar(estado: DetalleUrlUiState.Cargado) {
-        _cache.update { it + (estado.escaneo.id to estado) }
+        _cache.update {
+            val nuevoMapa = it + (estado.escaneo.id to estado)
+            if (nuevoMapa.size > MAX_ENTRADAS) {
+                // LinkedHashMap preserva orden de insercion; la primera
+                // entrada es la mas antigua. Eliminamos solo una entrada
+                // por insercion (no evalua todo excedente).
+                val llaveAntigua = nuevoMapa.keys.first()
+                nuevoMapa - llaveAntigua
+            } else {
+                nuevoMapa
+            }
+        }
     }
 
     /**
@@ -76,5 +98,36 @@ class CacheDetalleEscaneos @Inject constructor() {
             }
             if (anyChange) nuevo else map
         }
+    }
+
+    /**
+     * Elimina una entrada del cache por id. Usado por
+     * [DetalleUrlViewModel.eliminarUrl] tras borrar una URL del historial:
+     * el id ya no existe en Room, asi que el cache debe invalidarse para
+     * que una re-entrada al detalle (back, deep link) muestre
+     * [DetalleUrlUiState.NoEncontrado] en lugar de un [Cargado] stale.
+     */
+    fun invalidar(id: String) {
+        _cache.update { it - id }
+    }
+
+    /**
+     * Vacía completamente el cache. Llamar desde
+     * [com.qrsecurity.detector.sesion.LogoutCoordinator.logout] para
+     * prevenir fuga cross-user: [CacheDetalleEscaneos] es `@Singleton`
+     * (alcance app), asi que sin esta llamada, al cerrar sesion y volver
+     * a loguear (otro usuario o el mismo), el detalle de un escaneo
+     * apareceria "pre-cargado" con [DetalleUrlUiState.Cargado] stale del
+     * usuario anterior.
+     *
+     * Bug 3 fix (pieza c).
+     */
+    fun limpiar() {
+        _cache.update { emptyMap() }
+    }
+
+    companion object {
+        /** Numero maximo de estados de detalle cacheados por sesion (BUG-M2 fix). */
+        const val MAX_ENTRADAS = 20
     }
 }

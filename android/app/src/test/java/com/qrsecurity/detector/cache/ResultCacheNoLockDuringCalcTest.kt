@@ -88,7 +88,7 @@ class ResultCacheNoLockDuringCalcTest {
         val resultadoHiloA = arrayOfNulls<EntradaCache>(1)
         val hiloATermino = CountDownLatch(1)
         val hiloA = Thread {
-            resultadoHiloA[0] = cache.obtenerOActualizar(urlX, mock)
+            resultadoHiloA[0] = cache.obtenerOActualizar(urlX, calcular = mock)
             hiloATermino.countDown()
         }
         hiloA.isDaemon = true
