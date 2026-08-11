@@ -181,6 +181,17 @@ class FakeConnection:
         ge_conds: list[tuple[str, str, Any]] = []
         keyset_conds: list[tuple[str, Any, str, Any]] = []
 
+        # Strip SET clause from UPDATE statements so that `col = $N` in SET
+        # is not mistaken for a WHERE equality condition. The SET clause
+        # lives between `SET` and `WHERE` (case-insensitive, DOTALL).
+        m_set_strip = re.search(
+            r"\bSET\b\s+(.+?)\s+\bWHERE\b",
+            sql,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if m_set_strip:
+            sql = sql[: m_set_strip.start()] + " " + sql[m_set_strip.end():]
+
         # Bug A1 fix: keyset pagination — `(updated_at > $N OR (updated_at = $N
         # AND id::text > $M))`. Detectamos el patron (con prefijo de tabla
         # opcional, ej. `d.updated_at`) y lo quitamos del SQL para que eq/ge
@@ -552,7 +563,28 @@ class FakeConnection:
                     # razon update handled separately via RETURNING path
                     updated += 1
                 else:
-                    # Generic UPDATE — apply SET col = $N where parseable.
+                    # Generic UPDATE — parse and apply SET col = $N / col = now()
+                    # (usado por recompute_url_catalogo_after_delete para
+                    # actualizar veces_escaneada, ultimo_nivel_alerta, etc.).
+                    m_set = re.search(
+                        r"SET\s+(.+?)\s+WHERE",
+                        sql,
+                        flags=re.IGNORECASE | re.DOTALL,
+                    )
+                    if m_set:
+                        set_clause = m_set.group(1)
+                        for cm in re.finditer(
+                            r"([\w_]+)\s*=\s*\$(\d+)", set_clause
+                        ):
+                            col, idx = cm.group(1).lower(), int(cm.group(2))
+                            if 1 <= idx <= len(params):
+                                r[col] = params[idx - 1]
+                        for cm in re.finditer(
+                            r"([\w_]+)\s*=\s*now\s*\(\s*\)",
+                            set_clause,
+                            flags=re.IGNORECASE,
+                        ):
+                            r[cm.group(1).lower()] = datetime.now(timezone.utc)
                     updated += 1
         return f"UPDATE {updated}"
 
