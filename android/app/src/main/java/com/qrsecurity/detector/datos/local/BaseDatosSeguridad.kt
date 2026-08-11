@@ -23,6 +23,9 @@ import com.qrsecurity.detector.datos.local.entidades.UrlBloqueadaEntity
 import com.qrsecurity.detector.datos.local.entidades.UrlCatalogoEntity
 import com.qrsecurity.detector.datos.local.migraciones.Migracion3A4
 import com.qrsecurity.detector.datos.local.migraciones.Migracion4A5
+import com.qrsecurity.detector.datos.local.migraciones.Migracion5A6
+import com.qrsecurity.detector.datos.local.migraciones.Migracion6A7
+import com.qrsecurity.detector.datos.local.migraciones.Migracion7A8
 
 /**
  * Base de datos Room — fuente de verdad local (offline-first).
@@ -37,11 +40,18 @@ import com.qrsecurity.detector.datos.local.migraciones.Migracion4A5
  *   - urls_catalogo (cache maestro de dedup: una fila por URL escaneada,
  *     último estado + conteo; lookup O(log n) por urlHash SHA-256)
  *
- * Version 5 — Schema exportado a `app/schemas/` por KSP.
+ * Version 8 — Schema exportado a `app/schemas/` por KSP.
  *   v1 → v2: FK Denuncia→Categoria + indices en url/idCategoria/(tabla,idLocal)/nombre.
  *   v2 → v3: columna ultimoCursorModificacion en sync_state (delta sync cursor).
  *   v3 → v4: tabla urls_catalogo + backfill desde escaneos (cache de deduplicacion).
  *   v4 → v5: columna notasAnalisis en escaneos (Pencil "Note vN" en AnalisisAnteriores).
+ *   v5 → v6: indice idx_escaneos_urlLimpia (BUG #4 audit — lookup dedup O(log n)).
+ *   v6 → v7: indice idx_denuncias_dedup (BUG-M3 audit — dedup por contenido O(log n)).
+ *   v7 → v8: indice idx_escaneos_dedup (urlLimpia, creadoEnMillis, id) +
+ *     idx_urls_bloqueadas_creadoEnMillis + idx_denuncias_creadoEnMillis
+ *     (Categoría 2 D-2 + D-6 audit fix — queries de dedup O(N log N) en
+ *     vez de O(N²); observa{rTodos,rTodas} ordenados por indice en vez de
+ *     filesort).
  *
  * Singleton thread-safe via `companion object get()`. El patrón `@Volatile`
  * + double-checked locking garantiza una sola instancia por proceso.
@@ -56,7 +66,7 @@ import com.qrsecurity.detector.datos.local.migraciones.Migracion4A5
         SyncStateEntity::class,
         UrlCatalogoEntity::class
     ],
-    version = 5,
+    version = 8,
     exportSchema = true
 )
 abstract class BaseDatosSeguridad : RoomDatabase() {
@@ -229,6 +239,94 @@ abstract class BaseDatosSeguridad : RoomDatabase() {
         }
 
         /**
+         * Migration 5 → 6:
+         *
+         * Cambio aditivo — crea el índice `idx_escaneos_urlLimpia` sobre
+         * `escaneos(urlLimpia)`. BUG #4 audit fix: la consulta de
+         * deduplicación y `AnalisisAnteriores` filtran por `WHERE urlLimpia = ?`;
+         * sin índice, SQLite hace full table scan sobre `escaneos`. Con
+         * miles de escaneos (objetivo: "miles de URLs y versiones"), el
+         * coste era O(N) por lookup.
+         *
+         * `CREATE INDEX IF NOT EXISTS` es instantáneo en SQLite y
+         * idempotente. No reescribe la tabla.
+         *
+         * Delega en [Migracion5A6.migrar] (extraído a objeto para
+         * testeabilidad: ejercido por
+         * [com.qrsecurity.detector.datos.local.migraciones.Migracion5A6Test]
+         * contra un esquema v5 simplificado sin instanciar toda la Room).
+         */
+        val MIGRATION_5_6: Migration = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                Migracion5A6.migrar(db)
+            }
+        }
+
+        /**
+         * Migration 6 → 7:
+         *
+         * Cambio aditivo — crea el índice compuesto `idx_denuncias_dedup`
+         * sobre `denuncias(url, idCategoria, dirty)`. BUG-M3 audit fix:
+         * la consulta `DenunciaDao.buscarDirtyPorContenido` (dedup por
+         * contenido en `RepositorioDenuncias.crearLocal`) filtra por
+         * `WHERE url = ? AND idCategoria = ? AND dirty = 1`. Sin un
+         * índice que cubra esas columnas, SQLite hace full table scan
+         * sobre `denuncias`. Con miles de denuncias por usuario, cada
+         * doble-tap en UI offline requería O(N) scan.
+         *
+         * `CREATE INDEX IF NOT EXISTS` es instantáneo en SQLite y
+         * idempotente. No reescribe la tabla.
+         *
+         * Delega en [Migracion6A7.migrar] (extraído a objeto para
+         * testeabilidad: ejercido por `Migracion6A7Test` contra un
+         * esquema v6 simplificado sin instanciar toda la Room).
+         */
+        val MIGRATION_6_7: Migration = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                Migracion6A7.migrar(db)
+            }
+        }
+
+        /**
+         * Migration 7 → 8:
+         *
+         * Cambio aditivo — crea tres índicesCRÍTICO para dedup + ALTO para
+         * ordenación de Flows) sin reescribir tablas. Categoría 2 audit fix
+         * (D-2 + D-6):
+         *
+         *  1. `idx_escaneos_dedup` sobre `escaneos(urlLimpia, creadoEnMillis, id)`.
+         *     Las queries [EscaneoDao.observarTodosUnicos] /
+         *     `observarSegurosUnicos` / `observarMaliciososUnicos` fueron
+         *     reescritas a subquery escalar `ORDER BY creadoEnMillis DESC, id
+         *     DESC LIMIT 1`; este índice permite a SQLite reverse-scanear
+         *     indexado para encontrar la última versión de cada URL en
+         *     O(log n) por outer row. Sin él, v7 caía a O(N²) en datasets
+         *     con muchos rescaneos de la misma URL (p.ej. 2 URLs × 10.000
+         *     rescansos = ~2*10^8 ops sólo en dedup → carga lenta del
+         *     historial). Con él, O(N log N) = ~3*10^5 ops en el mismo caso.
+         *  2. `idx_urls_bloqueadas_creadoEnMillis` —
+         *     [UrlBloqueadaDao.observarTodos] `ORDER BY creadoEnMillis DESC`
+         *     pasa de filesort O(K log K) por emisión del Flow a index walk
+         *     O(K). Importante si el usuario bloquea/desbloquea con
+         *     frecuencia (cada cambio re-emite).
+         *  3. `idx_denuncias_creadoEnMillis` —
+         *     [DenunciaDao.observarTodas] mismo motivo.
+         *
+         * `CREATE INDEX IF NOT EXISTS` es instantáneo en SQLite y
+         * idempotente. No reescribe la tabla.
+         *
+         * Delega en [Migracion7A8.migrar] (extraído a objeto para
+         * testeabilidad: ejercido por
+         * [com.qrsecurity.detector.datos.local.migraciones.Migracion7A8Test]
+         * contra un esquema v7 simplificado sin instanciar toda la Room).
+         */
+        val MIGRATION_7_8: Migration = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                Migracion7A8.migrar(db)
+            }
+        }
+
+        /**
          * Obtiene o construye la instancia unica de la base de datos.
          * Thread-safe via double-checked locking.
          *
@@ -245,7 +343,7 @@ abstract class BaseDatosSeguridad : RoomDatabase() {
                     BaseDatosSeguridad::class.java,
                     "qr_guardian.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
                     .also { builder ->
                         if (BuildConfig.DEBUG) {
                             builder.fallbackToDestructiveMigration()
