@@ -24,7 +24,6 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.HideSource
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Shield
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -35,11 +34,9 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -65,7 +62,6 @@ import com.qrsecurity.detector.ui.theme.Espaciado
 import com.qrsecurity.detector.ui.theme.RadioBorde
 import com.qrsecurity.detector.ui.theme.TamanosIcono
 import com.qrsecurity.detector.ui.theme.TamanosToque
-import kotlinx.coroutines.launch
 
 /**
  * Pantalla de Analisis / Escaner QR (Pencil frame dQeDx).
@@ -83,15 +79,19 @@ import kotlinx.coroutines.launch
  *    fallback al mas reciente) y dispara [onResultadoMalicioso] /
  *    [onResultadoSeguro] segun el nivel de alerta. Si no encuentra el id,
  *    emite un error y reinicia.
- *  - [Pipeline.Estado.UrlDuplicada]: muestra un [AlertDialog] para que el
- *    usuario decida reescanear (forzar) o cancelar.
+ *  - [Pipeline.Estado.UrlDuplicada]: navega de vuelta a HOME via
+ *    [onVolverHome] sin reiniciar el pipeline — el estado `UrlDuplicada`
+ *    persiste en el StateFlow para que HomeScreen lo observe y muestre el
+ *    AlertDialog sobre el viewfinder de la camara viva (Bug B fix: el
+ *    dialogo debe aparecer sobre la pantalla de escaneo, no sobre
+ *    AnalisisScreen).
  *  - [Pipeline.Estado.Error]: emite el mensaje por [onMensaje] y reinicia.
  *  - [Pipeline.Estado.NoUrl]: emite "El QR no contiene una URL" y reinicia.
  *
  * @param onResultadoMalicioso Callback con el id del escaneo cuando el
  *   resultado es malicioso (navega a DETALLE_URL/{id}).
  * @param onResultadoSeguro Callback con el id del escaneo cuando el
- *   resultado es seguro (navega a URL_SEGURA/{id}).
+ *   resultado es seguro (navega a DETALLE_URL/{id}).
  * @param onMensaje Callback para mostrar snackbars.
  * @param pipelineViewModel VM del pipeline (compartido a nivel NavGuardian).
  */
@@ -99,6 +99,7 @@ import kotlinx.coroutines.launch
 fun PantallaAnalisis(
     onResultadoMalicioso: (String) -> Unit,
     onResultadoSeguro: (String) -> Unit,
+    onVolverHome: () -> Unit,
     onMensaje: (TipoMensaje, String) -> Unit = { _, _ -> },
     pipelineViewModel: PipelineViewModel
 ) {
@@ -106,26 +107,35 @@ fun PantallaAnalisis(
     val analizando by pipelineViewModel.analizando.collectAsStateWithLifecycle()
     val datosViewModel: DatosTabsViewModel = hiltViewModel()
     val historial by datosViewModel.historialTodos.collectAsStateWithLifecycle()
-    val scope = rememberCoroutineScope()
-
     // ── Reaccion a estados terminales del pipeline ──
     LaunchedEffect(estado) {
         when (val e = estado) {
             is Pipeline.Estado.ResultadoListo -> {
                 when (val resultado = e.resultado) {
                     is Pipeline.ResultadoAnalisis.ResultadoUrl -> {
-                        val match = historial.firstOrNull {
-                            it.urlLimpia == resultado.urlLimpia &&
-                                it.urlOriginal == resultado.urlOriginal
-                        } ?: historial.maxByOrNull { it.creadoEnMillis }
+                        // Bug 1 fix: usar el idLocal exacto retornado por el
+                        // Pipeline (UUID de registrarLocal) en vez de un match
+                        // heuristico en el Flow `historial`. Ese Flow sufre
+                        // race con la emision de Room tras INSERT: el
+                        // LaunchedEffect puede correr antes de que el Flow
+                        // emita la nueva fila → match=null → navegacion con
+                        // id invalido → DetalleUrl "NoEncontrado".
+                        // Fallback al match heuristico solo si idLocal es
+                        // null (escritura en Room fallo — muy raro).
+                        val idNavegacion = e.idLocal
+                            ?: historial.firstOrNull {
+                                it.urlLimpia == resultado.urlLimpia &&
+                                    it.urlOriginal == resultado.urlOriginal
+                            }?.id
+                            ?: historial.maxByOrNull { it.creadoEnMillis }?.id
 
-                        if (match != null) {
+                        if (idNavegacion != null) {
                             if (resultado.nivelAlerta ==
                                 com.qrsecurity.detector.ml.ControladorAlerta.NivelAlerta.MALICIOSO
                             ) {
-                                onResultadoMalicioso(match.id)
+                                onResultadoMalicioso(idNavegacion)
                             } else {
-                                onResultadoSeguro(match.id)
+                                onResultadoSeguro(idNavegacion)
                             }
                             pipelineViewModel.reiniciar()
                         } else {
@@ -146,64 +156,40 @@ fun PantallaAnalisis(
                 onMensaje(TipoMensaje.ERROR, e.mensaje)
                 pipelineViewModel.reiniciar()
             }
+            is Pipeline.Estado.UrlDuplicada -> {
+                // Bug B fix: el dialogo de re-escaneo se muestra sobre
+                // HomeScreen (donde esta la camara viva), no sobre
+                // AnalisisScreen. Navegamos de vuelta a HOME sin llamar
+                // pipelineViewModel.reiniciar() — el estado UrlDuplicada
+                // persiste en el StateFlow para que HomeScreen lo observe
+                // y abra el AlertDialog sobre el viewfinder.
+                onVolverHome()
+            }
             else -> Unit
         }
     }
 
-    // ── Dialogo UrlDuplicada ──
-    val duplicada = estado as? Pipeline.Estado.UrlDuplicada
-    if (duplicada != null) {
-        AlertDialog(
-            onDismissRequest = { pipelineViewModel.cancelarReescaneo() },
-            containerColor = CyberGlassAlto,
-            titleContentColor = CyberTextoPrincipal,
-            textContentColor = CyberTextoSecundario,
-            shape = RoundedCornerShape(RadioBorde.lg),
-            title = { Text("URL ya escaneada") },
-            text = {
-                Text(
-                    text = "Esta URL ya fue escaneada " +
-                        "${duplicada.vecesEscaneadaMaxima} vez(es). " +
-                        "\u00bfDeseas reescanearla de todas formas?"
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    scope.launch { pipelineViewModel.confirmarReescaneo() }
-                }) {
-                    Text("Reescanear", color = CyberCyan)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { pipelineViewModel.cancelarReescaneo() }) {
-                    Text("Cancelar", color = CyberTextoSecundario)
-                }
-            }
-        )
-    }
-
-    // URL del resultado si ya esta listo (null durante Escaneando).
-    val urlMostrada: String? = if (analizando) {
-        null
-    } else {
-        (estado as? Pipeline.Estado.ResultadoListo)?.resultado
-            ?.let { it as? Pipeline.ResultadoAnalisis.ResultadoUrl }
-            ?.urlOriginal
-    }
+    // Bug 2 fix: usar la funcion pura que tambien resuelve UrlDuplicada
+    // (antes `as? ResultadoListo` descartaba UrlDuplicada → "Analizando contenido...").
+    val urlMostrada: String? = urlMostradaParaEstado(estado, analizando)
 
     val progreso by animateFloatAsState(
         targetValue = if (analizando) 0.33f else 0f,
         label = "progresoAnalisis"
     )
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(CyberFondo)
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = Espaciado.xxl, vertical = Espaciado.xxxl),
-        verticalArrangement = Arrangement.spacedBy(Espaciado.xxl)
-    ) {
+    // Bug 2 fix: gatear toda la Column "Analizando..." — no renderizar cuando
+    // estado is UrlDuplicada (el dialogo ya aparece encima; la pantalla
+    // "Analizando..." subyacente es contradictoria).
+    if (debeMostrarContenidoAnalizando(estado)) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(CyberFondo)
+                .verticalScroll(rememberScrollState())
+            .padding(horizontal = Espaciado.lg, vertical = Espaciado.lg),
+        verticalArrangement = Arrangement.spacedBy(Espaciado.lg)
+        ) {
         // ─── Barra superior ───
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -218,7 +204,7 @@ fun PantallaAnalisis(
             )
             IconButton(onClick = {
                 pipelineViewModel.reiniciar()
-                onMensaje(TipoMensaje.INFO, "Analisis cancelado")
+                onVolverHome()
             }) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowBack,
@@ -321,7 +307,7 @@ fun PantallaAnalisis(
         Button(
             onClick = {
                 pipelineViewModel.reiniciar()
-                onMensaje(TipoMensaje.INFO, "Analisis cancelado")
+                onVolverHome()
             },
             enabled = analizando,
             modifier = Modifier
@@ -345,6 +331,7 @@ fun PantallaAnalisis(
             )
         }
     }
+    } // fin if (debeMostrarContenidoAnalizando)
 }
 
 private enum class EstadoCheck { ACTIVO, PENDIENTE, COMPLETADO }
@@ -411,3 +398,39 @@ private fun FilaCheck(
         }
     }
 }
+
+// ── Bug 2 fix: funciones puras extraidas para testear sin Compose UI Test ──
+
+/**
+ * Devuelve la URL a mostrar en la tarjeta "URL DETECTADA" segun el estado del
+ * pipeline. Retorna `null` cuando `analizando == true` (la UI mostrara
+ * "Analizando contenido...").
+ *
+ * Bug 2: antes, `urlMostrada` solo se resolvia para `ResultadoListo` via
+ * `as? ResultadoListo`, descartando `UrlDuplicada` (que tambien trae
+ * `resultado: ResultadoUrl` con la URL). Ahora `UrlDuplicada` expone su URL.
+ */
+fun urlMostradaParaEstado(estado: Pipeline.Estado, analizando: Boolean): String? {
+    if (analizando) return null
+    return when (estado) {
+        is Pipeline.Estado.ResultadoListo ->
+            (estado.resultado as? Pipeline.ResultadoAnalisis.ResultadoUrl)?.urlOriginal
+        is Pipeline.Estado.UrlDuplicada -> estado.resultado.urlOriginal
+        // Bug F: Analizando = inference en progreso, sin URL detectada aun.
+        is Pipeline.Estado.Escaneando, is Pipeline.Estado.Inicializando,
+        is Pipeline.Estado.Analizando, is Pipeline.Estado.Error -> null
+    }
+}
+
+/**
+ * Decide si se debe renderizar la `Column` con el contenido "Analizando..."
+ * (titulo, tarjeta URL DETECTADA, spinner, tarjeta de 3 checks, barra de
+ * progreso, boton Cancelar).
+ *
+ * Bug 2: cuando `estado is UrlDuplicada`, NO se debe mostrar este contenido —
+ * el dialogo "URL ya escaneada" ya aparece encima y la pantalla "Analizando..."
+ * subyacente es contradictoria (la app parece estar analizando mientras
+ * pregunta si reescanear).
+ */
+fun debeMostrarContenidoAnalizando(estado: Pipeline.Estado): Boolean =
+    estado !is Pipeline.Estado.UrlDuplicada

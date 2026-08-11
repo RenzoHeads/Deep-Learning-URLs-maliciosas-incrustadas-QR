@@ -46,13 +46,13 @@ data class EstadoAnalisisAnteriores(
  *
  * Mismo patron que [DatosTabsViewModel] (Historial):
  *  - Room es la fuente de verdad. El Flow [estadoAnalisisAnteriores] se
- *    suscribe via `stateIn(WhileSubscribed(5_000),
+ *    suscribe via `stateIn(WhileSubscribed(3_000),
  *    EstadoAnalisisAnteriores(null, ...))` — Room emite la lista cacheada
  *    en <1ms, **sin spinner `Cargando`**.
  *  - Al navegar fuera y volver (nav bar o back), el Flow sigue vivo
- *    mientras haya suscriptores o dentro del window de 5s — la UI muestra
+ *    mientras haya suscriptores o dentro del window de 3s — la UI muestra
  *    los datos cacheados instantaneamente, **no vuelve a consultar Room**.
- *    Si pasan >5s, el Flow re-suscribe y Room re-emite en <1ms (imperceptible).
+ *    Si pasan >3s, el Flow re-suscribe y Room re-emite en <1ms (imperceptible).
  *  - **Sin sync cloud en navigation**: el sync cloud (pull) solo ocurre al
  *    reloguear/reinstalar (manejado por ContenedorApp / login), igual que
  *    el Historial. [cargarAnalisisAnteriores] NO dispara sync — solo setea
@@ -95,7 +95,7 @@ class AnalisisAnterioresViewModel @Inject constructor(
 
     /**
      * Estado reactivo CON etiqueta `(url, id)`. Patron Historial:
-     * `stateIn(WhileSubscribed(5_000),
+     * `stateIn(WhileSubscribed(3_000),
      * EstadoAnalisisAnteriores(null, null, emptyList(), 0))`.
      *
      * - **Al cambiar de URL (A->B)**: `flatMapLatest` cancela A y subscribe
@@ -103,11 +103,17 @@ class AnalisisAnterioresViewModel @Inject constructor(
      *   ve `estado.url == A != B` y NO renderiza la lista de A — muestra
      *   solo el chrome sin flash. B emite desde Room en <1ms ->
      *   `estado.url == B` -> render lista de B.
-     * - **Al volver a la misma URL dentro del window de 5s**: el StateFlow
+     * - **Al volver a la misma URL dentro del window de 3s**: el StateFlow
      *   ya tiene la URL actual etiquetada -> UI renderiza al instante, sin
      *   re-consultar Room.
-     * - **Al volver despues de >5s**: el Flow re-suscribe -> Room re-emite
+     * - **Al volver despues de >3s**: el Flow re-suscribe -> Room re-emite
      *   etiquetado -> mismo valor, sin flash.
+     *
+     * BUG #9 audit fix: WhileSubscribed reducido de 5_000 a 3_000ms —
+     * mismo motivo que DatosTabsViewModel.historialTodos: con listas
+     * grandes de reescaneos, mantener el Flow activo 5s tras el ultimo
+     * suscriptor retenia la lista en memoria innecesariamente. 3s cubre
+     * la navegacion entre tabs sin re-colectar.
      *
      * Implementacion: `combine(urlLimpiaFlow, idActualFlow)` reacciona a
      * cambios de coordenadas -> `flatMapLatest` subscribe el combine de
@@ -131,7 +137,7 @@ class AnalisisAnterioresViewModel @Inject constructor(
             }
             .stateIn(
                 scope = viewModelScope,
-                started = SharingStarted.WhileSubscribed(5_000),
+                started = SharingStarted.WhileSubscribed(3_000),
                 initialValue = EstadoAnalisisAnteriores(url = null, id = null, lista = emptyList(), total = 0)
             )
 
@@ -153,6 +159,11 @@ class AnalisisAnterioresViewModel @Inject constructor(
      * reloguear/reinstalar (manejado por ContenedorApp / login), igual que
      * el Historial. Aqui solo setea las coordenadas para que
      * `flatMapLatest` subscribe el Flow de Room correcto.
+     *
+     * **Invariante**: el [idActual] recibido de DetalleUrlScreen ya es el
+     * serverUUID real (no el clientUUID stale) porque
+     * [DetalleUrlViewModel.cargarEscaneo] resuelve y re-subscribe el Flow
+     * con el id correcto tras un reKey. No se necesita resolving aqui.
      *
      * Guard: si las coordenadas no cambiaron, no hace nada (evita re-setear
      * los StateFlows y disparar `flatMapLatest` innecesariamente).

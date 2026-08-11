@@ -1,6 +1,8 @@
 package com.qrsecurity.detector.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,10 +12,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.History
@@ -58,7 +60,6 @@ import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.TimeUnit
-import androidx.compose.foundation.BorderStroke
 
 /**
  * Pantalla de Analisis Anteriores / Versiones anteriores de una URL
@@ -69,9 +70,17 @@ import androidx.compose.foundation.BorderStroke
  * Muestra la lista de versiones anteriores de una URL (reescaneos) con
  * notas de analisis. Wire a [AnalisisAnterioresViewModel].
  *
+ * BUG #2 fix (audit): migrado de `Column { verticalScroll { forEachIndexed {} } }`
+ * a `LazyColumn { itemsIndexed(...) }` con `key = { it.id }`. La version
+ * eager instanciaba todos los composables de la lista en el main thread —
+ * con miles de reescaneos de una misma URL (caso extremo en datasets
+ * grandes) esto podia causar ANR y riesgo de OOM. LazyColumn virtualiza:
+ * solo compone los items visibles + pequeno buffer.
+ *
  * @param urlLimpia URL limpia del escaneo principal (nav argument).
  * @param idActual Id del escaneo principal (nav argument).
  * @param onVolver Callback para volver a la pantalla anterior.
+ * @param onEscanear Callback para reanalizar la URL.
  * @param viewModel VM de analisis anteriores (compartido a nivel NavGuardian).
  */
 @Composable
@@ -79,6 +88,8 @@ fun PantallaAnalisisAnteriores(
     urlLimpia: String,
     idActual: String,
     onVolver: () -> Unit,
+    onEscanear: () -> Unit,
+    onVerDetalle: (String) -> Unit = {},
     viewModel: AnalisisAnterioresViewModel
 ) {
     LaunchedEffect(urlLimpia, idActual) {
@@ -94,129 +105,139 @@ fun PantallaAnalisisAnteriores(
     }
     val total = estado.total
 
-    Column(
+    LazyColumn(
         modifier = Modifier
             .fillMaxSize()
-            .background(CyberFondo)
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = Espaciado.xxl, vertical = Espaciado.xxl),
+            .background(CyberFondo),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+            horizontal = Espaciado.lg,
+            vertical = Espaciado.lg
+        ),
         verticalArrangement = Arrangement.spacedBy(Espaciado.lg)
     ) {
         // ─── Back Row ───
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Espaciado.xs)
-        ) {
-            IconButton(onClick = onVolver) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "Volver",
-                    tint = CyberTextoPrincipal
-                )
-            }
-            Text(
-                text = "Volver",
-                style = MaterialTheme.typography.bodyMedium,
-                color = CyberTextoPrincipal
-            )
-        }
-
-        // ─── Header ───
-        Column(verticalArrangement = Arrangement.spacedBy(Espaciado.xs)) {
+        item(key = "back_row") {
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "Versiones del análisis",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                    color = CyberTextoPrincipal,
-                    modifier = Modifier.weight(1f)
-                )
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(Espaciado.xs)
-                ) {
-                    if (syncEnCurso) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            color = CyberCyan,
-                            strokeWidth = 2.dp
-                        )
-                    }
-                    Box(
-                        modifier = Modifier
-                            .background(CyberGlassAlto, RoundedCornerShape(RadioBorde.lg))
-                            .padding(horizontal = Espaciado.md, vertical = Espaciado.xs)
-                    ) {
-                        Text(
-                            text = "$total análisis",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = CyberTextoSecundario
-                        )
-                    }
-                }
-            }
-            Text(
-                text = "Historial de análisis de esta URL",
-                style = MaterialTheme.typography.bodyMedium,
-                color = CyberTextoSecundario
-            )
-        }
-
-        // ─── URL Summary Card ───
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(RadioBorde.xxl),
-            colors = CardDefaults.cardColors(containerColor = CyberGlass),
-            elevation = CardDefaults.cardElevation(defaultElevation = Elevacion.ninguna)
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(Espaciado.lg),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(Espaciado.md)
+                horizontalArrangement = Arrangement.spacedBy(Espaciado.xs)
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(CircleShape)
-                        .background(CyberGlassAlto),
-                    contentAlignment = Alignment.Center
-                ) {
+                IconButton(onClick = onVolver) {
                     Icon(
-                        imageVector = Icons.Filled.QrCode2,
-                        contentDescription = null,
-                        tint = CyberCyan,
-                        modifier = Modifier.size(TamanosIcono.estandar)
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Volver",
+                        tint = CyberTextoPrincipal
                     )
                 }
                 Text(
-                    text = urlLimpia,
+                    text = "Volver",
                     style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium,
-                    color = CyberTextoPrincipal,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
+                    color = CyberTextoPrincipal
                 )
+            }
+        }
+
+        // ─── Header ───
+        item(key = "header") {
+            Column(verticalArrangement = Arrangement.spacedBy(Espaciado.xs)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Versiones del análisis",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = CyberTextoPrincipal,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(Espaciado.xs)
+                    ) {
+                        if (syncEnCurso) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                color = CyberCyan,
+                                strokeWidth = 2.dp
+                            )
+                        }
+                        Box(
+                            modifier = Modifier
+                                .background(CyberGlassAlto, RoundedCornerShape(RadioBorde.lg))
+                                .padding(horizontal = Espaciado.md, vertical = Espaciado.xs)
+                        ) {
+                            Text(
+                                text = "$total análisis",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = CyberTextoSecundario
+                            )
+                        }
+                    }
+                }
+                Text(
+                    text = "Historial de análisis de esta URL",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = CyberTextoSecundario
+                )
+            }
+        }
+
+        // ─── URL Summary Card ───
+        item(key = "url_summary") {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(RadioBorde.xxl),
+                colors = CardDefaults.cardColors(containerColor = CyberGlass),
+                elevation = CardDefaults.cardElevation(defaultElevation = Elevacion.ninguna)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(Espaciado.lg),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(Espaciado.md)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(TamanosIcono.mediano)
+                            .clip(CircleShape)
+                            .background(CyberGlassAlto),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.QrCode2,
+                            contentDescription = null,
+                            tint = CyberCyan,
+                            modifier = Modifier.size(TamanosIcono.estandar)
+                        )
+                    }
+                    Text(
+                        text = urlLimpia,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = CyberTextoPrincipal,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
             }
         }
 
         // ─── History Section ───
-        Column(verticalArrangement = Arrangement.spacedBy(Espaciado.md)) {
+        item(key = "history_label") {
             Text(
                 text = "Historial",
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.Bold,
                 color = CyberTextoSecundario
             )
+        }
 
-            when {
-                !dataCoincide -> {
+        when {
+            !dataCoincide -> {
+                item(key = "loading") {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -236,7 +257,9 @@ fun PantallaAnalisisAnteriores(
                         )
                     }
                 }
-                listaOrdenada.isEmpty() -> {
+            }
+            listaOrdenada.isEmpty() -> {
+                item(key = "empty") {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -257,42 +280,52 @@ fun PantallaAnalisisAnteriores(
                         )
                     }
                 }
-                else -> {
-                    Column(verticalArrangement = Arrangement.spacedBy(Espaciado.lg)) {
-                        listaOrdenada.forEachIndexed { index, escaneo ->
-                            val version = total - index
-                            EntradaLineaTiempo(escaneo = escaneo, version = version)
-                        }
-                    }
+            }
+            else -> {
+                // BUG #2 fix: cada entrada es un item individual del LazyColumn
+                // con key=id → virtualizacion completa. La version eager instanciaba
+                // todos los composables EntradaLineaTiempo en el main thread.
+                itemsIndexed(
+                    items = listaOrdenada,
+                    key = { _, escaneo -> escaneo.id }
+                ) { index, escaneo ->
+                    val version = total - index
+                    EntradaLineaTiempo(
+                        escaneo = escaneo,
+                        version = version,
+                        onClick = { onVerDetalle(escaneo.id) }
+                    )
                 }
             }
         }
 
         // ─── CTA Section ───
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(Espaciado.sm)
-        ) {
-            OutlinedButton(
-                onClick = onVolver,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(TamanosToque.boton),
-                shape = RoundedCornerShape(RadioBorde.lg),
-                border = BorderStroke(Elevacion.sutil, CyberCyan)
+        item(key = "cta") {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(Espaciado.sm)
             ) {
+                OutlinedButton(
+                    onClick = onEscanear,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(TamanosToque.boton),
+                    shape = RoundedCornerShape(RadioBorde.lg),
+                    border = BorderStroke(Elevacion.sutil, CyberCyan)
+                ) {
+                    Text(
+                        text = "Reanalizar ahora",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = CyberCyan
+                    )
+                }
                 Text(
-                    text = "Reanalizar ahora",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = CyberCyan
+                    text = "Un escaneo nuevo tarda ~0,3 s",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = CyberTextoSecundario
                 )
             }
-            Text(
-                text = "Un escaneo nuevo tarda ~0,3 s",
-                style = MaterialTheme.typography.labelSmall,
-                color = CyberTextoSecundario
-            )
         }
     }
 }
@@ -300,7 +333,11 @@ fun PantallaAnalisisAnteriores(
 // ── Composables y helpers privados ──
 
 @Composable
-private fun EntradaLineaTiempo(escaneo: EscaneoEntity, version: Int) {
+private fun EntradaLineaTiempo(
+    escaneo: EscaneoEntity,
+    version: Int,
+    onClick: () -> Unit = {}
+) {
     val color = when (escaneo.nivelAlerta) {
         "SEGURO" -> CyberVerdeAlerta
         "SOSPECHOSO" -> CyberAmbar
@@ -339,7 +376,9 @@ private fun EntradaLineaTiempo(escaneo: EscaneoEntity, version: Int) {
 
         // Analysis Card
         Card(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onClick),
             shape = RoundedCornerShape(RadioBorde.xl),
             colors = CardDefaults.cardColors(containerColor = CyberGlass),
             elevation = CardDefaults.cardElevation(defaultElevation = Elevacion.ninguna)

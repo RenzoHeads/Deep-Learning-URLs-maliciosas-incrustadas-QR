@@ -7,6 +7,7 @@ import com.qrsecurity.detector.datos.repositorios.RepositorioEscaneos
 import com.qrsecurity.detector.datos.repositorios.RepositorioUrlsBloqueadas
 import com.qrsecurity.detector.datos.sync.MediadorSincronizacion
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -58,6 +59,13 @@ sealed interface DetalleUrlAction {
      * el UUID interno — el VM lo resuelve via [RepositorioUrlsBloqueadas.obtenerPorUrl].
      */
     data class DesbloquearUrl(val url: String) : DetalleUrlAction
+    /**
+     * Elimina TODOS los escaneos (ultima version + reescaneos) de una URL
+     * del historial local + encola DELETEs al backend via SyncWorker.
+     * Toma la `urlLimpia` (no el id) porque el borrado es en cascada por URL
+     * (ver [RepositorioEscaneos.eliminarLocalPorUrlLimpia]).
+     */
+    data class EliminarUrl(val urlLimpia: String) : DetalleUrlAction
 }
 
 /**
@@ -86,39 +94,111 @@ class DetalleUrlViewModel @Inject constructor(
     private val _uiState = MutableStateFlow<DetalleUrlUiState>(DetalleUrlUiState.Cargando)
     val uiState: StateFlow<DetalleUrlUiState> = _uiState.asStateFlow()
 
+    // V-6 fix: job de la coleccion reactiva de cargarEscaneo. Se cancela
+    // al cargar un nuevo id (navegacion a otro detalle) para evitar
+    // coleccionadores duplicados.
+    private var cargarJob: Job? = null
+
     // Eventos one-shot via Channel — cada evento se entrega una sola vez.
     private val _mensaje = Channel<MensajeUi>(Channel.BUFFERED)
     val mensaje = _mensaje.receiveAsFlow()
 
+    // Evento one-shot: se emite (true) cuando la URL fue eliminada del historial.
+    // La UI lo recolecta para navegar atras (onBack) tras un eliminado exitoso.
+    private val _eliminarCompletado = Channel<Boolean>(Channel.BUFFERED)
+    val eliminarCompletado = _eliminarCompletado.receiveAsFlow()
+
     /**
      * Carga el escaneo por id. Pre-llena _uiState desde el cache (si hay)
-     * para evitar flash de "Cargando...", luego refresca desde Room.
+     * para evitar flash de "Cargando...", luego observa Room reactivamente.
+     *
+     * V-6 fix: antes usaba [RepositorioEscaneos.obtenerPorId] (suspend
+     * one-shot) — si un sync actualizaba el escaneo mientras el usuario
+     * estaba en el detalle, la UI mostraba datos stale hasta salir y
+     * re-entrar. Ahora usa [RepositorioEscaneos.observarPorId] (Flow) —
+     * Room re-emite automaticamente cuando la fila cambia, refrescando
+     * el detalle en vivo. El cache se actualiza en cada emision, asi la
+     * re-entrada a un detalle ya visitado trae datos frescos.
+     *
+     * **Bug A + Bug D fix (reKey resilience)**: el SyncWorker hace reKey
+     * del id del escaneo (client UUID -> server UUID via
+     * `UPDATE escaneos SET id=...`) cuando el POST al backend devuelve un
+     * id propio. Tras el reKey, `observarPorId(clientUUID)` re-emite null
+     * porque la fila con ese id ya no existe — solo existe bajo el
+     * server UUID.
+     *
+     * Solucion estandarizada: en lugar de solo preservar el ultimo Cargado
+     * con el id obsoleto (Bug A fix original), resolvemos el id real de la
+     * fila viva mas reciente via
+     * [RepositorioEscaneos.ultimoIdVivoPorUrlLimpia] y **re-subscribimos** el
+     * Flow con ese nuevo id. Esto asegura que:
+     *   - `Cargado.escaneo.id` always tenga el serverUUID real (no el
+     *     clientUUID stale)
+     *   - El cache se guarda bajo el key correcto (serverUUID)
+     *   - Los downstream consumers (DetalleUrlScreen -> AnalisisAnteriores)
+     *     reciben el id correcto sin necesidad de workarounds
+     *   - `esUltimaVersion` y `contarReescaneosSnapshot` usan el id real
+     *
+     * @param id el id del escaneo a observar (client UUID o server UUID).
+     * @param yaTeniaCargado true si ya hay un Cargado preservado (evita
+     *     flash de NoEncontrado si el re-subscribed Flow tarda 1 frame).
      */
-    fun cargarEscaneo(id: String) {
-        // Pre-llenar desde cache → primer frame muestra el detalle sin flash.
-        cacheDetalle.obtener(id)?.let { _uiState.value = it }
+    fun cargarEscaneo(id: String, yaTeniaCargado: Boolean = false) {
+        // Cancelar coleccion anterior (p.ej. navegacion a otro detalle).
+        cargarJob?.cancel()
 
-        viewModelScope.launch {
-            val escaneo = repositorioEscaneos.obtenerPorId(id)
-            if (escaneo == null) {
-                _uiState.value = DetalleUrlUiState.NoEncontrado
-                return@launch
+        val preFill = cacheDetalle.obtener(id)
+        var tuvoEmisionNoNula = preFill != null || yaTeniaCargado
+        if (preFill != null) _uiState.value = preFill
+
+        cargarJob = viewModelScope.launch {
+            repositorioEscaneos.observarPorId(id).collect { escaneo ->
+                if (escaneo == null) {
+                    if (!tuvoEmisionNoNula) {
+                        // Caso legit: id inexistente (navegacion a detalle
+                        // borrado o id invalido). Cache miss + Flow first
+                        // emit null -> NoEncontrado.
+                        _uiState.value = DetalleUrlUiState.NoEncontrado
+                    } else {
+                        // reKey detectado: la fila cambio su PK de clientUUID
+                        // a serverUUID. Resolver el id real y re-subscribir.
+                        val cargado = _uiState.value as? DetalleUrlUiState.Cargado
+                        if (cargado != null) {
+                            val nuevoId = repositorioEscaneos
+                                .ultimoIdVivoPorUrlLimpia(cargado.escaneo.urlLimpia)
+                            if (nuevoId != null && nuevoId != id) {
+                                // Re-subscribir con el serverUUID real. El
+                                // Cargado actual se preserva (no hay cache
+                                // hit para nuevoId, _uiState no se resetea),
+                                // y el nuevo Flow emitira el escaneo con el
+                                // id correcto en <1ms.
+                                cargarEscaneo(nuevoId, yaTeniaCargado = true)
+                            }
+                            // Si nuevoId == null (fila borrada en vuelo) o
+                            // nuevoId == id (no hubo reKey, caso raro),
+                            // preservar el ultimo Cargado.
+                        }
+                    }
+                    return@collect
+                }
+                tuvoEmisionNoNula = true
+                val urlBloqueada = repositorioUrlsBloqueadas.obtenerPorUrl(escaneo.urlLimpia) != null
+                // Usar escaneo.id (siempre el PK real en la BD) en lugar de
+                // `id` (param que puede ser clientUUID stale tras reKey).
+                val esUltima = repositorioEscaneos.esUltimaVersion(escaneo.id)
+                val totalReesc = repositorioEscaneos.contarReescaneosSnapshot(
+                    escaneo.urlLimpia, escaneo.id
+                )
+
+                val cargado = DetalleUrlUiState.Cargado(
+                    escaneo = escaneo,
+                    urlBloqueada = urlBloqueada,
+                    esUltimaVersion = esUltima,
+                    totalReescaneos = totalReesc
+                )
+                cacheDetalle.guardar(cargado)
+                _uiState.value = cargado
             }
-            // Adaptacion: no existe estaBloqueada(url); usar obtenerPorUrl.
-            val urlBloqueada = repositorioUrlsBloqueadas.obtenerPorUrl(escaneo.urlLimpia) != null
-            val esUltima = repositorioEscaneos.esUltimaVersion(id)
-            // Adaptacion: contarReescaneosSnapshot (no contarReescaneos).
-            val totalReesc = repositorioEscaneos.contarReescaneosSnapshot(escaneo.urlLimpia, id)
-
-            val cargado = DetalleUrlUiState.Cargado(
-                escaneo = escaneo,
-                urlBloqueada = urlBloqueada,
-                esUltimaVersion = esUltima,
-                totalReescaneos = totalReesc
-            )
-            // Adaptacion: cache.guardar(Cargado), no cache.guardar(id, escaneo).
-            cacheDetalle.guardar(cargado)
-            _uiState.value = cargado
         }
     }
 
@@ -129,6 +209,7 @@ class DetalleUrlViewModel @Inject constructor(
         when (action) {
             is DetalleUrlAction.BloquearUrl -> bloquearUrl(action.url, action.razon)
             is DetalleUrlAction.DesbloquearUrl -> desbloquearUrl(action.url)
+            is DetalleUrlAction.EliminarUrl -> eliminarUrl(action.urlLimpia)
         }
     }
 
@@ -176,6 +257,36 @@ class DetalleUrlViewModel @Inject constructor(
                 }
             } catch (e: Exception) {
                 _mensaje.send(MensajeUi(TipoMensaje.ERROR, "Error al desbloquear URL"))
+            }
+        }
+    }
+
+    /**
+     * Elimina TODOS los escaneos de la URL (ultima version + reescaneos)
+     * del historial local y encola DELETEs al backend via SyncWorker.
+     *
+     * Tras un eliminado exitoso:
+     *  1. Emite [_eliminarCompletado] `true` → la UI navega atras.
+     *  2. Invalida el cache de detalle para que el id ya no aparezca.
+     *
+     * @param urlLimpia la URL limpia cuyos escaneos se eliminaran.
+     */
+    private fun eliminarUrl(urlLimpia: String) {
+        viewModelScope.launch {
+            try {
+                repositorioEscaneos.eliminarLocalPorUrlLimpia(urlLimpia)
+                mediadorSincronizacion.dispararSyncUnica()
+                // Invalidar cache: el id ya no existe en la BD. Sin esto,
+                // reabrir el mismo detalle tras eliminar mostraria el cache
+                // stale (Cargado) en lugar de NoEncontrado.
+                val cargado = _uiState.value as? DetalleUrlUiState.Cargado
+                if (cargado != null) {
+                    cacheDetalle.invalidar(cargado.escaneo.id)
+                }
+                _mensaje.send(MensajeUi(TipoMensaje.EXITO, "URL eliminada del historial"))
+                _eliminarCompletado.send(true)
+            } catch (e: Exception) {
+                _mensaje.send(MensajeUi(TipoMensaje.ERROR, "Error al eliminar URL"))
             }
         }
     }

@@ -21,6 +21,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.QrCode
@@ -114,12 +115,46 @@ fun PantallaDetalleUrl(
         }
     }
 
+    // Evento one-shot: URL eliminada → navegar atras.
+    LaunchedEffect(viewModel) {
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            viewModel.eliminarCompletado.collect {
+                onBack()
+            }
+        }
+    }
+
     // Hardware back → onBack.
     BackHandler(onBack = onBack)
 
     // Modales de desbloqueo (estado local).
     var modalConfirmarVisible by remember { mutableStateOf(false) }
     var modalOkVisible by remember { mutableStateOf(false) }
+    // Modal de confirmacion de bloqueo manual (toggle inverso del desbloqueo).
+    var modalBloqueoConfirmarVisible by remember { mutableStateOf(false) }
+    // Modal de confirmacion de eliminacion de URL del historial.
+    var modalEliminarVisible by remember { mutableStateOf(false) }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(CyberFondo)
+    ) {
+        when (val estado = uiState) {
+            is DetalleUrlUiState.Cargando -> ContenidoCargando()
+            is DetalleUrlUiState.NoEncontrado -> ContenidoNoEncontrado(onBack = onBack)
+            is DetalleUrlUiState.Cargado -> ContenidoDetalle(
+                estado = estado,
+                contexto = contexto,
+                onBack = onBack,
+                onVerAnalisisAnteriores = onVerAnalisisAnteriores,
+                onSolicitarDesbloqueo = { modalConfirmarVisible = true },
+                onSolicitarBloqueo = { modalBloqueoConfirmarVisible = true },
+                onSolicitarEliminar = { modalEliminarVisible = true },
+                onMensaje = onMensaje
+            )
+        }
+    }
 
     if (modalConfirmarVisible) {
         ModalDesbloqueoConfirmar(
@@ -139,23 +174,32 @@ fun PantallaDetalleUrl(
         ModalDesbloqueoOk(onCerrar = { modalOkVisible = false })
     }
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(CyberFondo)
-    ) {
-        when (val estado = uiState) {
-            is DetalleUrlUiState.Cargando -> ContenidoCargando()
-            is DetalleUrlUiState.NoEncontrado -> ContenidoNoEncontrado(onBack = onBack)
-            is DetalleUrlUiState.Cargado -> ContenidoDetalle(
-                estado = estado,
-                contexto = contexto,
-                onBack = onBack,
-                onVerAnalisisAnteriores = onVerAnalisisAnteriores,
-                onSolicitarDesbloqueo = { modalConfirmarVisible = true },
-                onMensaje = onMensaje
-            )
-        }
+    if (modalBloqueoConfirmarVisible) {
+        ModalBloqueoConfirmar(
+            onConfirmar = {
+                modalBloqueoConfirmarVisible = false
+                val urlLimpia = (uiState as? DetalleUrlUiState.Cargado)?.escaneo?.urlLimpia
+                if (urlLimpia != null) {
+                    viewModel.onAction(
+                        DetalleUrlAction.BloquearUrl(urlLimpia, "Detectada como maliciosa")
+                    )
+                }
+            },
+            onCancelar = { modalBloqueoConfirmarVisible = false }
+        )
+    }
+
+    if (modalEliminarVisible) {
+        ModalEliminarUrl(
+            onConfirmar = {
+                modalEliminarVisible = false
+                val urlLimpia = (uiState as? DetalleUrlUiState.Cargado)?.escaneo?.urlLimpia
+                if (urlLimpia != null) {
+                    viewModel.onAction(DetalleUrlAction.EliminarUrl(urlLimpia))
+                }
+            },
+            onCancelar = { modalEliminarVisible = false }
+        )
     }
 }
 
@@ -201,6 +245,8 @@ private fun ContenidoDetalle(
     onBack: () -> Unit,
     onVerAnalisisAnteriores: (String, String) -> Unit,
     onSolicitarDesbloqueo: () -> Unit,
+    onSolicitarBloqueo: () -> Unit,
+    onSolicitarEliminar: () -> Unit,
     onMensaje: (TipoMensaje, String) -> Unit
 ) {
     val escaneo = estado.escaneo
@@ -208,7 +254,7 @@ private fun ContenidoDetalle(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = Espaciado.xxl, vertical = Espaciado.xxl),
+            .padding(horizontal = Espaciado.lg, vertical = Espaciado.lg),
         verticalArrangement = Arrangement.spacedBy(Espaciado.lg)
     ) {
         // ─── Back Row ───
@@ -273,6 +319,8 @@ private fun ContenidoDetalle(
                 estado = estado,
                 contexto = contexto,
                 onSolicitarDesbloqueo = onSolicitarDesbloqueo,
+                onSolicitarBloqueo = onSolicitarBloqueo,
+                onSolicitarEliminar = onSolicitarEliminar,
                 onMensaje = onMensaje
             )
         }
@@ -403,6 +451,8 @@ private fun SeccionAcciones(
     estado: DetalleUrlUiState.Cargado,
     contexto: Context,
     onSolicitarDesbloqueo: () -> Unit,
+    onSolicitarBloqueo: () -> Unit,
+    onSolicitarEliminar: () -> Unit,
     onMensaje: (TipoMensaje, String) -> Unit
 ) {
     val escaneo = estado.escaneo
@@ -461,32 +511,103 @@ private fun SeccionAcciones(
             )
         }
 
-        // ─── Unlock Detail Button ─── (solo si esta bloqueada)
-        if (estado.urlBloqueada) {
-            OutlinedButton(
-                onClick = onSolicitarDesbloqueo,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(TamanosToque.boton),
-                shape = RoundedCornerShape(RadioBorde.lg),
-                colors = ButtonDefaults.outlinedButtonColors(
-                    containerColor = CyberRojo.copy(alpha = 0.12f),
-                    contentColor = CyberRojo
-                ),
-                border = androidx.compose.foundation.BorderStroke(1.dp, CyberRojo.copy(alpha = 0.4f))
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.LockOpen,
-                    contentDescription = null,
-                    modifier = Modifier.size(TamanosIcono.estandar)
-                )
-                Spacer(modifier = Modifier.size(Espaciado.sm))
-                Text(
-                    text = "Desbloquear esta URL",
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.Bold
-                )
+        // ─── Lock/Unlock Toggle ─── (solo en URLs MALICIOSAS)
+        //
+        // El auto-bloqueo sucede al escanear una URL MALICIOSO (ver
+        // [com.qrsecurity.detector.pipeline.Pipeline.registrarEscaneoLocal]).
+        // Este toggle permite al usuario revertir (desbloquear) o volver a
+        // bloquear manualmente si previamente lo desbloqueó. Solo aplica a
+        // URLs MALICIOSAS — las URLs SEGURO/SOSPECHOSO no se bloquean.
+        //
+        // Ambos estados usan el modal de confirmacion correspondiente
+        // ([ModalBloqueoConfirmar] / [ModalDesbloqueoConfirmar]) antes de
+        // mutar el estado — el usuario confirma explícitamente.
+        if (escaneo.nivelAlerta == "MALICIOSO") {
+            if (!estado.urlBloqueada) {
+                // Bloquear esta URL
+                OutlinedButton(
+                    onClick = onSolicitarBloqueo,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(TamanosToque.boton),
+                    shape = RoundedCornerShape(RadioBorde.lg),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = CyberRojo.copy(alpha = 0.12f),
+                        contentColor = CyberRojo
+                    ),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, CyberRojo.copy(alpha = 0.4f))
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.Lock,
+                        contentDescription = null,
+                        modifier = Modifier.size(TamanosIcono.estandar)
+                    )
+                    Spacer(modifier = Modifier.size(Espaciado.sm))
+                    Text(
+                        text = "Bloquear esta URL",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            } else {
+                // Desbloquear esta URL (ya estaba bloqueada — el usuario
+                // confirmará via [ModalDesbloqueoConfirmar]).
+                OutlinedButton(
+                    onClick = onSolicitarDesbloqueo,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(TamanosToque.boton),
+                    shape = RoundedCornerShape(RadioBorde.lg),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = CyberRojo.copy(alpha = 0.12f),
+                        contentColor = CyberRojo
+                    ),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, CyberRojo.copy(alpha = 0.4f))
+                ) {
+                    Icon(
+                        imageVector = Icons.Filled.LockOpen,
+                        contentDescription = null,
+                        modifier = Modifier.size(TamanosIcono.estandar)
+                    )
+                    Spacer(modifier = Modifier.size(Espaciado.sm))
+                    Text(
+                        text = "Desbloquear esta URL",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
+        }
+
+        // ─── Delete Button ───
+        // Elimina TODOS los escaneos de esta URL del historial (ultima
+        // version + reescaneos). Accion destructiva — el modal
+        // [ModalEliminarUrl] pide confirmacion explicita antes de mutar.
+        // Available para todas las URLs (SEGURO, SOSPECHOSO, MALICIOSO):
+        // el usuario puede querer limpiar su historial de cualquier URL.
+        OutlinedButton(
+            onClick = onSolicitarEliminar,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(TamanosToque.boton),
+            shape = RoundedCornerShape(RadioBorde.lg),
+            colors = ButtonDefaults.outlinedButtonColors(
+                containerColor = CyberRojo.copy(alpha = 0.08f),
+                contentColor = CyberRojo
+            ),
+            border = androidx.compose.foundation.BorderStroke(1.dp, CyberRojo.copy(alpha = 0.3f))
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Delete,
+                contentDescription = null,
+                modifier = Modifier.size(TamanosIcono.estandar)
+            )
+            Spacer(modifier = Modifier.size(Espaciado.sm))
+            Text(
+                text = "Eliminar del historial",
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = FontWeight.Bold
+            )
         }
     }
 }
@@ -542,20 +663,24 @@ private fun BotonPrimario(
 }
 
 // ─── Helpers ───
+//
+// `internal` (no `private`) para poder ser reutilizados por otras pantallas
+// del mismo modulo (p.ej. DetalleVersionAntiguaScreen). Cambiar a `private`
+// romperia esa reutilizacion — mantener como internal.
 
-private fun colorPorNivel(nivel: String): Color = when (nivel) {
+internal fun colorPorNivel(nivel: String): Color = when (nivel) {
     "MALICIOSO" -> CyberRojo
     "SOSPECHOSO" -> CyberCyan
     else -> CyberVerdeAlerta
 }
 
-private fun etiquetaAmenazaPorNivel(nivel: String): String = when (nivel) {
+internal fun etiquetaAmenazaPorNivel(nivel: String): String = when (nivel) {
     "MALICIOSO" -> "Amenaza alta"
     "SOSPECHOSO" -> "Amenaza moderada"
     else -> "Sin amenazas"
 }
 
-private fun subtituloPorNivel(nivel: String): String = when (nivel) {
+internal fun subtituloPorNivel(nivel: String): String = when (nivel) {
     "MALICIOSO" -> "Phishing · smishing activo"
     "SOSPECHOSO" -> "Patrón sospechoso detectado"
     else -> "Análisis completado"
