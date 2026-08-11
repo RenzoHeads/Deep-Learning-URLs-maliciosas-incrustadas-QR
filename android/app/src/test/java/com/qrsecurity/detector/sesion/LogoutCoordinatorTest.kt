@@ -10,6 +10,7 @@ import com.qrsecurity.detector.datos.local.entidades.EscaneoEntity
 import com.qrsecurity.detector.datos.local.entidades.PendingOpEntity
 import com.qrsecurity.detector.datos.local.entidades.UrlBloqueadaEntity
 import com.qrsecurity.detector.datos.repositorios.RepositorioEscaneos
+import com.qrsecurity.detector.datos.repositorios.RepositorioUrlsBloqueadas
 import com.qrsecurity.detector.datos.sync.MediadorSincronizacion
 import com.qrsecurity.detector.datos.sync.SyncWorker.Companion.KEY_INITIAL_SYNC_COMPLETED
 import com.qrsecurity.detector.datos.sync.SyncWorker.Companion.KEY_ULTIMO_SYNC
@@ -132,6 +133,12 @@ class LogoutCoordinatorTest {
             json = json,
             ioDispatcher = testDispatcher
         )
+        val repoUrlsBloqueadas = RepositorioUrlsBloqueadas(
+            db = db,
+            backend = backend,
+            json = json,
+            ioDispatcher = testDispatcher
+        )
         // Pipeline constructor (firma real): (context, db, backend, json,
         // repoEscaneos, mediadorSync). `motorInferencia` es lazy — no carga
         // el modelo en este test.
@@ -141,6 +148,7 @@ class LogoutCoordinatorTest {
             backend = backend,
             json = json,
             repoEscaneos = repoEscaneos,
+            repoUrlsBloqueadas = repoUrlsBloqueadas,
             mediadorSync = mediador
         )
 
@@ -150,7 +158,8 @@ class LogoutCoordinatorTest {
             mediadorSincronizacion = mediador,
             db = db,
             sesionUsuario = sesionUsuario,
-            pipeline = pipeline
+            pipeline = pipeline,
+            cacheDetalleEscaneos = com.qrsecurity.detector.ui.CacheDetalleEscaneos()
         )
     }
 

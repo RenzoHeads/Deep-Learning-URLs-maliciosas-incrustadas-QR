@@ -11,6 +11,7 @@ import com.qrsecurity.detector.datos.sync.SyncWorker.Companion.KEY_INITIAL_SYNC_
 import com.qrsecurity.detector.datos.sync.SyncWorker.Companion.KEY_ULTIMO_SYNC
 import com.qrsecurity.detector.datos.sync.SyncWorker.Companion.PREFS_SYNC
 import com.qrsecurity.detector.pipeline.Pipeline
+import com.qrsecurity.detector.ui.CacheDetalleEscaneos
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -88,7 +89,8 @@ class LogoutCoordinator @Inject constructor(
     private val mediadorSincronizacion: MediadorSincronizacion,
     private val db: BaseDatosSeguridad,
     private val sesionUsuario: SesionUsuario,
-    private val pipeline: Pipeline
+    private val pipeline: Pipeline,
+    private val cacheDetalleEscaneos: CacheDetalleEscaneos
 ) {
 
     /**
@@ -102,6 +104,12 @@ class LogoutCoordinator @Inject constructor(
      *      preserva `id_dispositivo` para re-registro del mismo fisico).
      *   4. Vaciar la cache de inferencia en RAM del [Pipeline] `@Singleton`
      *      (fuga cross-user — ver [Pipeline.limpiarCacheInferencia]).
+     *   5. Vaciar [CacheDetalleEscaneos] `@Singleton` (fuga cross-user de
+     *      `DetalleUrlUiState.Cargado` con EscaneoEntity + flags del
+     *      usuario anterior). Bug 3 fix (pieza c).
+     *   6. Resetear [Pipeline.estado] a [Pipeline.Estado.Escaneando] para
+     *      que la UI no muestre `ResultadoListo` o `UrlDuplicada` stale del
+     *      usuario anterior. Bug 3 fix (pieza d).
      */
     suspend fun logout() {
         // 1) Cancelar WorkManager y ESPERAR a que el worker en curso termine.
@@ -139,7 +147,23 @@ class LogoutCoordinator @Inject constructor(
         // cruzados, como los que persiste CacheResultados.EntradaCache).
         pipeline.limpiarCacheInferencia()
 
-        // 5) Eliminar token + flag de sesion (preserva id_dispositivo).
+        // 5) Vaciar CacheDetalleEscaneos @Singleton.
+        // Bug 3 fix (pieza c): CacheDetalleEscaneos es @Singleton (alcance app),
+        // asi que sin esta llamada, al cerrar sesion y volver a loguear (otro
+        // usuario o el mismo), el detalle de un escaneo apareceria "pre-cargado"
+        // con DetalleUrlUiState.Cargado stale del usuario anterior (fuga
+        // cross-user: EscaneoEntity + flags urlBloqueada, esUltimaVersion,
+        // totalReescaneos del usuario previo).
+        cacheDetalleEscaneos.limpiar()
+
+        // 6) Resetear Pipeline.estado a Escaneando.
+        // Bug 3 fix (pieza d): el Pipeline es @Singleton, asi que su estado
+        // observable (ResultadoListo, UrlDuplicada, etc.) sobrevive al logout.
+        // Sin reiniciar(), al reabrir PAnalisis tras re-login, el estado
+        // arrancaria en el resultado del usuario anterior.
+        pipeline.reiniciar()
+
+        // 7) Eliminar token + flag de sesion (preserva id_dispositivo).
         sesionUsuario.cerrarSesion()
     }
 
