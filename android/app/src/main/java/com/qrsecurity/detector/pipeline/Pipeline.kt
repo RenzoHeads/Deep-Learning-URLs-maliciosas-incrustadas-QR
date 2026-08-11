@@ -6,6 +6,7 @@ import com.qrsecurity.detector.cache.CacheResultados
 import com.qrsecurity.detector.datos.local.BaseDatosSeguridad
 import com.qrsecurity.detector.datos.local.entidades.UrlCatalogoEntity
 import com.qrsecurity.detector.datos.repositorios.RepositorioEscaneos
+import com.qrsecurity.detector.datos.repositorios.RepositorioUrlsBloqueadas
 import com.qrsecurity.detector.datos.sync.MediadorSincronizacion
 import com.qrsecurity.detector.ml.ControladorAlerta
 import com.qrsecurity.detector.ml.MotorInferencia
@@ -51,6 +52,7 @@ class Pipeline @Inject constructor(
     private val backend: ClienteBackend,
     private val json: Json,
     private val repoEscaneos: RepositorioEscaneos,
+    private val repoUrlsBloqueadas: RepositorioUrlsBloqueadas,
     private val mediadorSync: MediadorSincronizacion
 ) {
 
@@ -74,6 +76,25 @@ class Pipeline @Inject constructor(
 
         /** Esperando que se escanee un codigo QR. */
         data object Escaneando : Estado()
+
+        /**
+         * Bug F fix: dedup check completado, inference en progreso.
+         *
+         * Estado intermedio entre [Escaneando] (extraccion + dedup) y
+         * [ResultadoListo] (inference completada). Permite que la UI
+         * navegue a AnalisisScreen SOLO cuando hay inference real en
+         * vuelo — no cuando el dedup check todavia no ha terminado
+         * (caso URL duplicada donde el pipeline emitira [UrlDuplicada]
+         * sin pasar por [Analizando]).
+         *
+         * Sin este estado, [Escaneando] servia tanto para "esperando QR"
+         * como para "dedup check en progreso" como para "inference en
+         * progreso" — la UI no podia distinguir y navegaba a
+         * AnalisisScreen para URLs duplicadas antes de que el dedup
+         * emitiera [UrlDuplicada], mostrando brevemente "Analizando..."
+         * bajo el dialogo de URL duplicada.
+         */
+        data object Analizando : Estado()
 
         /**
          * Deduplicacion (cache + log): todas las URLs del QR escaneado ya estaban
@@ -104,8 +125,21 @@ class Pipeline @Inject constructor(
             val ultimoEscaneoMillis: Long
         ) : Estado()
 
-        /** Inferencia completada y un resultado esta listo. */
-        data class ResultadoListo(val resultado: ResultadoAnalisis) : Estado()
+        /**
+         * Inferencia completada y un resultado esta listo.
+         *
+         * [idLocal]: UUID del escaneo persistido en Room cuando el QR contenia
+         * una URL (path de [Pipeline.analizar] que llama [Pipeline.registrarEscaneoLocal]).
+         * Es `null` cuando el QR NO contenia una URL (path [ResultadoAnalisis.NoUrl],
+         * que no persiste). La UI ([AnalisisScreen]) usa este id para navegar a
+         * DetalleUrl con el id exacto en vez de un match heuristico en el Flow
+         * `historial` — ese Flow sufre race con la emision de Room tras INSERT,
+         * lo que producía navegacion con id invalido → DetalleUrl "NoEncontrado".
+         */
+        data class ResultadoListo(
+            val resultado: ResultadoAnalisis,
+            val idLocal: String? = null
+        ) : Estado()
 
         /** Ocurrio un error durante el analisis. */
         data class Error(val mensaje: String) : Estado()
@@ -217,28 +251,72 @@ class Pipeline @Inject constructor(
                         _estado.value = Estado.ResultadoListo(resultado)
                     }
                     is ExtractorUrls.Extraido.Urls -> {
-                        val resultado = procesarMultiplesUrls(extraido.urls)
-                        if (resultado == null) {
-                            _estado.value = Estado.Error("Sin URLs analizables")
-                        } else if (!forzar && esUrlDuplicada(resultado)) {
-                            // Dedup: todas las URLs ya escaneadas antes → preguntar al usuario.
-                            // NO persiste; el reescaneo (forzar=true) insertara el nuevo escaneo.
-                            val resumen = resumenCacheDuplicado(resultado)
+                        // Bug F fix: dedup check ANTES de inference.
+                        //
+                        // Antes: procesarMultiplesUrls() (inference) →
+                        // esUrlDuplicada(resultado) → UrlDuplicada. Como
+                        // HomeScreen navega a AnalisisScreen cuando
+                        // `analizando=true` (set antes del dedup check), el
+                        // usuario veia "Analizando..." brevemente para URLs
+                        // duplicadas antes de que AnalisisScreen rebote a
+                        // HomeScreen con el modal.
+                        //
+                        // Ahora: limpiar URLs sin inference (solo
+                        // Preprocesador.limpiarUrl) → dedup check → si dup,
+                        // emit UrlDuplicada con placeholder ResultadoUrl (sin
+                        // probabilidad/nivelAlerta/delegado — el dialogo no
+                        // los usa). Si no dup, emit Analizando → inference →
+                        // ResultadoListo.
+                        val urlsLimpias = extraido.urls.map {
+                            Preprocesador.limpiarUrl(it)
+                        }
+
+                        if (!forzar && urlsLimpias.isNotEmpty() && esUrlDuplicada(urlsLimpias)) {
+                            // Dedup: todas las URLs ya escaneadas antes →
+                            // preguntar al usuario. NO persiste; el reescaneo
+                            // (forzar=true) insertara el nuevo escaneo.
+                            //
+                            // Placeholder ResultadoUrl: solo urlOriginal y
+                            // urlLimpia son usados por el dialogo
+                            // (resultado.urlOriginal via
+                            // urlMostradaParaEstado). probabilidad/nivelAlerta/
+                            // delegado no se renderizan en el dialogo de
+                            // UrlDuplicada.
+                            val resumen = resumenCacheDuplicado(urlsLimpias)
+                            val placeholder = ResultadoAnalisis.ResultadoUrl(
+                                urlOriginal = extraido.urls.first(),
+                                urlLimpia = urlsLimpias.first(),
+                                probabilidad = 0f,
+                                nivelAlerta = ControladorAlerta.NivelAlerta.SEGURO,
+                                delegado = "",
+                                urlsAdicionales = emptyList()
+                            )
                             _estado.value = Estado.UrlDuplicada(
-                                resultado = resultado,
+                                resultado = placeholder,
                                 urlsLimpiaConsultadas = resumen.urlsLimpia,
                                 vecesEscaneadaMaxima = resumen.vecesMaxima,
                                 ultimoEscaneoMillis = resumen.ultimoEscaneoMillisPeor
                             )
                         } else {
-                            registrarEscaneoLocal(
-                                urlOriginal = resultado.urlOriginal,
-                                urlLimpia = resultado.urlLimpia,
-                                probabilidad = resultado.probabilidad,
-                                nivelAlerta = resultado.nivelAlerta,
-                                delegado = resultado.delegado
-                            )
-                            _estado.value = Estado.ResultadoListo(resultado)
+                            // No dup (o forzar) → inference real.
+                            _estado.value = Estado.Analizando
+                            val resultado = procesarMultiplesUrls(extraido.urls, forzar = forzar)
+                            if (resultado == null) {
+                                _estado.value = Estado.Error("Sin URLs analizables")
+                            } else {
+                                val idLocal = registrarEscaneoLocal(
+                                    urlOriginal = resultado.urlOriginal,
+                                    urlLimpia = resultado.urlLimpia,
+                                    probabilidad = resultado.probabilidad,
+                                    nivelAlerta = resultado.nivelAlerta,
+                                    delegado = resultado.delegado
+                                )
+                                // Bug 1 fix: propagar el UUID del escaneo
+                                // persistido para que AnalisisScreen navege
+                                // a DetalleUrl con el id exacto (no match
+                                // heuristico en Flow historial).
+                                _estado.value = Estado.ResultadoListo(resultado, idLocal)
+                            }
                         }
                     }
                 }
@@ -283,9 +361,12 @@ class Pipeline @Inject constructor(
      * novedad real y se infiere normal.
      *
      * Devuelve false si la lista de URLs está vacía (defensivo).
+     *
+     * Bug F fix: acepta `List<String>` (URLs limpias) en vez de
+     * `ResultadoUrl` — el dedup ahora corre ANTES de inference, sin
+     * necesidad del resultado completo.
      */
-    private suspend fun esUrlDuplicada(resultado: ResultadoAnalisis.ResultadoUrl): Boolean {
-        val urlsLimpia = urlsLimpiasDelResultado(resultado)
+    private suspend fun esUrlDuplicada(urlsLimpia: List<String>): Boolean {
         if (urlsLimpia.isEmpty()) return false
         // Phase 1: local cache (offline-first, O(log n) por PK url_hash).
         val urlsConCacheLocal = urlsLimpia.filter {
@@ -325,34 +406,58 @@ class Pipeline @Inject constructor(
      * las URLs consultadas, el max `vecesEscaneada` entre ellas y el
      * `ultimoEscaneoMillis` del peor resultado.
      *
-     * Asume que [esUrlDuplicada] ya devolvió true (todas existen en el cache),
-     * pero es defensive con valores null (si una entrada se evaporan entre el
-     * check y aquí — raro pero posibles en races) devolviendo 0/0.
+     * Asume que [esUrlDuplicada] ya devolvió true (todas existen en el cache
+     * local o en el backend), pero es defensive con valores null (si una
+     * entrada se evapora entre el check y aquí — raro pero posible en races).
+     *
+     * Bug E fix: cuando [esUrlDuplicada] detectó la URL via Phase 2 (backend
+     * `existeUrl` en cache maestro global `urls_catalogo`) pero NO hay entrada
+     * local (ej: usuario nuevo tras `clearAllTables` — cache local vacío),
+     * `entradas` no incluye esa URL → `vecesMaxima` terminaba en 0 → el diálogo
+     * mostraba "escaneada 0 vez(es)". Como `urls_catalogo` es global (sin
+     * `id_usuario`), el backend NO expone `veces_escaneada` por seguridad
+     * (CWE-639 + CWE-200 cross-user data leak). Por lo tanto no podemos saber
+     * el conteo real cross-device — pero sí sabemos que la URL fue escaneada
+     * **al menos una vez** (el backend dijo `existe=true`). Usamos
+     * `maxOf(localMax, 1)` cuando alguna URL no tiene entrada local (Phase 2
+     * hit) para que el diálogo muestre un conteo mínimo significativo en vez
+     * del confuso "0 veces".
+     *
+     * Análogamente, `ultimoEscaneoMillisPeor` del peor (primaria) también puede
+     * ser 0 cuando la primaria solo existe en el backend — el diálogo oculta
+     * la fecha cuando este valor es 0 (ver [HomeScreen]), por lo que es seguro.
+     *
+     * Bug F fix: acepta `List<String>` (URLs limpias) en vez de
+     * `ResultadoUrl` — el dedup ahora corre ANTES de inference. La
+     * "primaria" es `urlsLimpia.first()` (la primera URL extraída del QR),
+     * equivalente al comportamiento previo donde `resultado.urlLimpia`
+     * era la primaria selección-peor del `procesarMultiplesUrls`.
      */
     private suspend fun resumenCacheDuplicado(
-        resultado: ResultadoAnalisis.ResultadoUrl
+        urlsLimpia: List<String>
     ): ResumenDedup {
-        val urlsLimpia = urlsLimpiasDelResultado(resultado)
         val entradas: List<UrlCatalogoEntity> = urlsLimpia.mapNotNull {
             repoEscaneos.buscarUrlCatalogo(it)
         }
-        val vecesMaxima = entradas.maxOfOrNull { it.vecesEscaneada } ?: 0
+        val localMax = entradas.maxOfOrNull { it.vecesEscaneada } ?: 0
+        // Bug E: si alguna URL no tiene entrada local (Phase 2 backend hit),
+        // el mínimo significativo es 1 — el backend confirmó que existe.
+        val vecesMaxima = if (entradas.size < urlsLimpia.size) {
+            maxOf(localMax, 1)
+        } else {
+            localMax
+        }
+        val primaria = urlsLimpia.first()
         return ResumenDedup(
             urlsLimpia = urlsLimpia,
             vecesMaxima = vecesMaxima,
             // ultimoEscaneoMillis del cache para el peor (primaria).
+            // 0 cuando la primaria solo existe en el backend (Phase 2 hit) —
+            // el diálogo oculta la fecha cuando es 0 (ver HomeScreen).
             ultimoEscaneoMillisPeor = entradas
-                .firstOrNull { it.urlLimpia == resultado.urlLimpia }
+                .firstOrNull { it.urlLimpia == primaria }
                 ?.ultimoEscaneoMillis ?: 0L
         )
-    }
-
-    /** Las URLs limpias del QR: primaria + adicionales (ordenadas peor→mejor). */
-    private fun urlsLimpiasDelResultado(
-        resultado: ResultadoAnalisis.ResultadoUrl
-    ): List<String> = buildList {
-        add(resultado.urlLimpia)
-        addAll(resultado.urlsAdicionales.map { it.urlLimpia })
     }
 
     /** Contenedor temporal para construir [Estado.UrlDuplicada]. */
@@ -371,14 +476,15 @@ class Pipeline @Inject constructor(
      * (D1-P1 fix).
      */
     private suspend fun procesarMultiplesUrls(
-        urlsPorAnalizar: List<String>
+        urlsPorAnalizar: List<String>,
+        forzar: Boolean = false
     ): ResultadoAnalisis.ResultadoUrl? {
         val resultadosUrls = ArrayList<ResultadoAnalisis.ResultadoUrl>(urlsPorAnalizar.size)
 
         for (urlOriginal in urlsPorAnalizar) {
             val urlLimpiaIndividual = Preprocesador.limpiarUrl(urlOriginal)
 
-            val entradaFinal = cache.obtenerOActualizar(urlLimpiaIndividual) {
+            val entradaFinal = cache.obtenerOActualizar(urlLimpiaIndividual, forzar = forzar) {
                 val tokenizado = Preprocesador.tokenizarLote(urlLimpiaIndividual)
                 val salida = motorInferencia.inferir(tokenizado)
 
@@ -436,6 +542,12 @@ class Pipeline @Inject constructor(
      * Lanza el write en una corutina hija via `scope.launch` desde el caller
      * (la UI usa `rememberCoroutineScope`); aqui se ejecuta en el scope del
      * `withContext(Dispatchers.Default)` del pipeline.
+     *
+     * @return el id local (UUID) asignado al escaneo persistido, o `null` si
+     * la escritura en Room fallo. Este id debe propagarse hasta
+     * [Estado.ResultadoListo.idLocal] para que la UI navegue a DetalleUrl con
+     * el id exacto en vez de un match heuristico en el Flow `historial`
+     * (Bug 1 — race condition post-escaneo de URL nueva).
      */
     private suspend fun registrarEscaneoLocal(
         urlOriginal: String,
@@ -443,9 +555,10 @@ class Pipeline @Inject constructor(
         probabilidad: Float,
         nivelAlerta: ControladorAlerta.NivelAlerta,
         delegado: String
-    ) {
+    ): String? {
+        var idLocal: String? = null
         try {
-            repoEscaneos.registrarLocal(
+            idLocal = repoEscaneos.registrarLocal(
                 urlOriginal = urlOriginal,
                 urlLimpia = urlLimpia,
                 probabilidad = probabilidad,
@@ -461,7 +574,34 @@ class Pipeline @Inject constructor(
             if (e is kotlinx.coroutines.CancellationException) throw e
             // Falla la escritura local (Room corrupto, etc.) — muy raro.
             // El resultado de la cache RAM sigue sirviendo para la UI inmediata.
+            // idLocal queda null → AnalisisScreen caera al match heuristico
+            // (comportamiento previo Bug 1) solo si Room falla.
         }
+
+        // Auto-bloqueo de URLs maliciosas: el usuario no necesita bloqueo
+        // manual cuando el detector clasifica la URL como MALICIOSO. La
+        // fila se inserta en `urls_bloqueadas` (dirty=true) y el
+        // `MediadorSincronizacion` ya disparado arriba la pushing al backend
+        // en el mismo worker run junto con el escaneo. Si el auto-bloqueo
+        // falla (Room corrupto, idempotencia, etc.), el escaneo ya se
+        // persistio y el usuario podra bloquear manualmente desde DetalleUrl.
+        if (nivelAlerta == ControladorAlerta.NivelAlerta.MALICIOSO) {
+            try {
+                repoUrlsBloqueadas.bloquearLocal(
+                    url = urlLimpia,
+                    razon = "Detectada como maliciosa"
+                )
+                // No disparamos otra sync: la de arriba ya encola y procesa
+                // ambos pending_ops (CREATE escaneo + CREATE url_bloqueada)
+                // en el mismo run.
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                // Best-effort: el auto-bloqueo falló — el usuario puede
+                // bloquear manualmente desde DetalleUrlScreen.
+            }
+        }
+
+        return idLocal
     }
 
     /**

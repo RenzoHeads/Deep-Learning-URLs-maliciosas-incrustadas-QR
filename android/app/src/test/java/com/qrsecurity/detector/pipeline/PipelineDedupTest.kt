@@ -7,6 +7,7 @@ import androidx.work.testing.WorkManagerTestInitHelper
 import androidx.test.core.app.ApplicationProvider
 import com.qrsecurity.detector.api.ClienteBackend
 import com.qrsecurity.detector.datos.local.BaseDatosSeguridad
+import com.qrsecurity.detector.datos.repositorios.RepositorioUrlsBloqueadas
 import com.qrsecurity.detector.datos.local.entidades.UrlCatalogoEntity
 import com.qrsecurity.detector.datos.local.sha256Hex
 import com.qrsecurity.detector.datos.repositorios.RepositorioEscaneos
@@ -82,8 +83,9 @@ class PipelineDedupTest {
         val backend = ClienteBackend() // no se invoca (sin sync)
         val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
         repo = RepositorioEscaneos(db, backend, json, testDispatcher)
+        val repoUrlsBloqueadas = RepositorioUrlsBloqueadas(db, backend, json, testDispatcher)
         val mediadorSync = MediadorSincronizacion(app)
-        val pipeline = Pipeline(app, db, backend, json, repo, mediadorSync)
+        val pipeline = Pipeline(app, db, backend, json, repo, repoUrlsBloqueadas, mediadorSync)
         vm = PipelineViewModel(pipeline, SavedStateHandle())
     }
 

@@ -4,6 +4,7 @@ import com.qrsecurity.detector.pipeline.Pipeline
 import com.qrsecurity.detector.datos.local.BaseDatosSeguridad
 import com.qrsecurity.detector.api.ClienteBackend
 import com.qrsecurity.detector.datos.repositorios.RepositorioEscaneos
+import com.qrsecurity.detector.datos.repositorios.RepositorioUrlsBloqueadas
 import com.qrsecurity.detector.datos.sync.MediadorSincronizacion
 import android.content.Context
 import dagger.Module
@@ -35,6 +36,7 @@ object PipelineModule {
         backend: ClienteBackend,
         json: Json,
         repoEscaneos: RepositorioEscaneos,
+        repoUrlsBloqueadas: RepositorioUrlsBloqueadas,
         mediadorSync: MediadorSincronizacion
-    ): Pipeline = Pipeline(context, db, backend, json, repoEscaneos, mediadorSync)
+    ): Pipeline = Pipeline(context, db, backend, json, repoEscaneos, repoUrlsBloqueadas, mediadorSync)
 }
