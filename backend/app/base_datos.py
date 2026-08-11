@@ -39,6 +39,19 @@ def _obtener_lock() -> asyncio.Lock:
     return _pool_lock
 
 
+async def _init_utc(conexion: asyncpg.Connection) -> None:
+    """BUG #11 — callback ``init`` del pool: pinnea la sesion a UTC.
+
+    asyncpg ejecuta esta corutina una vez por conexion al crearse (no por
+    query). ``SET TIME ZONE 'UTC'`` persiste para toda la vida de la conexion
+    dentro del pool, asi que todos los ``now()`` posteriores (en
+    historial/bloqueadas/denuncias y endpoints futuros) devolveran timestamps
+    en UTC sin tocar cada router. Idempotente y barato (una sola round-trip
+    por conexion nueva).
+    """
+    await conexion.execute("SET TIME ZONE 'UTC'")
+
+
 async def obtener_pool() -> asyncpg.Pool:
     """
     Devuelve el pool de conexiones,creandolo perezosamente si no existe.
@@ -80,7 +93,26 @@ async def obtener_pool() -> asyncpg.Pool:
                 # conexion hasta el primer ``acquire()``, repartiendo la latencia
                 # entre los requests reales.
                 min_size=0,
-                max_size=5,
+                # BUG #10 audit fix: max_size 5→20. Con miles de usuarios
+                # concurrentes haciendo delta-syncs paginados (5 paginas x
+                # 200 filas = 1000 filas por worker-run, 3 tablas), el pool
+                # de 5 conexiones era un cuello de botella — los requests se
+                # serializaban esperando acquire() bajo carga. 20 conexiones
+                # permite paralelismo real sin agotar el limite de conexiones
+                # de Neon (500 por defecto, escalable).
+                max_size=20,
+                # BUG #11 audit fix: timezone consistency. Pinnea cada
+                # conexion del pool a UTC via el callback ``init`` de asyncpg
+                # (corutina que se ejecuta UNA vez por conexion al crearse,
+                # persistente para toda la vida de la conexion). Sin esto,
+                # ``now()`` en SQL dependia del ``timezone`` de la sesion
+                # Postgres (por defecto el del server/Neon, que puede variar),
+                # provocando discrepancias entre ``updated_at`` escritos por
+                # distintos routers (historial/bloqueadas/denuncias) y los
+                # comparadores ``>=$1`` del delta-sync. Centralizar aqui (root
+                # cause) en vez de esparcir ``now(timezone=UTC)`` en cada
+                # router es DRY y cubre endpoints futuros.
+                init=_init_utc,
                 command_timeout=30,
             )
         except Exception as e:
@@ -249,3 +281,116 @@ def _epoch_millis_ahora() -> int:
     """Timestamp de ahora en millis desde epoch (UTC)."""
     import time
     return int(time.time() * 1000)
+
+
+async def recompute_url_catalogo_after_delete(
+    conexion: asyncpg.Connection, url_limpia: str
+) -> None:
+    """Recomputa [urls_catalogo] tras la eliminación lógica de un escaneo.
+
+    Patrón cache+log (deduplicación): ``historial_escaneos`` es el log
+    append-only (con *soft-delete* vía ``deleted_at``); ``urls_catalogo``
+    es el cache maestro denormalizado una-fila-por-URL con
+    ``veces_escaneada``, ``ultimo_nivel_alerta``, ``ultima_probabilidad``
+    y ``ultimo_escaneo_millis``. Esta función mantiene ese cache
+    sincronizado con el log **tras un DELETE** — la simetría del
+    [upsert_url_catalogo] que corre tras un POST.
+
+    Comportamiento:
+      - Si quedan 0 escaneos vivos (``deleted_at IS NULL``) para esa
+        ``url_limpia`` en todo el log (la tabla es global, sin
+        ``id_usuario``): se **elimina** la entrada del cache maestro.
+        El siguiente escaneo de la misma URL, en cualquier dispositivo,
+        será tratado como nuevo — ya no se disparará el dedup
+        cross-device ``Estado.UrlDuplicada`` (diálogo "URL ya
+        escaneada") para esa URL.
+      - Si quedan N>0 escaneos vivos: se **actualiza** la entrada del
+        cache con ``veces_escaneada=N`` (no N-1, no viejo-1) y los
+        campos denormalizados del último escaneo vivo por orden
+        cronológico ``creado_en DESC``. ``veces_escaneada`` refleja
+        ahora el **conteo de escaneos vivos**, no el histórico total
+        — alineado con el comportamiento esperado por el usuario
+        (borrar un escaneo quita 1 al contador que ve la UI Android).
+
+    Idempotencia: segura de invocar incluso si la fila nunca existió en
+    el cache (el ``DELETE WHERE url_hash=...`` es no-op, el ``UPDATE``
+    tras el ``SELECT`` se ejecuta solo si hay entrada y hay vivo).
+
+    Atomicidad: el caller ya管理部门 la transacción (típicamente
+    [app.routers.historial.eliminar_escaneo]). Esta función no abre
+    su propio ``BEGIN``/``COMMIT``.
+
+    Anti-leak (ver [buscar_url_catalogo]): el cache ``urls_catalogo`` es
+    global y **sin** ``id_usuario`` — los recuentos son agregados
+    cross-device. Esta función devuelve nada (no sirve datos al
+    cliente); solo muta el cache internamente.
+
+    Args:
+        conexion: Conexión asyncpg activa dentro de una transacción.
+        url_limpia: URL limpia (sin normalizar aquí — el caller
+            normaliza) cuya entrada del cache se quiere recomputar tras
+            un soft-delete del log.
+
+    Uso típico dentro de ``DELETE /escaneos/{id}``::
+
+        async with pool.acquire() as conexion:
+            async with conexion.transaction():
+                await conexion.execute(
+                    "UPDATE historial_escaneos SET deleted_at = now() ..."
+                )
+                await recompute_url_catalogo_after_delete(
+                    conexion, escaneo.url_limpia
+                )
+    """
+    h = hash_url(url_limpia)
+    # 1. Contar escaneos vivos para esa url_limpia en TODO el log
+    #    (no por id_usuario — el cache es crowd-sourced cross-device).
+    veces = await conexion.fetchval(
+        """
+        SELECT COUNT(*) FROM historial_escaneos
+        WHERE url_limpia = $1 AND deleted_at IS NULL
+        """,
+        url_limpia,
+    )
+    if veces in (None, 0):
+        # Sin filas vivas: borrar la entrada del cache maestro.
+        await conexion.execute(
+            "DELETE FROM urls_catalogo WHERE url_hash = $1",
+            h,
+        )
+        return
+    # 2. Al menos un escaneo vivo: actualizar el cache con los campos
+    #    del último escaneo vivo (creado_en DESC, LIMIT 1) y
+    #    veces_escaneada = N (no N-1, no viejo-1). Dos queries para
+    #    mantener el parser SQL del test fake feliz (no usa array_agg).
+    ultimo = await conexion.fetchrow(
+        """
+        SELECT nivel_alerta, probabilidad, creado_en FROM historial_escaneos
+        WHERE url_limpia = $1 AND deleted_at IS NULL
+        ORDER BY creado_en DESC, id DESC LIMIT 1
+        """,
+        url_limpia,
+    )
+    if ultimo is None:
+        # Race raro: el COUNT dijo >0 pero el SELECT no encontro fila
+        # (otra tx borro entre ambas). No hay nada que hacer. La tx
+        # commitea el soft-delete; el recompute correr# en otro DELETE.
+        return
+    ultimo_millis = int(ultimo["creado_en"].timestamp() * 1000) if ultimo["creado_en"] else 0
+    await conexion.execute(
+        """
+        UPDATE urls_catalogo
+        SET ultimo_nivel_alerta   = $2,
+            ultima_probabilidad   = $3,
+            ultimo_escaneo_millis = $4,
+            veces_escaneada       = $5,
+            updated_at            = now()
+        WHERE url_hash = $1
+        """,
+        h,
+        ultimo["nivel_alerta"],
+        ultimo["probabilidad"],
+        ultimo_millis,
+        veces,
+    )
+

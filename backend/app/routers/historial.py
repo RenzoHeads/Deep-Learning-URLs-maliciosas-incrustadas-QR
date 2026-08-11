@@ -14,7 +14,12 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.base_datos import buscar_url_catalogo, obtener_pool, upsert_url_catalogo
+from app.base_datos import (
+    buscar_url_catalogo,
+    obtener_pool,
+    recompute_url_catalogo_after_delete,
+    upsert_url_catalogo,
+)
 from app.modelos import (
     CrearEscaneoEntrada,
     EscaneoRespuesta,
@@ -357,16 +362,71 @@ async def eliminar_escaneo(
     escaneo_id: uuid.UUID,
     id_usuario: Annotated[str, Depends(verificar_token)],
 ):
-    """Elimina un escaneo del historial."""
+    """Elimina un escaneo del historial (soft-delete + recompute cache maestro).
+
+    Patrón cache+log (deduplicación): el soft-delete de
+    ``historial_escaneos`` (vía ``deleted_at = now()``) y el recompute
+    del cache maestro ``urls_catalogo`` se ejecutan **dentro de la
+    misma transacción** — atomicidad cache+log. Si cualquiera falla,
+    ambos se revierten (el cache nunca queda con un conteo
+    inconsistente respecto al log).
+
+    Comportamiento del recompute (ver
+    [recompute_url_catalogo_after_delete]):
+      - Si quedan 0 escaneos vivos en el log para esa ``url_limpia``
+        (global — **sin** ``id_usuario``): elimina la entrada del cache
+        ``urls_catalogo`` para esa URL. El siguiente escaneo de la
+        misma URL, en cualquier dispositivo, será tratado como nuevo
+        — no se disparará el dedup cross-device ``Estado.UrlDuplicada``.
+      - Si quedan N>0 vivos: actualiza ``veces_escaneada=N`` y los
+        campos denormalizados del último vivo. Al alinear el conteo
+        con escaneos vivos (no histórico total), el diálogo Android
+        "URL ya escaneada X vez(es)" muestra un número significativo.
+
+    Bug fix (catalogo stuck): antes este handler solo hacía el
+    soft-delete del log; el cache ``urls_catalogo`` se quedaba con
+    ``veces_escaneada`` histórico para siempre, así que escanear una
+    URL borrada por completo en otro dispositivo disparaba un dedup
+    falso "URL ya escaneada X vez(es)" incluso aunque no existiera un
+    solo escaneo vivo en el sistema. Confirmado en producción: 19 de
+    24 entradas en ``urls_catalogo`` tenían ``veces_escaneada > 0``
+    contra 0 escaneos vivos.
+    """
     pool = await obtener_pool()
     async with pool.acquire() as conexion:
-        resultado = await conexion.execute(
-            "UPDATE historial_escaneos "
-            "SET deleted_at = now(), updated_at = now() "
-            "WHERE id = $1 AND id_usuario = $2 AND deleted_at IS NULL",
-            escaneo_id,
-            id_usuario,
-        )
-
-    if resultado == "UPDATE 0":
-        raise HTTPException(status_code=404, detail="Escaneo no encontrado o ya eliminado")
+        async with conexion.transaction():
+            # 1. Soft-delete del row del log (no INSERT, no hard delete).
+            resultado = await conexion.execute(
+                "UPDATE historial_escaneos "
+                "SET deleted_at = now(), updated_at = now() "
+                "WHERE id = $1 AND id_usuario = $2 AND deleted_at IS NULL",
+                escaneo_id,
+                id_usuario,
+            )
+            if resultado == "UPDATE 0":
+                # Idempotencia: el row no existe o ya fue soft-deleted.
+                # No hay nada que recomputar — el cache ya refleja la
+                # realidad (si llegamos aquí por un replay, el recompute
+                # anterior ya corrió en la tx original).
+                raise HTTPException(
+                    status_code=404,
+                    detail="Escaneo no encontrado o ya eliminado",
+                )
+            # 2. Recoger la url_limpia del row recién soft-deleted
+            #    (necesario para el recompute del cache maestro).
+            fila = await conexion.fetchrow(
+                "SELECT url_limpia FROM historial_escaneos WHERE id = $1",
+                escaneo_id,
+            )
+            if fila is None:
+                # Solo puede ocurrir si el row fue hard-deleted entre
+                # el UPDATE y este SELECT (caso teórico — no debería
+                # ocurrir bajo tx aislada). No hay nada que recomputar
+                # sin url_limpia. La tx commitea el soft-delete solo.
+                return
+            # 3. Recomputar el cache maestro urls_catalogo para esa URL.
+            #    Atomicidad cache+log: si el recompute falla, el
+            #    soft-delete también se revierte (rollback de la tx).
+            await recompute_url_catalogo_after_delete(
+                conexion, fila["url_limpia"]
+            )
