@@ -212,23 +212,46 @@ open class MediadorSincronizacion @Inject constructor(
     /**
      * Fix #3 — Observa el estado del sync worker one-shot via WorkManager.
      *
-     * Retorna un [Flow] que emite `true` cuando el worker esta ENQUEUED o RUNNING,
-     * `false` en cualquier otro estado (SUCCEEDED, FAILED, CANCELLED, o sin work).
+     * Emite `true` SOLO durante el sync INICIAL (cuando [SyncWorker.KEY_INITIAL_SYNC_COMPLETED]
+     * es `false`), indicando que el primer PULL esta trayendo datos del servidor y la
+     * Room local esta vacia/incompleta. En syncs posteriores (periodicos o post-escritura,
+     * cuando el flag ya es `true`), emite `false` — el dato local ya esta disponible y no
+     * hace falta skeleton/loading.
      *
-     * La UI usa este Flow para mostrar un skeleton/loading en el Historial mientras
-     * el primer PULL trae datos del servidor, en lugar de mostrar "Aun no hay escaneos"
-     * sobre una Room vacia.
+     * S-1 fix: antes, esta funcion emitia `true` en CUALQUIER sync ENQUEUED/RUNNING, sin
+     * consultar [SyncWorker.KEY_INITIAL_SYNC_COMPLETED]. Esto hacia que el UI mostrara
+     * loading/skeleton en cada sync periodico (cada 15 min) y en cada push post-escritura,
+     * ocultando datos locales validos.
      *
      * Usamos `getWorkInfosForUniqueWorkFlow` (WorkManager 2.9.0+) que retorna un
-     * Flow<List<WorkInfo>> — reactivo, no blocking. Mapeamos a Boolean para que la
-     * UI no conozca detalles de WorkManager.
+     * Flow<List<WorkInfo>> — reactivo, no blocking. Lo combinamos con la lectura del flag
+     * `KEY_INITIAL_SYNC_COMPLETED` en `PREFS_SYNC` (no reactivo, pero el WorkInfo Flow
+     * re-emite cuando el worker transiciona de RUNNING a SUCCEEDED, momento en el que
+     * el flag ya fue escrito por `doWorkInternal`).
+     *
+     * Mapeamos a Boolean para que la UI no conozca detalles de WorkManager.
      */
     fun observarSyncEnCurso(): Flow<Boolean> {
         return try {
             val wm = obtenerWorkManager() ?: return kotlinx.coroutines.flow.flowOf(false)
             wm.getWorkInfosForUniqueWorkFlow(SyncWorker.NOMBRE_TRABAJO)
                 .map { infos ->
-                    infos.any { it.state == WorkInfo.State.ENQUEUED || it.state == WorkInfo.State.RUNNING }
+                    val syncEnCurso = infos.any {
+                        it.state == WorkInfo.State.ENQUEUED ||
+                            it.state == WorkInfo.State.RUNNING
+                    }
+                    if (!syncEnCurso) return@map false
+                    // S-1 fix: Solo mostrar loading durante el sync inicial
+                    // (antes de que KEY_INITIAL_SYNC_COMPLETED sea true). En syncs
+                    // posteriores el dato local ya esta disponible — no hay necesidad
+                    // de mostrar skeleton/loading.
+                    val prefs = context.getSharedPreferences(
+                        SyncWorker.PREFS_SYNC, Context.MODE_PRIVATE
+                    )
+                    val initialSyncCompleted = prefs.getBoolean(
+                        SyncWorker.KEY_INITIAL_SYNC_COMPLETED, false
+                    )
+                    !initialSyncCompleted
                 }
         } catch (e: Exception) {
             Log.e("MediadorSync", "observarSyncEnCurso() fallo", e)

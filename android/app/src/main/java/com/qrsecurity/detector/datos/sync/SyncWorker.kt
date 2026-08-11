@@ -1,6 +1,7 @@
 package com.qrsecurity.detector.datos.sync
 
 import android.content.Context
+import android.os.SystemClock
 import android.util.Log
 import androidx.room.withTransaction
 import androidx.work.CoroutineWorker
@@ -90,6 +91,7 @@ class SyncWorker @AssistedInject constructor(
      */
     private suspend fun doWorkInternal(): Result {
         val context = applicationContext
+        val workerStartMs = SystemClock.elapsedRealtime()
 
         // ── Preflight: sesion activa ──
         val token = sesionUsuario.obtenerToken()
@@ -106,37 +108,45 @@ class SyncWorker @AssistedInject constructor(
         }
 
         val pendingDao = db.pendingOpDao()
-        // Fix #4: debeSaltarPulls solo salta si hay pending ops vacios Y sync reciente.
-        // Si hay pending ops, siempre procede (necesita PUSH).
         val syncPrefs = context.getSharedPreferences(PREFS_SYNC, Context.MODE_PRIVATE)
         val initialSyncCompleted = syncPrefs.getBoolean(KEY_INITIAL_SYNC_COMPLETED, false)
+        val hayPendingOps = pendingDao.minPendingId() != null
+        val ultimoSyncMs = syncPrefs.getLong(KEY_ULTIMO_SYNC, 0L)
+        val syncReciente = (System.currentTimeMillis() - ultimoSyncMs) / 1000L < MIN_INTERVALO_SEGUNDOS
+        val modoSync = decidirModoSync(hayPendingOps, initialSyncCompleted, syncReciente)
 
-        if (debeSaltarPulls(context, pendingDao)) {
+        if (modoSync == SyncMode.OMITIR) {
             Log.d(TAG, "doWork() skip: sin pending ops y sync reciente → Result.success()")
             return Result.success()
         }
 
-        Log.d(TAG, "doWork() procede con DELTA pull incremental (cursor-based) + PUSH pending_ops")
+        val estadoPulls = if (modoSync == SyncMode.SOLO_PUSH) {
+            Log.d(TAG, "doWork() push-only: sync inicial completa → skip PULLs, solo PUSH")
+            EstadoPulls()
+        } else {
+            Log.d(TAG, "doWork() procede con DELTA pull incremental (cursor-based) + PUSH pending_ops")
 
-        // ── PULLs: siempre delta pull incremental (cursor-based) ──
-        // El primer login usa epoch cursor (1970-01-01T00:00:00Z) que equivale
-        // a un full pull paginado. Subsequent syncs usan el cursor persistido.
-        val estadoPulls = procesarDeltaPulls(
-            repoCategorias, repoUrls, repoEscaneos, repoDenuncias, token
-        )
-        if (estadoPulls.authError) {
-            // WAVE 16 fix (S5 CRITICAL): 401/403 en PULL → token expirado/invalido.
-            // Cerrar sesion (limpia token; preserva pending_ops en Room para que
-            // el re-login los empuje) y devolver Result.failure() para frenar
-            // el worker. NavGuardian/SessionViewModel detectaran el logout en
-            // el siguiente check y llevaran al usuario a login.
-            Log.w(TAG, "doWork() 401/403 en PULL → cerrarSesion + Result.failure()")
-            sesionUsuario.cerrarSesion()
-            return Result.failure()
-        }
-        if (isStopped) {
-            Log.w(TAG, "doWork() cancelled por sistema → Result.success()")
-            return Result.success()
+            // ── PULLs: siempre delta pull incremental (cursor-based) ──
+            // El primer login usa epoch cursor (1970-01-01T00:00:00Z) que equivale
+            // a un full pull paginado. Subsequent syncs usan el cursor persistido.
+            val estado = procesarDeltaPulls(
+                repoCategorias, repoUrls, repoEscaneos, repoDenuncias, token
+            )
+            if (estado.authError) {
+                // WAVE 16 fix (S5 CRITICAL): 401/403 en PULL → token expirado/invalido.
+                // Cerrar sesion (limpia token; preserva pending_ops en Room para que
+                // el re-login los empuje) y devolver Result.failure() para frenar
+                // el worker. NavGuardian/SessionViewModel detectaran el logout en
+                // el siguiente check y llevaran al usuario a login.
+                Log.w(TAG, "doWork() 401/403 en PULL → cerrarSesion + Result.failure()")
+                sesionUsuario.cerrarSesion()
+                return Result.failure()
+            }
+            if (isStopped) {
+                Log.w(TAG, "doWork() cancelled por sistema → Result.success()")
+                return Result.success()
+            }
+            estado
         }
 
         // ── 5. PUSH pending_ops (outbox) — despues del PULL ──
@@ -148,25 +158,26 @@ class SyncWorker @AssistedInject constructor(
             "urls_bloqueadas" to repoUrlsFn,
             "denuncias" to repoDenunciasFn
         )
-        val errorPush = procesarPendingOps(db, pendingDao, repos)
+        val errorPush = procesarPendingOps(db, pendingDao, repos, workerStartMs)
 
         if (estadoPulls.huboErrorTransitorio || errorPush) {
             Log.w(TAG, "doWork() error transitorio o push fallido → Result.retry()")
             return Result.retry()
         }
-        context.getSharedPreferences(PREFS_SYNC, Context.MODE_PRIVATE)
-            .edit().putLong(KEY_ULTIMO_SYNC, System.currentTimeMillis()).apply()
+        if (modoSync != SyncMode.SOLO_PUSH) {
+            syncPrefs.edit().putLong(KEY_ULTIMO_SYNC, System.currentTimeMillis()).apply()
 
-        // Incremental sync unificado — marcar initial_sync_completed=true solo
-        // cuando TODAS las tablas reportan masPorSincronizar=false (al dia).
-        // Antes, el flag se seteaba tras el primer full pull, pero un solo
-        // worker-run solo trae hasta 1000 filas por tabla — para datasets
-        // grandes (1M+), el flag se seteaba prematuramente.
-        if (!initialSyncCompleted && !estadoPulls.masPorSincronizar) {
-            syncPrefs.edit().putBoolean(KEY_INITIAL_SYNC_COMPLETED, true).apply()
-            Log.d(TAG, "doWork() initial_sync_completed=true — todas las tablas al dia")
-        } else if (estadoPulls.masPorSincronizar) {
-            Log.d(TAG, "doWork() initial sync aun en progreso — quedan paginas por sincronizar")
+            // Incremental sync unificado — marcar initial_sync_completed=true solo
+            // cuando TODAS las tablas reportan masPorSincronizar=false (al dia).
+            // Antes, el flag se seteaba tras el primer full pull, pero un solo
+            // worker-run solo trae hasta 1000 filas por tabla — para datasets
+            // grandes (1M+), el flag se seteaba prematuramente.
+            if (!initialSyncCompleted && !estadoPulls.masPorSincronizar) {
+                syncPrefs.edit().putBoolean(KEY_INITIAL_SYNC_COMPLETED, true).apply()
+                Log.d(TAG, "doWork() initial_sync_completed=true — todas las tablas al dia")
+            } else if (estadoPulls.masPorSincronizar) {
+                Log.d(TAG, "doWork() initial sync aun en progreso — quedan paginas por sincronizar")
+            }
         }
 
         Log.d(TAG, "doWork() completado OK → Result.success()")
@@ -318,12 +329,23 @@ class SyncWorker @AssistedInject constructor(
                 Log.d(TAG, "Delta pull '$tabla' OK — ${resultado.filaSincronizadas} filas" +
                     if (resultado.masPorSincronizar) " (mas paginas pendientes)" else " (al dia)")
                 estado = estado.copy(masPorSincronizar = estado.masPorSincronizar || resultado.masPorSincronizar)
-                // Bug M2 fix: orphan cleanup SOLO tras un pull COMPLETO
-                // (pullCompleto=true, todas las paginas recibidas). Si el pull
-                // fue parcial (limite por worker-run), limpiar huerfanos
-                // borraria rows locales que aun existen en paginas no
-                // fetchadas. Ver ResultadoSync.Exitoso.pullCompleto.
-                if (limpiarHuerfanos != null && resultado.pullCompleto) {
+                // Bug M2 fix + audit BUG #1 fix: orphan cleanup SOLO tras un
+                // FULL PULL (cursor == epoch). `pullCompleto=true` solo indica
+                // que el worker termino de paginar las filas modificadas desde
+                // el cursor — NO que descargo todas las filas del servidor.
+                // En un delta pull incremental, `idsServidor` solo contiene
+                // los IDs modificados desde el ultimo sync (ej: 15 IDs); si
+                // corremos limpiarHuerfanos con esa lista, los otros 9,985
+                // registros locales se consideran "huerfanos" y se BORRAN
+                // (pérdida masiva de historial).
+                // Solucion: solo limpiar cuando el cursor efectivo era epoch
+                // (full pull inicial / tras reset / tras logout), momento en
+                // que idsServidor SI contiene el conjunto completo de IDs
+                // activos del servidor. Los deletes en delta syncs se
+                // gestionan via tombstones (deleted_at) del backend, no via
+                // diff client-side.
+                val esFullPull = cursorEfectivo == "1970-01-01T00:00:00Z"
+                if (limpiarHuerfanos != null && resultado.pullCompleto && esFullPull) {
                     limpiarHuerfanos(resultado.idsServidor)
                 }
             }
@@ -351,24 +373,25 @@ class SyncWorker @AssistedInject constructor(
         return estado
     }
 
-    private suspend fun debeSaltarPulls(
-        context: Context,
-        pendingDao: PendingOpDao
-    ): Boolean {
-        if (pendingDao.minPendingId() != null) return false
-        val prefs = context.getSharedPreferences(PREFS_SYNC, Context.MODE_PRIVATE)
-        val ultimoSyncMs = prefs.getLong(KEY_ULTIMO_SYNC, 0L)
-        val ahoraMs = System.currentTimeMillis()
-        return (ahoraMs - ultimoSyncMs) / 1000L < MIN_INTERVALO_SEGUNDOS
-    }
-
     private suspend fun procesarPendingOps(
         db: BaseDatosSeguridad,
         pendingDao: PendingOpDao,
-        repos: Map<String, suspend (PendingOpEntity) -> Boolean>
+        repos: Map<String, suspend (PendingOpEntity) -> Boolean>,
+        workerStartMs: Long
     ): Boolean {
         var errorTransitorio = false
         while (true) {
+            if (debeCederPresupuestoPush(
+                    workerStartMs,
+                    SystemClock.elapsedRealtime(),
+                    PRESUPUESTO_PUSH_MS
+                )
+            ) {
+                Log.w(TAG, "procesarPendingOps: presupuesto agotado → Result.retry()")
+                errorTransitorio = true
+                break
+            }
+
             val op = db.withTransaction {
                 val id = pendingDao.minPendingId() ?: return@withTransaction null
                 val filas = pendingDao.markInProgress(id)
@@ -434,6 +457,9 @@ class SyncWorker @AssistedInject constructor(
          */
         internal const val MAX_INTENTOS_OP = 10
 
+        /** Maximo de tiempo para procesar el outbox en un worker-run. */
+        internal const val PRESUPUESTO_PUSH_MS = 8 * 60 * 1000L
+
         /** SharedPreferences file name for sync metadata. */
         const val PREFS_SYNC = "qr_guardian_sync_prefs"
 
@@ -462,6 +488,28 @@ class SyncWorker @AssistedInject constructor(
         const val KEY_INITIAL_SYNC_COMPLETED = "initial_sync_completed"
     }
 }
+
+internal enum class SyncMode {
+    OMITIR,
+    SOLO_PUSH,
+    PULL_Y_PUSH
+}
+
+internal fun decidirModoSync(
+    hayPendingOps: Boolean,
+    initialSyncCompleted: Boolean,
+    syncReciente: Boolean
+): SyncMode = when {
+    hayPendingOps && initialSyncCompleted -> SyncMode.SOLO_PUSH
+    !hayPendingOps && syncReciente -> SyncMode.OMITIR
+    else -> SyncMode.PULL_Y_PUSH
+}
+
+internal fun debeCederPresupuestoPush(
+    inicioMs: Long,
+    ahoraMs: Long,
+    presupuestoMs: Long
+): Boolean = ahoraMs - inicioMs >= presupuestoMs
 
 /**
  * A4 fix (audit) — Helper de exclusion mutua para SyncWorker.
