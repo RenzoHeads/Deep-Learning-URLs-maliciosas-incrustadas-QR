@@ -11,6 +11,7 @@ import com.qrsecurity.detector.datos.local.entidades.EscaneoEntity
 import com.qrsecurity.detector.datos.local.entidades.UrlBloqueadaEntity
 import com.qrsecurity.detector.datos.repositorios.RepositorioEscaneos
 import com.qrsecurity.detector.datos.repositorios.RepositorioUrlsBloqueadas
+import com.qrsecurity.detector.datos.repositorios.*
 import com.qrsecurity.detector.datos.sync.FakeMediadorSincronizacion
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job

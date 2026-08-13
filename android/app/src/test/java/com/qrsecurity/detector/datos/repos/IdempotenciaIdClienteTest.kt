@@ -8,6 +8,7 @@ import com.qrsecurity.detector.datos.local.entidades.CategoriaDenunciaEntity
 import com.qrsecurity.detector.datos.repositorios.RepositorioDenuncias
 import com.qrsecurity.detector.datos.repositorios.RepositorioEscaneos
 import com.qrsecurity.detector.datos.repositorios.RepositorioUrlsBloqueadas
+import com.qrsecurity.detector.datos.repositorios.*
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json

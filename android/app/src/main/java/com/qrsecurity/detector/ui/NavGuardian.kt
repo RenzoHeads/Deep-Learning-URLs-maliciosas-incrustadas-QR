@@ -271,8 +271,6 @@ private fun NavGuardianRutas(
         composable(Rutas.HOME) {
             PantallaHome(
                 onEscanear = { navController.navigate(Rutas.ANALISIS) },
-                onVerHistorial = { navController.navigate(Rutas.HISTORIAL) },
-                datosViewModel = viewModels.datosViewModel,
                 pipelineViewModel = viewModels.pipelineViewModel,
             )
         }

@@ -19,8 +19,6 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
-import java.util.Calendar
-import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 
 data class GrupoHistorial(
@@ -64,32 +62,17 @@ internal fun agruparHistorialPorFecha(
     ahora: Long = System.currentTimeMillis()
 ): List<GrupoHistorial> {
     val ordenados = escaneos.sortedByDescending { it.creadoEnMillis }
-    val hoy = ordenados.filter { diasDeDiferenciaHistorial(it.creadoEnMillis, ahora) == 0L }
-    val ayer = ordenados.filter { diasDeDiferenciaHistorial(it.creadoEnMillis, ahora) == 1L }
-    val anteriores = ordenados.filter { diasDeDiferenciaHistorial(it.creadoEnMillis, ahora) >= 2L }
+    // Blocker 2 fix: delega a `diasDeDiferencia` (Fechas.kt) — antes existia
+    // un gemelo `diasDeDiferenciaHistorial` aqui mismo con algoritmo identico;
+    // el unico diferencial (seam `ahora`) ya esta absorbido en la firma canonica.
+    val hoy = ordenados.filter { diasDeDiferencia(it.creadoEnMillis, ahora) == 0L }
+    val ayer = ordenados.filter { diasDeDiferencia(it.creadoEnMillis, ahora) == 1L }
+    val anteriores = ordenados.filter { diasDeDiferencia(it.creadoEnMillis, ahora) >= 2L }
     return buildList {
         if (hoy.isNotEmpty()) add(GrupoHistorial("Hoy", hoy))
         if (ayer.isNotEmpty()) add(GrupoHistorial("Ayer", ayer))
         if (anteriores.isNotEmpty()) add(GrupoHistorial("Anteriores", anteriores))
     }
-}
-
-internal fun diasDeDiferenciaHistorial(millis: Long, ahora: Long = System.currentTimeMillis()): Long {
-    val calAhora = Calendar.getInstance().apply {
-        timeInMillis = ahora
-        set(Calendar.HOUR_OF_DAY, 0)
-        set(Calendar.MINUTE, 0)
-        set(Calendar.SECOND, 0)
-        set(Calendar.MILLISECOND, 0)
-    }
-    val calEnt = Calendar.getInstance().apply {
-        timeInMillis = millis
-        set(Calendar.HOUR_OF_DAY, 0)
-        set(Calendar.MINUTE, 0)
-        set(Calendar.SECOND, 0)
-        set(Calendar.MILLISECOND, 0)
-    }
-    return TimeUnit.MILLISECONDS.toDays(calAhora.timeInMillis - calEnt.timeInMillis)
 }
 
 /**

@@ -3,6 +3,7 @@ package com.qrsecurity.detector.datos.repositorios
 import androidx.room.withTransaction
 import com.qrsecurity.detector.api.ClienteBackend
 import com.qrsecurity.detector.api.ClienteBackend.CategoriaDenuncia
+import com.qrsecurity.detector.api.listarCategoriasDenuncia
 import com.qrsecurity.detector.datos.local.BaseDatosSeguridad
 import com.qrsecurity.detector.datos.local.entidades.CategoriaDenunciaEntity
 import com.qrsecurity.detector.datos.local.entidades.SyncStateEntity

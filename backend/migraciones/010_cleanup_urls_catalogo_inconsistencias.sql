@@ -1,6 +1,9 @@
 -- ============================================================================
--- Migration: cleanup urls_catalogo inconsistencias en Neon produccion
+-- Migration 010: cleanup urls_catalogo inconsistencias en Neon produccion
 -- ============================================================================
+-- Secuencia: 006 (notas_analisis) → 007 (id_cliente) → 008 (unique-activo)
+--            → 009 (indices delta sync) → 010 (este script)
+-- Aplicar DESPUES de 006-009. Idempotente (safe re-run).
 -- Bug: DELETE /escaneos/{id} solo hacía soft-delete del log
 -- (historial_escaneos SET deleted_at) pero NO recomputaba el cache maestro
 -- urls_catalogo. Resultado: 19 entradas con veces_escaneada > 0 contra 0
@@ -10,8 +13,6 @@
 -- usando la misma logica que recompute_url_catalogo_after_delete:
 --   - veces = 0 vivos  → DELETE la entrada del cache
 --   - veces = N > 0    → UPDATE veces_escaneada = N + campos del ultimo vivo
---
--- Idempotente: safe re-run (todas las operaciones son deterministas).
 -- ============================================================================
 -- Proyecto: Edgar (solitary-bonus-36970102)
 -- Branch:   production (br-fancy-fire-a828ocva)

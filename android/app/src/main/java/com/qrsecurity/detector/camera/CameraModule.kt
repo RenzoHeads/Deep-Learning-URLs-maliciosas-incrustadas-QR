@@ -1,6 +1,8 @@
 package com.qrsecurity.detector.camera
 
 import android.content.Context
+import android.graphics.Rect
+import androidx.camera.core.AspectRatio
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
@@ -19,13 +21,38 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
 /**
+ *Resultado de una deteccion QR exitosa.
+ *
+ * Contiene el [payload] (URL cruda del QR) y el [boundingBox] del codigo QR
+ * detectado por ML Kit, expresado en coordenadas de la imagen POST-ROTACION
+ * (es decir, la imagen tal como ML Kit la ve tras aplicar `rotationDegrees`).
+ *
+ * Tambien incluye [anchoImagen] y [altoImagen] — las dimensiones de la imagen
+ * post-rotacion. Estos valores permiten a la UI mapear el bounding box de
+ * espacio de imagen a coordenadas de pantalla, para dibujar un overlay estilo
+ * Google Lens que resalta el QR detectado.
+ *
+ * @param payload URL cruda del codigo QR.
+ * @param boundingBox Rectangulo del QR en coordenadas de imagen post-rotacion.
+ * @param anchoImagen Ancho de la imagen post-rotacion (pixels).
+ * @param altoImagen Alto de la imagen post-rotacion (pixels).
+ */
+data class DeteccionQr(
+    val payload: String,
+    val boundingBox: Rect,
+    val anchoImagen: Int,
+    val altoImagen: Int
+)
+
+/**
  * Encapsula toda la configuracion CameraX y el analisis de frames ML Kit.
  *
  * Responsabilidades:
  *  1. Vincular un caso de uso [Preview] al [PreviewView] provisto para que el usuario vea la camara en vivo.
  *  2. Vincular un caso de uso [ImageAnalysis] que alimente cada frame al
  *     [BarcodeScanner] de ML Kit.
- *  3. Invocar [onQrDetectado] con la cadena de payload QR cruda cuando se encuentra un codigo QR.
+ *  3. Invocar [onQrDetectado] con un [DeteccionQr] (payload + boundingBox +
+ *     dimensiones de imagen) cuando se encuentra un codigo QR.
  *
  * La clase es consciente del ciclo de vida: obtiene un [ProcessCameraProvider] y vincula los casos
  * de uso al ciclo de vida del [LifecycleOwner] para que la camara se detenga automaticamente cuando
@@ -35,7 +62,7 @@ class ModuloCamara(
     private val context: Context,
     private val lifecycleOwner: LifecycleOwner,
     private val previewView: PreviewView,
-    onQrDetectado: (String) -> Unit
+    onQrDetectado: (DeteccionQr) -> Unit
 ) {
 
     /**
@@ -50,14 +77,62 @@ class ModuloCamara(
      * dispara el callback fresco.
      */
     @Volatile
-    private var onQrDetectado: (String) -> Unit = onQrDetectado
+    private var onQrDetectado: (DeteccionQr) -> Unit = onQrDetectado
 
     /**
-     * Permite a la pantalla host (ver VistaPreviaCamaraCyberSentinel) refrescar
-     * el callback de QR tras una recomposition, evitando el bug stale-callback.
+     * Permite a la pantalla host refrescar el callback de QR tras una
+     * recomposition, evitando el bug stale-callback.
      */
-    fun setOnQrDetectado(callback: (String) -> Unit) {
+    fun setOnQrDetectado(callback: (DeteccionQr) -> Unit) {
         onQrDetectado = callback
+    }
+
+    /**
+     * Gate a nivel frame: cuando es false, [analizarFrame] cierra el frame
+     * inmediatamente sin procesarlo. Esto previene multi-deteccion del mismo
+     * QR antes de que `analizando=true` se propague al estado de Compose.
+     *
+     * El bug: el debounce de 1200ms filtra re-detecciones del MISMO timestamp,
+     * pero la camara sigue corriendo a 30fps. Entre el frame que dispara el
+     * callback (T=0) y el momento en que `analizando=true` llega al estado de
+     * Compose (T=50-200ms por propagacion StateFlow→collectAsStateWithLifecycle),
+     * pueden entrar 5-10 frames mas. Si el QR sigue en vista, el debounce
+     * titanex acepta uno nuevo a los 1200ms — y si la inference tarda mas de
+     * 1200ms (TFLite cold start), `analizando` puede seguir siendo false
+     * cuando el debounce expira → segundo escaneo → dos entradas en historial.
+     *
+     * Con este gate, la pantalla llama `pausarDeteccion()` en el instante
+     * exacto en que el callback dispara — atomico, sin esperar propagacion
+     * de estado. La camara fisica sigue viva (el usuario ve el feed), pero
+     * los frames se descartan sin procesar ML Kit.
+     */
+    @Volatile
+    private var deteccionActiva: Boolean = true
+
+    /**
+     * Pausa el analisis de frames. Los frames entrantes se cierran sin
+     * procesar ML Kit. La camara sigue viva (preview visible).
+     */
+    fun pausarDeteccion() {
+        deteccionActiva = false
+    }
+
+    /**
+     * Reanuda el analisis de frames y resetea el debounce al timestamp actual
+     * (no a 0L) para que el QR que acaba de escanear no se re-detecte
+     * inmediatamente dentro de la ventana de debounce.
+     *
+     * Bug fix: antes `ultimoTimestampAceptado.set(0L)` reseteaba el debounce a
+     * epoch, lo que permitia re-detectar el mismo QR en el siguiente frame.
+     * Si el usuario cancela el dialogo "URL ya escaneada" y el QR sigue en
+     * vista, la camara re-detecta instantaneamente → el dialogo reaparece de
+     * golpe → experience jarring + ciclo infinito si el usuario no mueve la
+     * camara. Ahora seteamos el timestamp actual, dandole al usuario un
+     * periodo de debounce completo (1200ms) para apartar la camara del QR.
+     */
+    fun reanudarDeteccion() {
+        ultimoTimestampAceptado.set(System.currentTimeMillis())
+        deteccionActiva = true
     }
 
     /**
@@ -126,7 +201,12 @@ class ModuloCamara(
             val proveedorCamara = futuroProveedorCamara.get()
 
             // ── Caso de uso de vista previa ──
+            // Mismo aspect ratio que ImageAnalysis para que el bounding box
+            // de ML Kit (en espacio de imagen) mapee correctamente al espacio
+            // de pantalla (FILL_CENTER). Si Preview usa 16:9 y ImageAnalysis
+            // 4:3, el FOV difiere y el highlight del QR queda desalineado.
             val vistaPrevia = Preview.Builder()
+                .setTargetAspectRatio(AspectRatio.RATIO_16_9)
                 .build()
                 .also {
                     it.setSurfaceProvider(previewView.surfaceProvider)
@@ -148,7 +228,10 @@ class ModuloCamara(
             executorAnalizador = executorNuevo
 
             // ── Caso de uso de analisis de imagen ──
+            // Mismo aspect ratio que Preview (RATIO_16_9) para que el
+            // bounding box de ML Kit mapee 1:1 al espacio de pantalla.
             val analisisImagen = ImageAnalysis.Builder()
+                .setTargetAspectRatio(AspectRatio.RATIO_16_9)
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
                 .also {
@@ -172,21 +255,38 @@ class ModuloCamara(
 
     /**
      * Analizador de frame: convierte el [ImageProxy] a un [InputImage] de ML Kit y
-     * escanea buscando codigos de barras QR. Llama a [onQrDetectado] en caso de exito
-     * e inmediatamente cierra la imagen para liberar el buffer.
+     * escanea buscando codigos de barras QR. Llama a [onQrDetectado] con un
+     * [DeteccionQr] (payload + boundingBox + dimensiones post-rotacion) en caso
+     * de exito e inmediatamente cierra la imagen para liberar el buffer.
      */
     @Suppress("DEPRECATION")
     private fun analizarFrame(imageProxy: ImageProxy) {
+        // Gate: si la deteccion esta pausada, descartar el frame sin tocar ML Kit.
+        if (!deteccionActiva) {
+            imageProxy.close()
+            return
+        }
         val mediaImage = imageProxy.image
         if (mediaImage == null) {
             imageProxy.close()
             return
         }
 
-        val imagenEntrada = InputImage.fromMediaImage(
-            mediaImage,
-            imageProxy.imageInfo.rotationDegrees
-        )
+        val rotacion = imageProxy.imageInfo.rotationDegrees
+        val imagenEntrada = InputImage.fromMediaImage(mediaImage, rotacion)
+
+        // Dimensiones de la imagen POST-rotacion — el espacio en el que ML Kit
+        // reporta barcode.boundingBox. Si rotacion es 90 o 270, las dimensiones
+        // se intercambian respecto al buffer original.
+        val anchoPostRot: Int
+        val altoPostRot: Int
+        if (rotacion == 90 || rotacion == 270) {
+            anchoPostRot = mediaImage.height
+            altoPostRot = mediaImage.width
+        } else {
+            anchoPostRot = mediaImage.width
+            altoPostRot = mediaImage.height
+        }
 
         escanerCodigosBarras.process(imagenEntrada)
             .addOnSuccessListener { codigosBarras ->
@@ -195,7 +295,9 @@ class ModuloCamara(
                     context,
                     onQrDetectado,
                     ultimoTimestampAceptado,
-                    debounceMs
+                    debounceMs,
+                    anchoPostRot,
+                    altoPostRot
                 )
             }
             .addOnFailureListener { e ->
@@ -208,26 +310,38 @@ class ModuloCamara(
 
     /**
      * Procesa la lista de codigos de barras detectados por ML Kit.
-     * Filtra solo QR, aplica debounce y dispara el callback en hilo principal.
+     * Filtra solo QR, aplica debounce y dispara el callback en hilo principal
+     * con un [DeteccionQr] que incluye el boundingBox y las dimensiones de la
+     * imagen post-rotacion (necesarias para mapear el bbox a coordenadas de
+     * pantalla en la UI).
      */
     private fun procesarCodigosDetectados(
         codigosBarras: List<Barcode>,
         context: Context,
-        onQrDetectado: (String) -> Unit,
+        onQrDetectado: (DeteccionQr) -> Unit,
         ultimoTimestamp: AtomicLong,
-        debounceMs: Long
+        debounceMs: Long,
+        anchoImagen: Int,
+        altoImagen: Int
     ) {
         for (codigo in codigosBarras) {
             if (codigo.format == Barcode.FORMAT_QR_CODE) {
                 val valorCrudo = codigo.rawValue
-                if (!valorCrudo.isNullOrBlank()) {
+                val bbox = codigo.boundingBox
+                if (!valorCrudo.isNullOrBlank() && bbox != null) {
                     val ts = System.currentTimeMillis()
                     val aceptado = ultimoTimestamp.updateAndGet { cur ->
                         if (ts - cur >= debounceMs) ts else cur
                     }
                     if (aceptado == ts) {
+                        val deteccion = DeteccionQr(
+                            payload = valorCrudo,
+                            boundingBox = bbox,
+                            anchoImagen = anchoImagen,
+                            altoImagen = altoImagen
+                        )
                         ContextCompat.getMainExecutor(context).execute {
-                            onQrDetectado(valorCrudo)
+                            onQrDetectado(deteccion)
                         }
                     }
                 }

@@ -13,9 +13,7 @@ Uso tipico dentro de un endpoint:
         ... = await conexion.fetchval("SELECT 1")
 """
 import asyncio
-import hashlib
 import logging
-from typing import Any
 
 import asyncpg
 from app.config import obtener_ajustes
@@ -27,7 +25,7 @@ _pool_lock: asyncio.Lock | None = None
 
 
 def _obtener_lock() -> asyncio.Lock:
-    """Devuelve el lock de creación del pool, creándolo perezosamente.
+    """Devuelve el lock de creacion del pool, creandolo perezosamente.
 
     El lock se crea bajo el event loop activo (no en import-time) para evitar
     el warning ``Got a Litre Object`` en loops distintos (relevante en tests
@@ -68,7 +66,7 @@ async def obtener_pool() -> asyncpg.Pool:
     ``obtener_pool`` simultaneamente en un cold-start (pool aun no creado),
     ambos veian ``_pool is None`` y ambos llamaban ``create_pool`` —
     creando dos pools y descartando uno (conexionFilter leak). Ahora un
-    ``asyncio.Lock`` serializa la creación: el segundo await espera al
+    ``asyncio.Lock`` serializa la creacion: el segundo await espera al
     primero y reutiliza el pool ya creado.
     """
     global _pool
@@ -93,7 +91,7 @@ async def obtener_pool() -> asyncpg.Pool:
                 # conexion hasta el primer ``acquire()``, repartiendo la latencia
                 # entre los requests reales.
                 min_size=0,
-                # BUG #10 audit fix: max_size 5→20. Con miles de usuarios
+                # BUG #10 audit fix: max_size 5->20. Con miles de usuarios
                 # concurrentes haciendo delta-syncs paginados (5 paginas x
                 # 200 filas = 1000 filas por worker-run, 3 tablas), el pool
                 # de 5 conexiones era un cuello de botella — los requests se
@@ -144,253 +142,3 @@ async def cerrar_pool() -> None:
         await _pool.close()
         _pool = None
         logger.info("Pool de conexiones cerrado")
-
-
-# ============================================================================
-# Deduplicación (cache + log) — helpers de hashing y lookup del cache maestro.
-# ============================================================================
-
-def hash_url(url_limpia: str) -> str:
-    """Computa ``SHA-256(url_limpia)`` en hexadecimal lowercase (64 chars).
-
-    Espejo exacto del helper Android
-    ``com.qrsecurity.detector.datos.local.sha256Hex`` — misma entrada (URL
-    limpia UTF-8), mismo algoritmo (SHA-256), misma salida (hex lowercase de
-    64 caracteres). La coherencia cross-platform es obligatoria: el hash es
-    la PK de ``urls_catalogo`` tanto en Room (Android) como en Neon (backend),
-    y los lookups de dedup de Android consultan ambos caches con el mismo
-    hash. Si divergieran, el dedup del cliente no encontraría entradas que el
-    backend ya registró, y viceversa.
-
-    Args:
-        url_limpia: URL ya normalizada (sin protocolo, sin ``www.``, sin
-            ``/`` final). El caller es responsable de normalizar antes de
-            hashear — aquí no se re-normaliza para mantener un único punto
-            de verdad (Preprocesador.limpiarUrl en Android).
-
-    Returns:
-        Hex string de 64 caracteres (SHA-256 = 32 bytes = 64 hex chars),
-        lowercase.
-    """
-    return hashlib.sha256(url_limpia.encode("utf-8")).hexdigest()
-
-
-async def buscar_url_catalogo(
-    conexion: asyncpg.Connection, url_limpia: str
-) -> dict[str, Any] | None:
-    """Busca una URL en el cache maestro ``urls_catalogo`` por su hash.
-
-    Patrón cache+log (deduplicación): el backend mantiene un cache maestro
-    denormalizado ``urls_catalogo`` (PK ``url_hash`` = SHA-256(url_limpia))
-    con el último resultado conocido + un contador ``veces_escaneada``. El
-    endpoint ``GET /escaneos/existe-url`` usa esta función para responder
-    sin tocar el log append-only ``historial_escaneos``.
-
-    Reutiliza la ``conexion`` del caller (ya dentro de un ``pool.acquire()``
-    o transacción) — no abre una nueva conexión.
-
-    Security fix (cross-user data leak): ``urls_catalogo`` es una tabla
-    **global** (PK ``url_hash`` único, sin columna ``id_usuario``) — el
-    catálogo es intencionalmente crowd-sourced para que el dedup
-    cross-device funcione. Sin embargo, el ``SELECT`` ahora recupera
-    **solo** las columnas necesarias para la respuesta stripped
-    (``url_hash``, ``url_limpia``, ``ultimo_nivel_alerta``). Las columnas
-    sensibles (``ultima_probabilidad``, ``ultimo_escaneo_millis``,
-    ``veces_escaneada``) no sefetchan — defense in depth: aunque alguien
-    agregue esos campos de vuelta al modelo Pydantic, el SQL no los sirve.
-    Ver [UrlCatalogoRespuesta] para el contrato de respuesta.
-
-    Args:
-        conexion: Conexión asyncpg activa.
-        url_limpia: URL limpia (sin normalizar aquí — el caller normaliza).
-
-    Returns:
-        ``dict`` con las columnas no sensibles de ``urls_catalogo``
-        (``url_hash``, ``url_limpia``, ``ultimo_nivel_alerta``) si existe la
-        entrada, o ``None`` si la URL no fue escaneada antes.
-    """
-    h = hash_url(url_limpia)
-    fila = await conexion.fetchrow(
-        """
-        SELECT url_hash, url_limpia, ultimo_nivel_alerta
-        FROM urls_catalogo
-        WHERE url_hash = $1
-        """,
-        h,
-    )
-    if fila is None:
-        return None
-    return dict(fila)
-
-
-async def upsert_url_catalogo(
-    conexion: asyncpg.Connection,
-    url_limpia: str,
-    nivel_alerta: str,
-    probabilidad: float,
-) -> None:
-    """UPSERT de una entrada en el cache maestro ``urls_catalogo``.
-
-    Patrón cache+log (deduplicación): cada vez que se inserta un nuevo escaneo
-    en el log append-only ``historial_escaneos``, se hace UPSERT del cache
-    maestro **dentro de la misma transacción** (atomicidad cache+log). Si la
-    URL ya existe: se actualiza el último resultado + se incrementa
-    ``veces_escaneada`` en 1. Si es nueva: se inserta con ``veces_escaneada = 1``.
-
-    Uso típico dentro de ``POST /escaneos``::
-
-        async with pool.acquire() as conexion:
-            async with conexion.transaction():
-                await conexion.execute(INSERT historial_escaneos ...)
-                await upsert_url_catalogo(conexion, url_limpia, nivel, prob)
-
-    Reutiliza la ``conexion`` del caller — no abre una nueva, no hace su
-    propio ``BEGIN``/``COMMIT`` (el caller controla la tx).
-
-    Args:
-        conexion: Conexión asyncpg activa dentro de una transacción.
-        url_limpia: URL limpia (sin normalizar aquí — el caller normaliza).
-        nivel_alerta: Nivel discreto del último escaneo
-            (``"SEGURO"``/``"SOSPECHOSO"``/``"MALICIOSO"``).
-        probabilidad: Probabilidad sigmoid [0, 1] del último escaneo.
-    """
-    h = hash_url(url_limpia)
-    ahora_millis = _epoch_millis_ahora()
-    await conexion.execute(
-        """
-        INSERT INTO urls_catalogo
-            (url_hash, url_limpia, ultimo_nivel_alerta, ultima_probabilidad,
-             ultimo_escaneo_millis, veces_escaneada, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, 1, now(), now())
-        ON CONFLICT (url_hash) DO UPDATE
-            SET ultimo_nivel_alerta       = EXCLUDED.ultimo_nivel_alerta,
-                ultima_probabilidad       = EXCLUDED.ultima_probabilidad,
-                ultimo_escaneo_millis     = EXCLUDED.ultimo_escaneo_millis,
-                veces_escaneada           = urls_catalogo.veces_escaneada + 1,
-                updated_at                = now()
-        """,
-        h,
-        url_limpia,
-        nivel_alerta,
-        probabilidad,
-        ahora_millis,
-    )
-
-
-def _epoch_millis_ahora() -> int:
-    """Timestamp de ahora en millis desde epoch (UTC)."""
-    import time
-    return int(time.time() * 1000)
-
-
-async def recompute_url_catalogo_after_delete(
-    conexion: asyncpg.Connection, url_limpia: str
-) -> None:
-    """Recomputa [urls_catalogo] tras la eliminación lógica de un escaneo.
-
-    Patrón cache+log (deduplicación): ``historial_escaneos`` es el log
-    append-only (con *soft-delete* vía ``deleted_at``); ``urls_catalogo``
-    es el cache maestro denormalizado una-fila-por-URL con
-    ``veces_escaneada``, ``ultimo_nivel_alerta``, ``ultima_probabilidad``
-    y ``ultimo_escaneo_millis``. Esta función mantiene ese cache
-    sincronizado con el log **tras un DELETE** — la simetría del
-    [upsert_url_catalogo] que corre tras un POST.
-
-    Comportamiento:
-      - Si quedan 0 escaneos vivos (``deleted_at IS NULL``) para esa
-        ``url_limpia`` en todo el log (la tabla es global, sin
-        ``id_usuario``): se **elimina** la entrada del cache maestro.
-        El siguiente escaneo de la misma URL, en cualquier dispositivo,
-        será tratado como nuevo — ya no se disparará el dedup
-        cross-device ``Estado.UrlDuplicada`` (diálogo "URL ya
-        escaneada") para esa URL.
-      - Si quedan N>0 escaneos vivos: se **actualiza** la entrada del
-        cache con ``veces_escaneada=N`` (no N-1, no viejo-1) y los
-        campos denormalizados del último escaneo vivo por orden
-        cronológico ``creado_en DESC``. ``veces_escaneada`` refleja
-        ahora el **conteo de escaneos vivos**, no el histórico total
-        — alineado con el comportamiento esperado por el usuario
-        (borrar un escaneo quita 1 al contador que ve la UI Android).
-
-    Idempotencia: segura de invocar incluso si la fila nunca existió en
-    el cache (el ``DELETE WHERE url_hash=...`` es no-op, el ``UPDATE``
-    tras el ``SELECT`` se ejecuta solo si hay entrada y hay vivo).
-
-    Atomicidad: el caller ya管理部门 la transacción (típicamente
-    [app.routers.historial.eliminar_escaneo]). Esta función no abre
-    su propio ``BEGIN``/``COMMIT``.
-
-    Anti-leak (ver [buscar_url_catalogo]): el cache ``urls_catalogo`` es
-    global y **sin** ``id_usuario`` — los recuentos son agregados
-    cross-device. Esta función devuelve nada (no sirve datos al
-    cliente); solo muta el cache internamente.
-
-    Args:
-        conexion: Conexión asyncpg activa dentro de una transacción.
-        url_limpia: URL limpia (sin normalizar aquí — el caller
-            normaliza) cuya entrada del cache se quiere recomputar tras
-            un soft-delete del log.
-
-    Uso típico dentro de ``DELETE /escaneos/{id}``::
-
-        async with pool.acquire() as conexion:
-            async with conexion.transaction():
-                await conexion.execute(
-                    "UPDATE historial_escaneos SET deleted_at = now() ..."
-                )
-                await recompute_url_catalogo_after_delete(
-                    conexion, escaneo.url_limpia
-                )
-    """
-    h = hash_url(url_limpia)
-    # 1. Contar escaneos vivos para esa url_limpia en TODO el log
-    #    (no por id_usuario — el cache es crowd-sourced cross-device).
-    veces = await conexion.fetchval(
-        """
-        SELECT COUNT(*) FROM historial_escaneos
-        WHERE url_limpia = $1 AND deleted_at IS NULL
-        """,
-        url_limpia,
-    )
-    if veces in (None, 0):
-        # Sin filas vivas: borrar la entrada del cache maestro.
-        await conexion.execute(
-            "DELETE FROM urls_catalogo WHERE url_hash = $1",
-            h,
-        )
-        return
-    # 2. Al menos un escaneo vivo: actualizar el cache con los campos
-    #    del último escaneo vivo (creado_en DESC, LIMIT 1) y
-    #    veces_escaneada = N (no N-1, no viejo-1). Dos queries para
-    #    mantener el parser SQL del test fake feliz (no usa array_agg).
-    ultimo = await conexion.fetchrow(
-        """
-        SELECT nivel_alerta, probabilidad, creado_en FROM historial_escaneos
-        WHERE url_limpia = $1 AND deleted_at IS NULL
-        ORDER BY creado_en DESC, id DESC LIMIT 1
-        """,
-        url_limpia,
-    )
-    if ultimo is None:
-        # Race raro: el COUNT dijo >0 pero el SELECT no encontro fila
-        # (otra tx borro entre ambas). No hay nada que hacer. La tx
-        # commitea el soft-delete; el recompute correr# en otro DELETE.
-        return
-    ultimo_millis = int(ultimo["creado_en"].timestamp() * 1000) if ultimo["creado_en"] else 0
-    await conexion.execute(
-        """
-        UPDATE urls_catalogo
-        SET ultimo_nivel_alerta   = $2,
-            ultima_probabilidad   = $3,
-            ultimo_escaneo_millis = $4,
-            veces_escaneada       = $5,
-            updated_at            = now()
-        WHERE url_hash = $1
-        """,
-        h,
-        ultimo["nivel_alerta"],
-        ultimo["probabilidad"],
-        ultimo_millis,
-        veces,
-    )
-

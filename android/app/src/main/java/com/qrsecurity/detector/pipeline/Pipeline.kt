@@ -2,11 +2,14 @@ package com.qrsecurity.detector.pipeline
 
 import android.content.Context
 import com.qrsecurity.detector.api.ClienteBackend
+import com.qrsecurity.detector.api.existeUrl
 import com.qrsecurity.detector.cache.CacheResultados
 import com.qrsecurity.detector.datos.local.BaseDatosSeguridad
 import com.qrsecurity.detector.datos.local.entidades.UrlCatalogoEntity
 import com.qrsecurity.detector.datos.repositorios.RepositorioEscaneos
 import com.qrsecurity.detector.datos.repositorios.RepositorioUrlsBloqueadas
+import com.qrsecurity.detector.datos.repositorios.bloquearLocal
+import com.qrsecurity.detector.datos.repositorios.registrarLocal
 import com.qrsecurity.detector.datos.sync.MediadorSincronizacion
 import com.qrsecurity.detector.ml.ControladorAlerta
 import com.qrsecurity.detector.ml.MotorInferencia

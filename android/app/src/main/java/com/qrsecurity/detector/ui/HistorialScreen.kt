@@ -46,7 +46,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -68,7 +67,6 @@ import com.qrsecurity.detector.ui.theme.Espaciado
 import com.qrsecurity.detector.ui.theme.RadioBorde
 import com.qrsecurity.detector.ui.theme.TamanosIcono
 import java.util.Locale
-import java.util.concurrent.TimeUnit
 
 /**
  * Pantalla de Historial (Pencil frame fvsVa).
@@ -499,7 +497,7 @@ private fun FilaEscaneo(
             verticalArrangement = Arrangement.spacedBy(Espaciado.xs)
         ) {
             Text(
-                text = tiempoRelativo(escaneo.creadoEnMillis),
+                text = fechaRelativa(escaneo.creadoEnMillis),
                 style = MaterialTheme.typography.labelSmall,
                 color = CyberTextoSecundario
             )
@@ -523,25 +521,3 @@ private fun FilaEscaneo(
     }
 }
 
-private fun tiempoRelativo(millis: Long, ahora: Long = System.currentTimeMillis()): String {
-    val delta = ahora - millis
-    if (delta < 0) return "ahora"
-    val dias = diasDeDiferenciaHistorial(millis, ahora)
-    if (dias <= 0L) {
-        val minutos = TimeUnit.MILLISECONDS.toMinutes(delta)
-        val horas = TimeUnit.MILLISECONDS.toHours(delta)
-        return when {
-            minutos < 1 -> "ahora"
-            minutos < 60 -> "hace $minutos min"
-            else -> "hace $horas h"
-        }
-    }
-    if (dias == 1L) return "ayer"
-    if (dias in 2L..30L) return "hace $dias días"
-    if (dias in 31L..365L) {
-        val meses = (dias / 30).toInt()
-        return "hace $meses ${if (meses == 1) "mes" else "meses"}"
-    }
-    val anos = (dias / 365).toInt()
-    return "hace $anos ${if (anos == 1) "año" else "años"}"
-}

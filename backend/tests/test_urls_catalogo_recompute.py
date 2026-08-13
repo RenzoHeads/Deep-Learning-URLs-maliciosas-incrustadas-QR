@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from app.base_datos import hash_url
+from app.catalogo import hash_url
 
 
 def _payload(url_limpia: str = "example.com/foo", nivel: str = "MALICIOSO",

@@ -5,21 +5,26 @@ Flujo:
   1. POST /auth/registrar  — crea usuario con nombre_usuario + password (bcrypt).
   2. POST /auth/login       — verifica credenciales y devuelve token_api.
 
+Delega la logica de negocio a ``app.servicios.auth``; este router solo
+traduce excepciones de dominio a codigos HTTP y mantiene ``verificar_token``
+como dependencia FastAPI (necesita el objeto ``Request``).
+
 Nota: el flujo legacy POST /auth/registrar-dispositivo fue eliminado — el
 frontend Android ya solo usa usuario+password. Si necesitas reinstaurarlo,
 recupera el router del historial git.
 """
-import asyncio
 import logging
-import secrets
-import uuid
 
-import asyncpg
-import bcrypt
 from fastapi import APIRouter, HTTPException, Request, status
 
 from app.base_datos import obtener_pool
 from app.modelos import LoginEntrada, RegistroUsuarioEntrada, RespuestaAuth
+from app.servicios.auth import (
+    CredencialesInvalidas,
+    UsuarioYaExiste,
+    login_usuario as servicio_login_usuario,
+    registrar_usuario as servicio_registrar_usuario,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,65 +38,19 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 async def registrar_usuario(datos: RegistroUsuarioEntrada):
     """Registra un nuevo usuario con nombre_usuario y password."""
     pool = await obtener_pool()
-
-    async with pool.acquire() as conexion:
-        # Verificar primero si el nombre_usuario ya existe. Hacer el SELECT
-        # antes del bcrypt ahorra ~150ms de CPU-bound hashing cuando el
-        # usuario esta ocupado (failure path) — el bcrypt solo se ejecuta
-        # para el success path.
-        existe = await conexion.fetchval(
-            "SELECT 1 FROM usuarios WHERE nombre_usuario = $1",
-            datos.nombre_usuario,
+    try:
+        fila = await servicio_registrar_usuario(
+            pool,
+            nombre_usuario=datos.nombre_usuario,
+            password=datos.password,
+            correo=datos.correo,
         )
-        if existe:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="El nombre de usuario ya esta en uso",
-            )
-
-        # Bug B12 fix: ``bcrypt.hashpw`` es CPU-bound (~150ms por diseno).
-        # Antes se ejecutaba sincrono en el event loop del endpoint ``async def``,
-        # bloqueando todos los requests concurrentes durante el hashing.
-        # Ahora se offloadea a un thread del executor por defecto.
-        loop = asyncio.get_running_loop()
-        password_hash = await loop.run_in_executor(
-            None,
-            lambda: bcrypt.hashpw(
-                datos.password.encode("utf-8"), bcrypt.gensalt()
-            ).decode("utf-8"),
+    except UsuarioYaExiste:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="El nombre de usuario ya esta en uso",
         )
-        token = secrets.token_urlsafe(32)
-
-        # Bug B5 fix: antes se insertaba ``id_dispositivo = f"user_{nombre_usuario}"``
-        # sintetico; si un dispositivo legacy ya tenia ese id exacto, la insercion
-        # fallaba por UNIQUE constraint no manejado. Ahora usamos un UUID v4
-        # como id_dispositivo para evitar colisiones con dispositivos legacy.
-        id_disp_sintetico = f"user_{uuid.uuid4()}"
-        try:
-            fila = await conexion.fetchrow(
-                """
-                INSERT INTO usuarios
-                    (id_dispositivo, correo, token_api, nombre_usuario, password_hash)
-                VALUES ($1, $2, $3, $4, $5)
-                RETURNING id, token_api, nombre_usuario, correo, creado_en
-                """,
-                id_disp_sintetico,
-                datos.correo,
-                token,
-                datos.nombre_usuario,
-                password_hash,
-            )
-        except asyncpg.UniqueViolationError:
-            # PostgreSQL UNIQUE VIOLATION (codigo 23505) — nombre_usuario ya existe
-            # (race condition: otra request lo creo entre SELECT e INSERT).
-            # Usamos isinstance en vez de ``"23505" in str(e)`` porque es
-            # robusto frente a cambios de mensaje y no hace falsos positivos
-            # si el string "23505" aparece en otro contexto del error.
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="El nombre de usuario ya esta en uso",
-            )
-        return RespuestaAuth(
+    return RespuestaAuth(
         id_usuario=fila["id"],
         token_api=fila["token_api"],
         nombre_usuario=fila["nombre_usuario"],
@@ -103,49 +62,22 @@ async def registrar_usuario(datos: RegistroUsuarioEntrada):
 # ============================================================================
 # Login por usuario y password
 # ============================================================================
-# Bug B4 fix: hash de referencia de longitud fija para evitar timing attacks.
-# Antes, si ``fila`` era None (usuario no existe) se hacia return inmediato
-# sin ejecutar bcrypt.checkpw, lo que permitia distinguir por tiempo si un
-# usuario existia o no. Ahora siempre ejecutamos un checkpw contra un hash
-# dummy constante para igualar el tiempo de respuesta.
-_HASH_DUMMY = bcrypt.hashpw(b"__dummy__", bcrypt.gensalt()).decode("utf-8")
-
-
 @router.post("/login", response_model=RespuestaAuth)
 async def login_usuario(datos: LoginEntrada):
     """Autentica un usuario por nombre_usuario y password."""
     pool = await obtener_pool()
-
-    async with pool.acquire() as conexion:
-        fila = await conexion.fetchrow(
-            "SELECT id, token_api, nombre_usuario, correo, password_hash, creado_en "
-            "FROM usuarios WHERE nombre_usuario = $1",
-            datos.nombre_usuario,
+    try:
+        fila = await servicio_login_usuario(
+            pool,
+            nombre_usuario=datos.nombre_usuario,
+            password=datos.password,
         )
-
-    # Bug B4 fix: tiempo constante. Si el usuario no existe, verificamos
-    # contra un hash dummy para que el tiempo de respuesta sea igual al
-    # caso donde el usuario existe (evitar enumeracion de usuarios).
-    hash_verificar = fila["password_hash"] if (fila and fila["password_hash"]) else _HASH_DUMMY
-
-    # Bug B11 fix: ``bcrypt.checkpw`` es CPU-bound (~100ms por diseno).
-    # Antes bloqueaba el event loop. Ahora se offloadea a un thread.
-    loop = asyncio.get_running_loop()
-    password_ok = await loop.run_in_executor(
-        None,
-        lambda: bcrypt.checkpw(
-            datos.password.encode("utf-8"),
-            hash_verificar.encode("utf-8"),
-        ),
-    )
-
-    if fila is None or fila["password_hash"] is None or not password_ok:
+    except CredencialesInvalidas:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Usuario o password incorrectos",
             headers={"WWW-Authenticate": "Bearer"},
         )
-
     return RespuestaAuth(
         id_usuario=fila["id"],
         token_api=fila["token_api"],
@@ -224,4 +156,3 @@ async def verificar_token(request: Request) -> str:
         )
 
     return str(fila["id"])
-

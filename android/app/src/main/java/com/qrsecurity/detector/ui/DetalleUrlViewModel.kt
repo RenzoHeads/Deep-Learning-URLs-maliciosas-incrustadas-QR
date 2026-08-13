@@ -5,6 +5,9 @@ import androidx.lifecycle.viewModelScope
 import com.qrsecurity.detector.datos.local.entidades.EscaneoEntity
 import com.qrsecurity.detector.datos.repositorios.RepositorioEscaneos
 import com.qrsecurity.detector.datos.repositorios.RepositorioUrlsBloqueadas
+import com.qrsecurity.detector.datos.repositorios.bloquearLocal
+import com.qrsecurity.detector.datos.repositorios.desbloquearLocal
+import com.qrsecurity.detector.datos.repositorios.eliminarLocalPorUrlLimpia
 import com.qrsecurity.detector.datos.sync.MediadorSincronizacion
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job

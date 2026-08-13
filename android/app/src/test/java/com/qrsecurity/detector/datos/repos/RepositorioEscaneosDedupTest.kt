@@ -5,6 +5,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.qrsecurity.detector.api.ClienteBackend
 import com.qrsecurity.detector.datos.local.BaseDatosSeguridad
 import com.qrsecurity.detector.datos.repositorios.RepositorioEscaneos
+import com.qrsecurity.detector.datos.repositorios.*
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest

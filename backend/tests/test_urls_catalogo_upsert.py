@@ -15,13 +15,13 @@ Estos tests verifican:
      el cache maestro (no se inserta uno nuevo) y se incrementa
      ``veces_escaneada`` a 2. El log append-only conserva ambos escaneos.
   3. El hash que persiste el backend coincide con el hash computado por
-     ``app.base_datos.hash_url`` (espejo de Android ``sha256Hex``).
+     ``app.catalogo.hash_url`` (espejo de Android ``sha256Hex``).
 """
 from __future__ import annotations
 
 import pytest
 
-from app.base_datos import hash_url
+from app.catalogo import hash_url
 
 
 def _payload(url_limpia: str = "example.com/foo", nivel: str = "MALICIOSO",
