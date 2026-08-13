@@ -3,6 +3,7 @@ package com.qrsecurity.detector.datos.repositorios
 import androidx.room.withTransaction
 import com.qrsecurity.detector.api.ClienteBackend
 import com.qrsecurity.detector.datos.local.BaseDatosSeguridad
+import com.qrsecurity.detector.datos.local.entidades.PendingOpEntity
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.withContext
 
@@ -142,5 +143,59 @@ internal suspend fun limpiarNoDirtyAusentesEn(
                 "AND NOT EXISTS (SELECT 1 FROM _tmp_ids_serv t WHERE t.id = $tabla.id)"
         )
         sqliteDb.execSQL("DROP TABLE IF EXISTS _tmp_ids_serv")
+    }
+}
+
+/**
+ * Elimina una fila local siguiendo el patron offline-first de dirty/synced.
+ *
+ * Si [dirty] es true (fila creada localmente sin sync al backend todavia):
+ *  - Borra el pending_op CREATE asociado (si existe) — no llego al backend,
+ *    no hay nada que DELETEar alla.
+ *  - Elimina la fila local.
+ *
+ * Si [dirty] es false (fila ya sincronizada con el backend):
+ *  - Encola un pending_op DELETE para que el SyncWorker lo pushee al
+ *    backend en el proximo run.
+ *  - Elimina la fila local.
+ *
+ * Thermo-nuclear review fix: este patron estaba copy-pasteado en 4 call
+ * sites (eliminarLocal, eliminarLocalPorUrlLimpia x2, desbloquearLocal),
+ * cada uno ~12 LOC identicos salvo por [tabla] y el [eliminarRow] lambda.
+ * Ahora hay una sola definicion; los 4 callers colapsan a 2 LOC cada uno.
+ *
+ * Debe llamarse DENTRO de una `db.withTransaction { }` — todas las
+ * operaciones (pendingOpDao + eliminarRow) son writes en la misma tx.
+ *
+ * @param tabla nombre de la tabla logica (`"escaneos"`, `"urls_bloqueadas"`,
+ *   `"denuncias"`) — se usa solo para etiquetar el pending_op.
+ * @param idLocal UUID client de la fila a eliminar.
+ * @param dirty flag dirty de la fila — decide si borrar CREATE op o
+ *   encolar DELETE op.
+ * @param eliminarRow lambda suspend que ejecuta el DELETE fisico en el DAO
+ *   especifico de la tabla (p. ej. `db.escaneoDao()::eliminarPorId`).
+ */
+internal suspend fun BaseDatosSeguridad.eliminarFilaDirty(
+    tabla: String,
+    idLocal: String,
+    dirty: Boolean,
+    eliminarRow: suspend () -> Unit
+) {
+    if (dirty) {
+        val opCreate = pendingOpDao().findExisting(
+            tabla = tabla, idLocal = idLocal, tipoOperacion = "CREATE"
+        )
+        if (opCreate != null) pendingOpDao().borrarPorId(opCreate.id)
+        eliminarRow()
+    } else {
+        val op = PendingOpEntity(
+            tabla = tabla,
+            tipoOperacion = "DELETE",
+            idLocal = idLocal,
+            payloadJson = null,
+            creadoEnMillis = System.currentTimeMillis()
+        )
+        eliminarRow()
+        pendingOpDao().insertar(op)
     }
 }

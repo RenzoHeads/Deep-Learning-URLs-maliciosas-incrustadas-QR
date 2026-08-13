@@ -103,22 +103,8 @@ suspend fun RepositorioEscaneos.eliminarLocal(id: String) = withContext(ioDispat
     db.withTransaction {
         val fila = db.escaneoDao().obtenerPorId(id)
         if (fila == null) return@withTransaction
-        if (fila.dirty) {
-            val opCreate = db.pendingOpDao().findExisting(
-                tabla = "escaneos", idLocal = id, tipoOperacion = "CREATE"
-            )
-            if (opCreate != null) db.pendingOpDao().borrarPorId(opCreate.id)
+        db.eliminarFilaDirty("escaneos", id, fila.dirty) {
             db.escaneoDao().eliminarPorId(id)
-        } else {
-            val op = PendingOpEntity(
-                tabla = "escaneos",
-                tipoOperacion = "DELETE",
-                idLocal = id,
-                payloadJson = null,
-                creadoEnMillis = System.currentTimeMillis()
-            )
-            db.escaneoDao().eliminarPorId(id)
-            db.pendingOpDao().insertar(op)
         }
         // BUG-C1 fix: reconciliar urls_catalogo
         db.reconciliarUrlsCatalogo(fila.urlLimpia)
@@ -147,23 +133,8 @@ suspend fun RepositorioEscaneos.eliminarLocalPorUrlLimpia(urlLimpia: String) =
         db.withTransaction {
             val filas = db.escaneoDao().todosPorUrlLimpia(urlLimpia)
             for (fila in filas) {
-                val id = fila.id
-                if (fila.dirty) {
-                    val opCreate = db.pendingOpDao().findExisting(
-                        tabla = "escaneos", idLocal = id, tipoOperacion = "CREATE"
-                    )
-                    if (opCreate != null) db.pendingOpDao().borrarPorId(opCreate.id)
-                    db.escaneoDao().eliminarPorId(id)
-                } else {
-                    val op = PendingOpEntity(
-                        tabla = "escaneos",
-                        tipoOperacion = "DELETE",
-                        idLocal = id,
-                        payloadJson = null,
-                        creadoEnMillis = System.currentTimeMillis()
-                    )
-                    db.escaneoDao().eliminarPorId(id)
-                    db.pendingOpDao().insertar(op)
+                db.eliminarFilaDirty("escaneos", fila.id, fila.dirty) {
+                    db.escaneoDao().eliminarPorId(fila.id)
                 }
             }
             db.urlCatalogoDao().eliminarPorHash(sha256Hex(urlLimpia))
@@ -173,27 +144,7 @@ suspend fun RepositorioEscaneos.eliminarLocalPorUrlLimpia(urlLimpia: String) =
             // urls_bloqueadas (local + pending op) en esta misma tx atomica.
             val bloqueada = db.urlBloqueadaDao().obtenerPorUrl(urlLimpia)
             if (bloqueada != null) {
-                if (bloqueada.dirty) {
-                    // Bloqueo local sin sync todavia: borra row + pending CREATE.
-                    val opCreateBloq = db.pendingOpDao().findExisting(
-                        tabla = "urls_bloqueadas",
-                        idLocal = bloqueada.id,
-                        tipoOperacion = "CREATE"
-                    )
-                    if (opCreateBloq != null) db.pendingOpDao().borrarPorId(opCreateBloq.id)
-                    db.urlBloqueadaDao().eliminarPorId(bloqueada.id)
-                } else {
-                    // Bloqueo ya syncedo: borra row local + encola DELETE
-                    // pending op para que el SyncWorker lo pushee al backend.
-                    db.pendingOpDao().insertar(
-                        PendingOpEntity(
-                            tabla = "urls_bloqueadas",
-                            tipoOperacion = "DELETE",
-                            idLocal = bloqueada.id,
-                            payloadJson = null,
-                            creadoEnMillis = System.currentTimeMillis()
-                        )
-                    )
+                db.eliminarFilaDirty("urls_bloqueadas", bloqueada.id, bloqueada.dirty) {
                     db.urlBloqueadaDao().eliminarPorId(bloqueada.id)
                 }
             }

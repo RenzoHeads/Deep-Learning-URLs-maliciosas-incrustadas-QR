@@ -64,22 +64,8 @@ suspend fun RepositorioUrlsBloqueadas.desbloquearLocal(id: String) = withContext
     db.withTransaction {
         val fila = db.urlBloqueadaDao().obtenerPorId(id)
         if (fila == null) return@withTransaction
-        if (fila.dirty) {
-            val opCreate = db.pendingOpDao().findExisting(
-                tabla = "urls_bloqueadas", idLocal = id, tipoOperacion = "CREATE"
-            )
-            if (opCreate != null) db.pendingOpDao().borrarPorId(opCreate.id)
+        db.eliminarFilaDirty("urls_bloqueadas", id, fila.dirty) {
             db.urlBloqueadaDao().eliminarPorId(id)
-        } else {
-            val op = PendingOpEntity(
-                tabla = "urls_bloqueadas",
-                tipoOperacion = "DELETE",
-                idLocal = id,
-                payloadJson = null,
-                creadoEnMillis = System.currentTimeMillis()
-            )
-            db.urlBloqueadaDao().eliminarPorId(id)
-            db.pendingOpDao().insertar(op)
         }
     }
 }
