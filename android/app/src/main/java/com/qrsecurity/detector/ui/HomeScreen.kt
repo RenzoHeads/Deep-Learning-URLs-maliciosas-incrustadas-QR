@@ -212,52 +212,7 @@ fun PantallaHome(
         // ─── Scan reticle (centered square with corner brackets + scan line) ───
         // Solo visible en idle (sin deteccion activa ni analizando)
         if (deteccionQr == null && !analizando) {
-            val scanLineTransition = rememberInfiniteTransition(label = "scanLine")
-            val scanLineOffset by scanLineTransition.animateFloat(
-                initialValue = 0f,
-                targetValue = 1f,
-                animationSpec = infiniteRepeatable(
-                    animation = tween(2500),
-                    repeatMode = RepeatMode.Reverse
-                ),
-                label = "scanLineY"
-            )
-
-            Canvas(
-                modifier = Modifier.fillMaxSize()
-            ) {
-                val reticleSize = minOf(size.width, size.height) * 0.6f
-                val left = (size.width - reticleSize) / 2f
-                val top = (size.height - reticleSize) / 2f
-                val right = left + reticleSize
-                val bottom = top + reticleSize
-                val cornerLen = reticleSize * 0.08f
-                val strokeW = 3.dp.toPx()
-                val color = CyberCyan
-
-                // Corner brackets
-                drawLine(color, Offset(left, top), Offset(left + cornerLen, top), strokeW)
-                drawLine(color, Offset(left, top), Offset(left, top + cornerLen), strokeW)
-                drawLine(color, Offset(right, top), Offset(right - cornerLen, top), strokeW)
-                drawLine(color, Offset(right, top), Offset(right, top + cornerLen), strokeW)
-                drawLine(color, Offset(left, bottom), Offset(left + cornerLen, bottom), strokeW)
-                drawLine(color, Offset(left, bottom), Offset(left, bottom - cornerLen), strokeW)
-                drawLine(color, Offset(right, bottom), Offset(right - cornerLen, bottom), strokeW)
-                drawLine(color, Offset(right, bottom), Offset(right, bottom - cornerLen), strokeW)
-
-                // Animated scan line (horizontal line moving top->bottom inside reticle)
-                val scanY = top + reticleSize * scanLineOffset
-                val scanAlpha = when {
-                    scanLineOffset < 0.05f || scanLineOffset > 0.95f -> 0.3f
-                    else -> 0.85f
-                }
-                drawLine(
-                    color = color.copy(alpha = scanAlpha),
-                    start = Offset(left + cornerLen, scanY),
-                    end = Offset(right - cornerLen, scanY),
-                    strokeWidth = 2.dp.toPx()
-                )
-            }
+            ScanReticle()
         }
 
         // ─── QR highlight overlay (Google Lens style) ───
@@ -265,71 +220,7 @@ fun PantallaHome(
         // El boundingBox de ML Kit esta en coordenadas de imagen post-rotacion;
         // se mapea a coordenadas de pantalla usando el scale type FILL_CENTER
         // del PreviewView (scale = max(viewW/imgW, viewH/imgH), centrado).
-        if (deteccionQr != null) {
-            Canvas(
-                modifier = Modifier.fillMaxSize()
-            ) {
-                val deteccion = deteccionQr ?: return@Canvas
-                val imgW = deteccion.anchoImagen.toFloat()
-                val imgH = deteccion.altoImagen.toFloat()
-                if (imgW <= 0f || imgH <= 0f) return@Canvas
-
-                // FILL_CENTER: scale = max(viewW/imgW, viewH/imgH), centrado
-                val scale = maxOf(size.width / imgW, size.height / imgH)
-                val offsetX = (size.width - imgW * scale) / 2f
-                val offsetY = (size.height - imgH * scale) / 2f
-
-                val bbox = deteccion.boundingBox
-                val rectLeft = offsetX + bbox.left * scale
-                val rectTop = offsetY + bbox.top * scale
-                val rectRight = offsetX + bbox.right * scale
-                val rectBottom = offsetY + bbox.bottom * scale
-
-                val dimColor = Color.Black.copy(alpha = 0.6f)
-
-                // Dim four strips around the QR area (leaves QR visible)
-                // Top strip
-                if (rectTop > 0f) {
-                    drawRect(
-                        color = dimColor,
-                        topLeft = Offset(0f, 0f),
-                        size = Size(size.width, rectTop)
-                    )
-                }
-                // Bottom strip
-                if (rectBottom < size.height) {
-                    drawRect(
-                        color = dimColor,
-                        topLeft = Offset(0f, rectBottom),
-                        size = Size(size.width, size.height - rectBottom)
-                    )
-                }
-                // Left strip
-                if (rectLeft > 0f) {
-                    drawRect(
-                        color = dimColor,
-                        topLeft = Offset(0f, rectTop),
-                        size = Size(rectLeft, rectBottom - rectTop)
-                    )
-                }
-                // Right strip
-                if (rectRight < size.width) {
-                    drawRect(
-                        color = dimColor,
-                        topLeft = Offset(rectRight, rectTop),
-                        size = Size(size.width - rectRight, rectBottom - rectTop)
-                    )
-                }
-
-                // Cyan border around the QR highlight area
-                drawRect(
-                    color = CyberCyan.copy(alpha = 0.85f),
-                    topLeft = Offset(rectLeft, rectTop),
-                    size = Size(rectRight - rectLeft, rectBottom - rectTop),
-                    style = Stroke(width = 3.dp.toPx())
-                )
-            }
-        }
+        deteccionQr?.let { OverlayResaltadoQr(it) }
 
         // ─── Brand header (overlay, top-left) ───
         Row(
@@ -490,5 +381,135 @@ fun PantallaHome(
                 }
             }
         }
+    }
+}
+
+/**
+ * Reticulo de escaneo centrado — marco cuadrado con esquinas cyan y linea
+ * de escaneo animada (top→bottom, loop 2.5s). Solo visible en idle.
+ * Sin dependencias de estado externo — puro Canvas drawing.
+ */
+@Composable
+private fun ScanReticle() {
+    val scanLineTransition = rememberInfiniteTransition(label = "scanLine")
+    val scanLineOffset by scanLineTransition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2500),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "scanLineY"
+    )
+
+    Canvas(
+        modifier = Modifier.fillMaxSize()
+    ) {
+        val reticleSize = minOf(size.width, size.height) * 0.6f
+        val left = (size.width - reticleSize) / 2f
+        val top = (size.height - reticleSize) / 2f
+        val right = left + reticleSize
+        val bottom = top + reticleSize
+        val cornerLen = reticleSize * 0.08f
+        val strokeW = 3.dp.toPx()
+        val color = CyberCyan
+
+        // Corner brackets
+        drawLine(color, Offset(left, top), Offset(left + cornerLen, top), strokeW)
+        drawLine(color, Offset(left, top), Offset(left, top + cornerLen), strokeW)
+        drawLine(color, Offset(right, top), Offset(right - cornerLen, top), strokeW)
+        drawLine(color, Offset(right, top), Offset(right, top + cornerLen), strokeW)
+        drawLine(color, Offset(left, bottom), Offset(left + cornerLen, bottom), strokeW)
+        drawLine(color, Offset(left, bottom), Offset(left, bottom - cornerLen), strokeW)
+        drawLine(color, Offset(right, bottom), Offset(right - cornerLen, bottom), strokeW)
+        drawLine(color, Offset(right, bottom), Offset(right, bottom - cornerLen), strokeW)
+
+        // Animated scan line (horizontal line moving top->bottom inside reticle)
+        val scanY = top + reticleSize * scanLineOffset
+        val scanAlpha = when {
+            scanLineOffset < 0.05f || scanLineOffset > 0.95f -> 0.3f
+            else -> 0.85f
+        }
+        drawLine(
+            color = color.copy(alpha = scanAlpha),
+            start = Offset(left + cornerLen, scanY),
+            end = Offset(right - cornerLen, scanY),
+            strokeWidth = 2.dp.toPx()
+        )
+    }
+}
+
+/**
+ * Overlay estilo Google Lens — oscurece toda la pantalla excepto el area
+ * del bounding box del QR, con un borde cyan. El boundingBox de ML Kit
+ * esta en coordenadas de imagen post-rotacion; se mapea a coordenadas de
+ * pantalla usando el scale type FILL_CENTER del PreviewView
+ * (scale = max(viewW/imgW, viewH/imgH), centrado).
+ *
+ * @param deteccion la deteccion QR con boundingBox + dimensiones de imagen.
+ */
+@Composable
+private fun OverlayResaltadoQr(deteccion: DeteccionQr) {
+    Canvas(
+        modifier = Modifier.fillMaxSize()
+    ) {
+        val imgW = deteccion.anchoImagen.toFloat()
+        val imgH = deteccion.altoImagen.toFloat()
+        if (imgW <= 0f || imgH <= 0f) return@Canvas
+
+        // FILL_CENTER: scale = max(viewW/imgW, viewH/imgH), centrado
+        val scale = maxOf(size.width / imgW, size.height / imgH)
+        val offsetX = (size.width - imgW * scale) / 2f
+        val offsetY = (size.height - imgH * scale) / 2f
+
+        val bbox = deteccion.boundingBox
+        val rectLeft = offsetX + bbox.left * scale
+        val rectTop = offsetY + bbox.top * scale
+        val rectRight = offsetX + bbox.right * scale
+        val rectBottom = offsetY + bbox.bottom * scale
+
+        val dimColor = Color.Black.copy(alpha = 0.6f)
+
+        // Dim four strips around the QR area (leaves QR visible)
+        // Top strip
+        if (rectTop > 0f) {
+            drawRect(
+                color = dimColor,
+                topLeft = Offset(0f, 0f),
+                size = Size(size.width, rectTop)
+            )
+        }
+        // Bottom strip
+        if (rectBottom < size.height) {
+            drawRect(
+                color = dimColor,
+                topLeft = Offset(0f, rectBottom),
+                size = Size(size.width, size.height - rectBottom)
+            )
+        }
+        // Left strip
+        if (rectLeft > 0f) {
+            drawRect(
+                color = dimColor,
+                topLeft = Offset(0f, rectTop),
+                size = Size(rectLeft, rectBottom - rectTop)
+            )
+        }
+        // Right strip
+        if (rectRight < size.width) {
+            drawRect(
+                color = dimColor,
+                topLeft = Offset(rectRight, rectTop),
+                size = Size(size.width - rectRight, rectBottom - rectTop)
+            )
+        }
+
+        // Cyan border around the QR highlight area
+        drawRect(
+            color = CyberCyan.copy(alpha = 0.85f),
+            topLeft = Offset(rectLeft, rectTop),
+            size = Size(rectRight - rectLeft, rectBottom - rectTop),
+            style = Stroke(width = 3.dp.toPx())
+        )
     }
 }

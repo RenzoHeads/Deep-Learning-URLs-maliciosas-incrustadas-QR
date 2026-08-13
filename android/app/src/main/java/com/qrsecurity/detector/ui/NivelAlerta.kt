@@ -1,5 +1,6 @@
 package com.qrsecurity.detector.ui
 
+import android.util.Log
 import androidx.compose.ui.graphics.Color
 import com.qrsecurity.detector.datos.local.entidades.EscaneoEntity
 import com.qrsecurity.detector.ui.theme.CyberAmbar
@@ -67,9 +68,15 @@ enum class NivelAlerta(
         /**
          * Resuelve el [NivelAlerta] desde el string crudo almacenado en
          * [EscaneoEntity.nivelAlerta]. Cae a [SEGURO] si el id no matchea
-         * ninguno (no deberia ocurrir — el backend solo emite los 3 ids).
+         * ninguno (no deberia ocurrir — el backend solo emite los 3 ids)
+         * y emite [Log.w] para que el fallback sea observable en logcat
+         * en vez de silencioso.
          */
-        fun de(id: String): NivelAlerta = entries.firstOrNull { it.id == id } ?: SEGURO
+        fun de(id: String): NivelAlerta = entries.firstOrNull { it.id == id }
+            ?: run {
+                Log.w("NivelAlerta", "ID desconocido '$id' — fallback a SEGURO")
+                SEGURO
+            }
     }
 }
 

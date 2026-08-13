@@ -122,11 +122,10 @@ suspend fun RepositorioEscaneos.eliminarLocal(id: String) = withContext(ioDispat
  * tabla local retenia la fila y el sync nunca pusheada un DELETE al
  * backend. El contador `${urlsBloqueadas.size} bloqueados` en
  * HistorialScreen mostraba URLs bloqueadas que ya no tenian ningun
- * escaneo asociado. Ahora la cascada reusa el patron de
- * [RepositorioUrlsBloqueadas.desbloquearLocal]: si la fila estaba dirty
- * (bloqueo local sin sync), borra row + pending CREATE; si estaba synced,
- * borra row + encola DELETE pending op (el SyncWorker lo pushea a
- * `DELETE /urls-bloqueadas/{id}` en el proximo run).
+ * escaneo asociado. Ahora la cascada llama a [eliminarFilaDirty] que
+ * maneja el patron dirty/synced en un solo sitio (borra row + CREATE op
+ * si dirty; borra row + encola DELETE op si synced — el SyncWorker lo
+ * pushea a `DELETE /urls-bloqueadas/{id}` en el proximo run).
  */
 suspend fun RepositorioEscaneos.eliminarLocalPorUrlLimpia(urlLimpia: String) =
     withContext(ioDispatcher) {
