@@ -129,6 +129,18 @@ suspend fun RepositorioEscaneos.eliminarLocal(id: String) = withContext(ioDispat
  * Elimina TODOS los escaneos (ultima version + reescaneos) de una URL,
  * atomicamente. BUG-C3 fix: batch load en 1 query (antes N+1). WAVE 15
  * fix: borra tambien el row de urls_catalogo en la misma tx.
+ *
+ * Bug fix (stats huerfanas): cascada el borrado a `urls_bloqueadas` en la
+ * misma transaccion. Antes, al eliminar todos los escaneos de una URL,
+ * la entrada de `urls_bloqueadas` (si existia) quedaba huerfana — la
+ * tabla local retenia la fila y el sync nunca pusheada un DELETE al
+ * backend. El contador `${urlsBloqueadas.size} bloqueados` en
+ * HistorialScreen mostraba URLs bloqueadas que ya no tenian ningun
+ * escaneo asociado. Ahora la cascada reusa el patron de
+ * [RepositorioUrlsBloqueadas.desbloquearLocal]: si la fila estaba dirty
+ * (bloqueo local sin sync), borra row + pending CREATE; si estaba synced,
+ * borra row + encola DELETE pending op (el SyncWorker lo pushea a
+ * `DELETE /urls-bloqueadas/{id}` en el proximo run).
  */
 suspend fun RepositorioEscaneos.eliminarLocalPorUrlLimpia(urlLimpia: String) =
     withContext(ioDispatcher) {
@@ -155,6 +167,36 @@ suspend fun RepositorioEscaneos.eliminarLocalPorUrlLimpia(urlLimpia: String) =
                 }
             }
             db.urlCatalogoDao().eliminarPorHash(sha256Hex(urlLimpia))
+
+            // ── Cascada: urls_bloqueadas ──
+            // Si esta URL estaba bloqueada, eliminar tambien la entrada de
+            // urls_bloqueadas (local + pending op) en esta misma tx atomica.
+            val bloqueada = db.urlBloqueadaDao().obtenerPorUrl(urlLimpia)
+            if (bloqueada != null) {
+                if (bloqueada.dirty) {
+                    // Bloqueo local sin sync todavia: borra row + pending CREATE.
+                    val opCreateBloq = db.pendingOpDao().findExisting(
+                        tabla = "urls_bloqueadas",
+                        idLocal = bloqueada.id,
+                        tipoOperacion = "CREATE"
+                    )
+                    if (opCreateBloq != null) db.pendingOpDao().borrarPorId(opCreateBloq.id)
+                    db.urlBloqueadaDao().eliminarPorId(bloqueada.id)
+                } else {
+                    // Bloqueo ya syncedo: borra row local + encola DELETE
+                    // pending op para que el SyncWorker lo pushee al backend.
+                    db.pendingOpDao().insertar(
+                        PendingOpEntity(
+                            tabla = "urls_bloqueadas",
+                            tipoOperacion = "DELETE",
+                            idLocal = bloqueada.id,
+                            payloadJson = null,
+                            creadoEnMillis = System.currentTimeMillis()
+                        )
+                    )
+                    db.urlBloqueadaDao().eliminarPorId(bloqueada.id)
+                }
+            }
         }
     }
 
