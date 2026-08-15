@@ -118,14 +118,14 @@ class ResultadoListoIdLocalTest {
             val estado = vm.estado.value
             assertTrue(
                 "El estado debe ser ResultadoListo tras analizar URL valida, fue: $estado",
-                estado is Pipeline.Estado.ResultadoListo
+                estado is Estado.ResultadoListo
             )
-            val resultadoListo = estado as Pipeline.Estado.ResultadoListo
+            val resultadoListo = estado as Estado.ResultadoListo
 
             // El resultado interno debe ser ResultadoUrl (no NoUrl).
             assertTrue(
                 "El resultado debe ser ResultadoUrl, fue: ${resultadoListo.resultado}",
-                resultadoListo.resultado is Pipeline.ResultadoAnalisis.ResultadoUrl
+                resultadoListo.resultado is ResultadoAnalisis.ResultadoUrl
             )
 
             // ── Bug 1 contrato: idLocal no nulo ni vacio ──
@@ -150,7 +150,7 @@ class ResultadoListoIdLocalTest {
 
             // La fila persistida tiene el mismo urlLimpia del resultado.
             val resultadoUrl =
-                resultadoListo.resultado as Pipeline.ResultadoAnalisis.ResultadoUrl
+                resultadoListo.resultado as ResultadoAnalisis.ResultadoUrl
             assertEquals(
                 "La fila persistida debe tener el mismo urlLimpia del resultado",
                 resultadoUrl.urlLimpia,
@@ -176,12 +176,12 @@ class ResultadoListoIdLocalTest {
             val estado = vm.estado.value
             assertTrue(
                 "El estado debe ser ResultadoListo, fue: $estado",
-                estado is Pipeline.Estado.ResultadoListo
+                estado is Estado.ResultadoListo
             )
-            val resultadoListo = estado as Pipeline.Estado.ResultadoListo
+            val resultadoListo = estado as Estado.ResultadoListo
             assertTrue(
                 "El resultado debe ser NoUrl, fue: ${resultadoListo.resultado}",
-                resultadoListo.resultado is Pipeline.ResultadoAnalisis.NoUrl
+                resultadoListo.resultado is ResultadoAnalisis.NoUrl
             )
 
             // ── Bug 1 contrato: NoUrl no persiste → idLocal es null ──

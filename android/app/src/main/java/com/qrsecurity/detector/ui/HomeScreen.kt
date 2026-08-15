@@ -71,6 +71,8 @@ import com.qrsecurity.detector.ui.theme.Espaciado
 import com.qrsecurity.detector.ui.theme.RadioBorde
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import com.qrsecurity.detector.pipeline.Estado
+import com.qrsecurity.detector.pipeline.ResultadoAnalisis
 
 /**
  * Fraccion del min(viewW, viewH) que define el reticulo de escaneo centrado.
@@ -138,9 +140,9 @@ fun PantallaHome(
     // ── Navegacion a AnalisisScreen cuando inicia el analisis ──
     LaunchedEffect(analizando, estado) {
         if (analizando && !yaNavegoAnalisis &&
-            estado !is Pipeline.Estado.Escaneando &&
-            estado !is Pipeline.Estado.Inicializando &&
-            estado !is Pipeline.Estado.UrlDuplicada
+            estado !is Estado.Escaneando &&
+            estado !is Estado.Inicializando &&
+            estado !is Estado.UrlDuplicada
         ) {
             yaNavegoAnalisis = true
             onEscanear()
@@ -151,7 +153,7 @@ fun PantallaHome(
 
     // ── Reanudar camara cuando volvemos a Escaneando ──
     LaunchedEffect(estado) {
-        if (estado is Pipeline.Estado.Escaneando && deteccionQr != null) {
+        if (estado is Estado.Escaneando && deteccionQr != null) {
             deteccionQr = null
             moduloCamara?.reanudarDeteccion()
         }
@@ -162,8 +164,8 @@ fun PantallaHome(
     //    aqui: limpiar modal, reanudar camara, mostrar mensaje. ──
     LaunchedEffect(estado) {
         val e = estado
-        if (e is Pipeline.Estado.ResultadoListo &&
-            e.resultado is Pipeline.ResultadoAnalisis.NoUrl
+        if (e is Estado.ResultadoListo &&
+            e.resultado is ResultadoAnalisis.NoUrl
         ) {
             deteccionQr = null
             moduloCamara?.reanudarDeteccion()
@@ -202,7 +204,7 @@ fun PantallaHome(
     LaunchedEffect(analizando, estado, deteccionQr, tamanoBox) {
         moduloCamara?.setOnQrDetectado { deteccion ->
             if (!analizando &&
-                estado !is Pipeline.Estado.UrlDuplicada &&
+                estado !is Estado.UrlDuplicada &&
                 deteccionQr == null &&
                 qrDentroDeReticulo(deteccion, tamanoBox.width, tamanoBox.height)
             ) {
@@ -303,7 +305,7 @@ fun PantallaHome(
         // escaneada" por separado. Ahora todo esta en un solo modal que
         // NO tapa el QR (esta en la parte inferior, el QR highlight queda
         // visible arriba).
-        val duplicada = estado as? Pipeline.Estado.UrlDuplicada
+        val duplicada = estado as? Estado.UrlDuplicada
         AnimatedVisibility(
             visible = deteccionQr != null,
             enter = fadeIn(tween(200)) + slideInVertically(

@@ -43,11 +43,21 @@ import androidx.room.PrimaryKey
 data class PendingOpEntity(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,
-    val tabla: String,               // "escaneos" | "urls_bloqueadas" | "denuncias"
-    val tipoOperacion: String,       // "CREATE" | "DELETE"
+    val tabla: String,               // TABLA_ESCANEOS | TABLA_URLS_BLOQUEADAS
+    val tipoOperacion: String,       // OP_CREATE | OP_DELETE
     val idLocal: String,             // el row local al que se refiere este op
     val payloadJson: String?,        // entity JSON para CREATE; null para DELETE
     val creadoEnMillis: Long,
     val intentos: Int = 0,
     val fallida: Boolean = false
-)
+) {
+    companion object {
+        /** Tablas con outbox — etiquetan los ops y keyean el dispatcher del SyncWorker. */
+        const val TABLA_ESCANEOS = "escaneos"
+        const val TABLA_URLS_BLOQUEADAS = "urls_bloqueadas"
+
+        /** Tipos de operacion del outbox. */
+        const val OP_CREATE = "CREATE"
+        const val OP_DELETE = "DELETE"
+    }
+}

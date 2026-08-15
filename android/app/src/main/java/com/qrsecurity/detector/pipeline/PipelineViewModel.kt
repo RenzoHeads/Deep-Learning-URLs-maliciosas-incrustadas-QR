@@ -36,7 +36,7 @@ class PipelineViewModel @Inject constructor(
     private val savedState: SavedStateHandle
 ) : ViewModel() {
 
-    val estado: StateFlow<Pipeline.Estado> = pipeline.estado
+    val estado: StateFlow<Estado> = pipeline.estado
 
     // ── Bug D2 fix: cache del ultimo resultado para sobrevivir process death ──
     //
@@ -46,8 +46,8 @@ class PipelineViewModel @Inject constructor(
     // a `Inicializando` — la pantalla queda en blanco. Guardamos el ultimo
     // ResultadoUrl serializado en SavedStateHandle (sobrevive process death)
     // y lo exponemos como StateFlow para que las pantallas hagan fallback.
-    private val _resultadoCacheado = MutableStateFlow<Pipeline.ResultadoAnalisis.ResultadoUrl?>(null)
-    val resultadoCacheado: StateFlow<Pipeline.ResultadoAnalisis.ResultadoUrl?> = _resultadoCacheado.asStateFlow()
+    private val _resultadoCacheado = MutableStateFlow<ResultadoAnalisis.ResultadoUrl?>(null)
+    val resultadoCacheado: StateFlow<ResultadoAnalisis.ResultadoUrl?> = _resultadoCacheado.asStateFlow()
 
     // ── Flag analizando: true mientras un analisis esta en vuelo ──
     //
@@ -97,7 +97,7 @@ class PipelineViewModel @Inject constructor(
     // ── Dedup (cache + log): payload pendiente para el reescaneo ──
     //
     // Cuando [analizar] lleva al Pipeline a emitir
-    // [Pipeline.Estado.UrlDuplicada] (todas las URLs del QR ya estaban en el
+    // [Estado.UrlDuplicada] (todas las URLs del QR ya estaban en el
     // cache maestro `urls_catalogo`), la UI muestra un diálogo "URL ya
     // escaneada". El payload que produjo ese estado se cachea aquí para que
     // [confirmarReescaneo] lo re-envíe con `forzar = true` sin re-escanear
@@ -130,7 +130,7 @@ class PipelineViewModel @Inject constructor(
      * ```
      *
      * Sobrecarga con [forzar] para el flujo de reescaneo de deduplicación (cache
-     * + log). Cuando el Pipeline emite [Pipeline.Estado.UrlDuplicada] (todas las
+     * + log). Cuando el Pipeline emite [Estado.UrlDuplicada] (todas las
      * URLs del QR ya estaban en el cache maestro `urls_catalogo`), la UI muestra
      * un diálogo; si el usuario confirma, llama a [confirmarReescaneo] que
      * re-invoca `analizar(payloadPendiente, forzar = true)`. `forzar = true`
@@ -192,8 +192,8 @@ class PipelineViewModel @Inject constructor(
                 // Si el proceso muere y se restaura, las pantallas de
                 // resultado pueden hacer fallback a este cache.
                 val estadoFinal = pipeline.estado.value
-                if (estadoFinal is Pipeline.Estado.ResultadoListo) {
-                    val res = estadoFinal.resultado as? Pipeline.ResultadoAnalisis.ResultadoUrl
+                if (estadoFinal is Estado.ResultadoListo) {
+                    val res = estadoFinal.resultado as? ResultadoAnalisis.ResultadoUrl
                     if (res != null) {
                         _resultadoCacheado.value = res
                         savedState[CLAVE_RESULTADO_CACHE] = serializarResultado(res)
@@ -217,7 +217,7 @@ class PipelineViewModel @Inject constructor(
     }
 
     /**
-     * Reescaneo forzado tras un [Pipeline.Estado.UrlDuplicada] (flujo dedup
+     * Reescaneo forzado tras un [Estado.UrlDuplicada] (flujo dedup
      * cache + log). Llamado por la UI cuando el usuario confirma el diálogo
      * "URL ya escaneada".
      *
@@ -243,7 +243,7 @@ class PipelineViewModel @Inject constructor(
 
     /**
      * Cancela el reescaneo: limpia el [payloadPendiente] y reinicia el
-     * Pipeline a [Pipeline.Estado.Escaneando]. Llamado por la UI cuando el
+     * Pipeline a [Estado.Escaneando]. Llamado por la UI cuando el
      * usuario descarta el diálogo "URL ya escaneada".
      */
     fun cancelarReescaneo() {
@@ -289,40 +289,26 @@ class PipelineViewModel @Inject constructor(
     companion object {
         private const val CLAVE_RESULTADO_CACHE = "resultado_url_cacheado"
 
-        // Serializacion simple pipe-delimited de los campos primarios de
-        // ResultadoUrl. No persiste urlsAdicionales (derivables re-analizando).
-        // Formato: urlOriginal|urlLimpia|probabilidad|nivelAlerta|delegado
-        private fun serializarResultado(
-            r: Pipeline.ResultadoAnalisis.ResultadoUrl
-        ): String = buildString {
-            append(r.urlOriginal.replace("|", "%7C"))
-            append('|')
-            append(r.urlLimpia.replace("|", "%7C"))
-            append('|')
-            append(r.probabilidad.toString())
-            append('|')
-            append(r.nivelAlerta.name)
-            append('|')
-            append(r.delegado.replace("|", "%7C"))
+        // kotlinx.serialization (ver ResultadoUrlDto) — reemplaza la
+        // serializacion pipe-delimited con escape manual '%7C'. No persiste
+        // urlsAdicionales (derivables re-analizando).
+        private val jsonResultado = kotlinx.serialization.json.Json {
+            ignoreUnknownKeys = true
+            encodeDefaults = true
         }
+
+        private fun serializarResultado(
+            r: ResultadoAnalisis.ResultadoUrl
+        ): String = jsonResultado.encodeToString(ResultadoUrlDto.serializer(), r.aDto())
 
         private fun deserializarResultado(
             json: String
-        ): Pipeline.ResultadoAnalisis.ResultadoUrl? {
-            val parts = json.split('|')
-            if (parts.size != 5) return null
-            return try {
-                Pipeline.ResultadoAnalisis.ResultadoUrl(
-                    urlOriginal = parts[0].replace("%7C", "|"),
-                    urlLimpia = parts[1].replace("%7C", "|"),
-                    probabilidad = parts[2].toFloat(),
-                    nivelAlerta = com.qrsecurity.detector.ml.ControladorAlerta.NivelAlerta
-                        .valueOf(parts[3]),
-                    delegado = parts[4].replace("%7C", "|")
-                )
-            } catch (_: Exception) {
-                null
-            }
+        ): ResultadoAnalisis.ResultadoUrl? = try {
+            jsonResultado
+                .decodeFromString(ResultadoUrlDto.serializer(), json)
+                .aDominio()
+        } catch (_: Exception) {
+            null
         }
     }
 }

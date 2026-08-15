@@ -52,10 +52,10 @@ class PipelineWorstPickerTest {
      * updatearse para mantenerse fiel al contrato H1.
      */
     private fun peorSelector(
-        a: Pipeline.ResultadoAnalisis.ResultadoUrl,
-        b: Pipeline.ResultadoAnalisis.ResultadoUrl
-    ): Pipeline.ResultadoAnalisis.ResultadoUrl {
-        val cmp = compareByDescending<Pipeline.ResultadoAnalisis.ResultadoUrl> { it.nivelAlerta.ordinal }
+        a: ResultadoAnalisis.ResultadoUrl,
+        b: ResultadoAnalisis.ResultadoUrl
+    ): ResultadoAnalisis.ResultadoUrl {
+        val cmp = compareByDescending<ResultadoAnalisis.ResultadoUrl> { it.nivelAlerta.ordinal }
             .thenByDescending { it.probabilidad }
         // cmp.compare(a, b) < 0 significa que `a` va primero en orden desccendente — `a` es "menor o igual" en el orden.
         // El "peor" es el que va PRIMERO en orden descendente = el `min` bajo cmp.
@@ -66,7 +66,7 @@ class PipelineWorstPickerTest {
         urlOriginal: String,
         prob: Float,
         nivel: ControladorAlerta.NivelAlerta
-    ) = Pipeline.ResultadoAnalisis.ResultadoUrl(
+    ) = ResultadoAnalisis.ResultadoUrl(
         urlOriginal = urlOriginal,
         urlLimpia = urlOriginal.removePrefix("https://").removePrefix("http://"),
         probabilidad = prob,

@@ -1,6 +1,8 @@
 package com.qrsecurity.detector.datos.sync
 
 import android.util.Log
+import com.qrsecurity.detector.datos.local.entidades.PendingOpEntity
+import com.qrsecurity.detector.datos.repositorios.CursorDelta
 import com.qrsecurity.detector.datos.repositorios.ResultadoSync
 import com.qrsecurity.detector.datos.repositorios.limpiarHuerfanos
 import com.qrsecurity.detector.datos.repositorios.sincronizarDelta
@@ -11,13 +13,10 @@ import com.qrsecurity.detector.datos.repositorios.sincronizarDelta
  *
  * Ejecuta los PULLs en orden (urls → escaneos). Cada tabla usa el cursor
  * persistido en `sync_state.ultimoCursorModificacion`. Si el cursor es
- * null/blank (primera vez o tras logout), se usa epoch
- * (1970-01-01T00:00:00Z) que equivale a un full pull paginado.
+ * null/blank (primera vez o tras logout), se usa el epoch de [CursorDelta]
+ * que equivale a un full pull paginado.
  *
- * Feature denuncias retirada (v9): los PULLs de `categorias_denuncia` y
- * `denuncias` (y su guarda FK) se eliminaron junto con las tablas.
- *
- * Bug M2 fix: tras cada delta pull COMPLETO (pullCompleto=true) se invoca
+ * Bug M2 fix: tras cada delta pull COMPLETO con cursor epoch se invoca
  * `limpiarHuerfanos(idsServidor)` — limpia rows locales no dirty ausentes
  * en el backend. En pulls parciales NO se limpia, para no borrar rows sanos
  * que existen en paginas no fetchadas aun. Los deletes en delta syncs se
@@ -25,33 +24,29 @@ import com.qrsecurity.detector.datos.repositorios.sincronizarDelta
  */
 
 internal suspend fun SyncWorker.procesarDeltaPulls(token: String): EstadoPulls {
-    var estado = EstadoPulls()
-
     // 1. URLs bloqueadas — delta pull incremental con cursor.
-    estado = procesarDeltaTabla(
-        tabla = "urls_bloqueadas",
+    val estadoUrls = procesarDeltaTabla(
+        tabla = PendingOpEntity.TABLA_URLS_BLOQUEADAS,
         pullDelta = { cursor -> repoUrls.sincronizarDelta(token, cursor) },
-        estadoActual = estado,
+        estadoActual = EstadoPulls.Ok(),
         limpiarHuerfanos = repoUrls::limpiarHuerfanos
     )
-    if (estado.authError) return estado
+    if (estadoUrls is EstadoPulls.ErrorAuth) return estadoUrls
 
     // 2. Escaneos — delta pull incremental con cursor.
-    estado = procesarDeltaTabla(
-        tabla = "escaneos",
+    return procesarDeltaTabla(
+        tabla = PendingOpEntity.TABLA_ESCANEOS,
         pullDelta = { cursor -> repoEscaneos.sincronizarDelta(token, cursor) },
-        estadoActual = estado,
+        estadoActual = estadoUrls,
         limpiarHuerfanos = repoEscaneos::limpiarHuerfanos
     )
-
-    return estado
 }
 
 /**
  * Ejecuta el delta pull de una tabla con cursor incremental.
  *
  * Si el cursor en `sync_state` es null/blank (primera vez o tras logout),
- * usa epoch ("1970-01-01T00:00:00Z") que equivale a full pull paginado.
+ * usa el epoch de [CursorDelta] que equivale a full pull paginado.
  *
  * Propaga [ResultadoSync.Exitoso.masPorSincronizar] al [EstadoPulls] para
  * que doWork() decida si marcar initial_sync_completed=true.
@@ -70,7 +65,7 @@ private suspend fun SyncWorker.procesarDeltaTabla(
     // Si cursor null/blank, usar epoch — equivale a full pull paginado.
     val cursorEfectivo = if (cursor.isNullOrBlank()) {
         Log.w(SyncWorker.TAG, "procesarDeltaTabla($tabla): cursor null → epoch (full pull paginado)")
-        "1970-01-01T00:00:00Z"
+        CursorDelta.EPOCH.aString()
     } else {
         cursor
     }
@@ -83,7 +78,7 @@ private suspend fun SyncWorker.procesarDeltaTabla(
         is ResultadoSync.Exitoso -> {
             Log.d(SyncWorker.TAG, "Delta pull '$tabla' OK — ${resultado.filaSincronizadas} filas" +
                 if (resultado.masPorSincronizar) " (mas paginas pendientes)" else " (al dia)")
-            estado = estado.copy(masPorSincronizar = estado.masPorSincronizar || resultado.masPorSincronizar)
+            estado = combinarEstadoPulls(estado, resultado.masPorSincronizar)
             // Bug M2 fix + audit BUG #1 fix: orphan cleanup SOLO tras un
             // FULL PULL (cursor == epoch). `pullCompleto=true` solo indica
             // que el worker termino de paginar las filas modificadas desde
@@ -94,7 +89,7 @@ private suspend fun SyncWorker.procesarDeltaTabla(
             // se consideran "huerfanos" y se BORRAN (perdida masiva).
             // Solucion: solo limpiar cuando el cursor efectivo era epoch
             // (full pull inicial / tras reset / tras logout).
-            val esFullPull = cursorEfectivo == "1970-01-01T00:00:00Z"
+            val esFullPull = CursorDelta.parse(cursorEfectivo) == CursorDelta.EPOCH
             if (limpiarHuerfanos != null && resultado.pullCompleto && esFullPull) {
                 limpiarHuerfanos(resultado.idsServidor)
             }
@@ -102,7 +97,7 @@ private suspend fun SyncWorker.procesarDeltaTabla(
         is ResultadoSync.Fallido -> {
             // WAVE 16 fix: 401/403 → auth error (logout + Result.failure).
             if (resultado.codigo == 401 || resultado.codigo == 403) {
-                return estado.copy(authError = true)
+                return EstadoPulls.ErrorAuth
             }
             // WAVE 16 fix (S422 stale-stall): 422 → el server rechazo el
             // cursor (corrupto en storage local). Resetear cursor a NULL
@@ -110,11 +105,11 @@ private suspend fun SyncWorker.procesarDeltaTabla(
             if (resultado.codigo == 422) {
                 Log.w(SyncWorker.TAG, "procesarDeltaTabla($tabla): 422 cursor rechazado → reset cursor + retry")
                 db.syncStateDao().resetCursor(tabla)
-                return estado.copy(huboErrorTransitorio = true)
+                return EstadoPulls.ErrorTransitorio
             }
             val mapeo = decidirResultadoPull(resultado.codigo, resultado.retryAfterSegundos)
             if (mapeo is DecisionPull.Decision.Retry) {
-                estado = estado.copy(huboErrorTransitorio = true)
+                estado = EstadoPulls.ErrorTransitorio
             }
         }
     }

@@ -59,6 +59,8 @@ import com.qrsecurity.detector.ui.theme.Espaciado
 import com.qrsecurity.detector.ui.theme.RadioBorde
 import com.qrsecurity.detector.ui.theme.TamanosIcono
 import com.qrsecurity.detector.ui.theme.TamanosToque
+import com.qrsecurity.detector.pipeline.Estado
+import com.qrsecurity.detector.pipeline.ResultadoAnalisis
 
 /**
  * Pantalla de Analisis / Escaner QR (Pencil frame dQeDx).
@@ -67,23 +69,23 @@ import com.qrsecurity.detector.ui.theme.TamanosToque
  * estado del [PipelineViewModel] (compartido a nivel NavGuardian) y reacciona
  * a los estados del pipeline:
  *
- *  - [Pipeline.Estado.Escaneando] / `pipelineViewModel.analizando == true`:
+ *  - [Estado.Escaneando] / `pipelineViewModel.analizando == true`:
  *    muestra el layout de progreso (URL detectada, spinner de activity,
  *    tarjeta de 3 checks con Reputacion activo y Redirecciones/Contenido
  *    pendientes, barra de progreso al 33% y boton Cancelar).
- *  - [Pipeline.Estado.ResultadoListo]: busca el id del escaneo en
+ *  - [Estado.ResultadoListo]: busca el id del escaneo en
  *    [DatosTabsViewModel.historialTodos] (match por urlLimpia + urlOriginal,
  *    fallback al mas reciente) y dispara [onResultadoMalicioso] /
  *    [onResultadoSeguro] segun el nivel de alerta. Si no encuentra el id,
  *    emite un error y reinicia.
- *  - [Pipeline.Estado.UrlDuplicada]: navega de vuelta a HOME via
+ *  - [Estado.UrlDuplicada]: navega de vuelta a HOME via
  *    [onVolverHome] sin reiniciar el pipeline — el estado `UrlDuplicada`
  *    persiste en el StateFlow para que HomeScreen lo observe y muestre el
  *    AlertDialog sobre el viewfinder de la camara viva (Bug B fix: el
  *    dialogo debe aparecer sobre la pantalla de escaneo, no sobre
  *    AnalisisScreen).
- *  - [Pipeline.Estado.Error]: emite el mensaje por [onMensaje] y reinicia.
- *  - [Pipeline.Estado.NoUrl]: emite "El QR no contiene una URL" y reinicia.
+ *  - [Estado.Error]: emite el mensaje por [onMensaje] y reinicia.
+ *  - [Estado.NoUrl]: emite "El QR no contiene una URL" y reinicia.
  *
  * @param onResultadoMalicioso Callback con el id del escaneo cuando el
  *   resultado es malicioso (navega a DETALLE_URL/{id}).
@@ -112,9 +114,9 @@ fun PantallaAnalisis(
     // ── Reaccion a estados terminales del pipeline ──
     LaunchedEffect(estado) {
         when (val e = estado) {
-            is Pipeline.Estado.ResultadoListo -> {
+            is Estado.ResultadoListo -> {
                 when (val resultado = e.resultado) {
-                    is Pipeline.ResultadoAnalisis.ResultadoUrl -> {
+                    is ResultadoAnalisis.ResultadoUrl -> {
                         // Audit fix B3: el fallback SOLO busca escaneos de la
                         // MISMA urlLimpia. Antes el ultimo `maxByOrNull` no
                         // filtraba por URL y navegaba al escaneo mas reciente
@@ -146,17 +148,17 @@ fun PantallaAnalisis(
                             pipelineViewModel.reiniciar()
                         }
                     }
-                    is Pipeline.ResultadoAnalisis.NoUrl -> {
+                    is ResultadoAnalisis.NoUrl -> {
                         onMensaje(TipoMensaje.INFO, "El QR no contiene una URL")
                         pipelineViewModel.reiniciar()
                     }
                 }
             }
-            is Pipeline.Estado.Error -> {
+            is Estado.Error -> {
                 onMensaje(TipoMensaje.ERROR, e.mensaje)
                 pipelineViewModel.reiniciar()
             }
-            is Pipeline.Estado.UrlDuplicada -> {
+            is Estado.UrlDuplicada -> {
                 onVolverHome()
             }
             else -> Unit
@@ -400,15 +402,15 @@ private fun FilaCheck(
  * `as? ResultadoListo`, descartando `UrlDuplicada` (que tambien trae
  * `resultado: ResultadoUrl` con la URL). Ahora `UrlDuplicada` expone su URL.
  */
-fun urlMostradaParaEstado(estado: Pipeline.Estado, analizando: Boolean): String? {
+fun urlMostradaParaEstado(estado: Estado, analizando: Boolean): String? {
     if (analizando) return null
     return when (estado) {
-        is Pipeline.Estado.ResultadoListo ->
-            (estado.resultado as? Pipeline.ResultadoAnalisis.ResultadoUrl)?.urlOriginal
-        is Pipeline.Estado.UrlDuplicada -> estado.resultado.urlOriginal
+        is Estado.ResultadoListo ->
+            (estado.resultado as? ResultadoAnalisis.ResultadoUrl)?.urlOriginal
+        is Estado.UrlDuplicada -> estado.resultado.urlOriginal
         // Bug F: Analizando = inference en progreso, sin URL detectada aun.
-        is Pipeline.Estado.Escaneando, is Pipeline.Estado.Inicializando,
-        is Pipeline.Estado.Analizando, is Pipeline.Estado.Error -> null
+        is Estado.Escaneando, is Estado.Inicializando,
+        is Estado.Analizando, is Estado.Error -> null
     }
 }
 
@@ -422,5 +424,5 @@ fun urlMostradaParaEstado(estado: Pipeline.Estado, analizando: Boolean): String?
  * subyacente es contradictoria (la app parece estar analizando mientras
  * pregunta si reescanear).
  */
-fun debeMostrarContenidoAnalizando(estado: Pipeline.Estado): Boolean =
-    estado !is Pipeline.Estado.UrlDuplicada
+fun debeMostrarContenidoAnalizando(estado: Estado): Boolean =
+    estado !is Estado.UrlDuplicada

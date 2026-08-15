@@ -37,7 +37,7 @@ import org.robolectric.annotation.Config
  *
  * Contrato cache + log (multi-URL):
  *  - Si [Pipeline.analizar] sin `forzar` y TODAS las URLs del QR ya están en
- *    `urls_catalogo` → emite [Pipeline.Estado.UrlDuplicada] y NO persiste un
+ *    `urls_catalogo` → emite [Estado.UrlDuplicada] y NO persiste un
  *    nuevo escaneo (el log `escaneos` no crece).
  *  - Si al menos una URL es nueva → inferencia/persistencia normal
  *    ([ResultadoListo]) y el cache se puebla con esa URL.
@@ -120,7 +120,7 @@ class PipelineDedupTest {
         assertTrue("el primer escaneo debe poblar el cache (count>=1)", urlLimpiaPersistida >= 1)
         val estadoInicial = vm.estado.value
         assertTrue("tras el primer escaneo: ResultadoListo, fue: $estadoInicial",
-            estadoInicial is Pipeline.Estado.ResultadoListo)
+            estadoInicial is Estado.ResultadoListo)
 
         // Resetear el pipeline para un segundo escaneo de la misma URL.
         vm.reiniciar()
@@ -133,8 +133,8 @@ class PipelineDedupTest {
         // Then: emite UrlDuplicada (todas las URLs del QR ya están en el cache).
         val estadoFinal = vm.estado.value
         assertTrue(" debe emitir UrlDuplicada, fue: $estadoFinal",
-            estadoFinal is Pipeline.Estado.UrlDuplicada)
-        val duplicada = estadoFinal as Pipeline.Estado.UrlDuplicada
+            estadoFinal is Estado.UrlDuplicada)
+        val duplicada = estadoFinal as Estado.UrlDuplicada
         // El resultado peor del QR se empaqueta para que el diálogo lo renderice.
         assertNotNull(duplicada.resultado)
     }
@@ -178,7 +178,7 @@ class PipelineDedupTest {
 
         // Then: ResultadoListo (no UrlDuplicada) y se persistió un 2º escaneo.
         val estado2 = vm.estado.value
-        assertTrue("forzar debe producir ResultadoListo, no UrlDuplicada", estado2 is Pipeline.Estado.ResultadoListo)
+        assertTrue("forzar debe producir ResultadoListo, no UrlDuplicada", estado2 is Estado.ResultadoListo)
         assertEquals("2 escaneos en el log (append-only)", 2, db.escaneoDao().todosLosIds().size)
     }
 
@@ -207,7 +207,7 @@ class PipelineDedupTest {
         val estado = vm.estado.value
         assertTrue(
             "QR con al menos una URL nueva debe inferir (no dedup), fue: $estado",
-            estado is Pipeline.Estado.ResultadoListo
+            estado is Estado.ResultadoListo
         )
     }
 
@@ -231,8 +231,8 @@ class PipelineDedupTest {
         // Then: UrlDuplicada (todas las URLs del QR ya están en el cache).
         val estado = vm.estado.value
         assertTrue("QR con todas las URLs ya en cache debe emitir UrlDuplicada, fue: $estado",
-            estado is Pipeline.Estado.UrlDuplicada)
-        val dup = estado as Pipeline.Estado.UrlDuplicada
+            estado is Estado.UrlDuplicada)
+        val dup = estado as Estado.UrlDuplicada
         // vecesEscaneadaMaxima = max(1, 5) = 5 (info para el diálogo).
         assertEquals(5, dup.vecesEscaneadaMaxima)
     }

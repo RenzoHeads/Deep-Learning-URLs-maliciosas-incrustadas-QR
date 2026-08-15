@@ -44,14 +44,33 @@ object PaginacionSync {
  */
 
 /**
- * Ejecuta un delta pull paginado con keyset cursor "ts|id".
+ * Cursor compuesto "ts|id" del delta-sync (Bug A1 fix — keyset pagination).
  *
- * Bug A1 fix (keyset pagination): cursor string compuesto "ts|id" de la
- * ULTIMA fila del batch. Cursores viejos (solo ISO, sin '|') siguen
- * funcionando ([String.substringAfter] con default "" los maneja).
+ * El serializado vive en `sync_state.ultimoCursorModificacion`. Cursores
+ * viejos (solo ISO, sin '|') siguen funcionando — [parse] los trata como
+ * cursor sin id.
+ */
+internal data class CursorDelta(val ts: String, val id: String?) {
+
+    fun aString(): String = if (id == null) ts else "$ts|$id"
+
+    companion object {
+        /** Cursor epoch — sin cursor persistido, equivale a un full pull paginado. */
+        const val EPOCH_TS = "1970-01-01T00:00:00Z"
+        val EPOCH = CursorDelta(EPOCH_TS, null)
+
+        fun parse(cursor: String): CursorDelta = CursorDelta(
+            ts = cursor.substringBefore('|'),
+            id = cursor.substringAfter('|', "").ifEmpty { null }
+        )
+    }
+}
+
+/**
+ * Ejecuta un delta pull paginado con keyset cursor (ver [CursorDelta]).
  *
  * Flujo:
- *  - Parsing del cursor "ts|id" (epoch = full pull paginado).
+ *  - Parsing del cursor (epoch = full pull paginado).
  *  - Loop hasta [maxPaginasPorRun] paginas o hasta batch incompleto.
  *  - Tras cada batch, llama [applyBatch] (tx Room — upsert/tombstone/cursor).
  *  - Si el batch vino con [limitePagina] filas y hay mas, actualiza cursor
@@ -61,14 +80,14 @@ object PaginacionSync {
  *
  * @param ioDispatcher dispatcher para withContext.
  * @param cursor cursor "ts|id" persistido en `sync_state` (epoch = full pull).
- * @param limitePagina tamano de pagina (200 por defecto en los 3 repos).
+ * @param limitePagina tamano de pagina (200 por defecto en los repos).
  * @param maxPaginasPorRun maximo de paginas por worker-run (5 por defecto).
  * @param fetchDelta lambda que llama al endpoint paginado del backend.
  * @param applyBatch lambda que aplica el batch en una tx Room y devuelve
  *     los IDs de las filas vivas (para que [limpiarHuerfanos] haga cleanup
  *     tras un full pull).
- * @param extraerCursor lambda que extrae el cursor "ts|id" de la ultima
- *     fila del batch, o `null` si `updatedAt` es `null`.
+ * @param extraerCursor lambda que extrae el cursor de la ultima fila del
+ *     batch, o `null` si `updatedAt` es `null`.
  * @param mensajeError mensaje para [ResultadoSync.Fallido] generico (no HTTP).
  */
 internal suspend fun <T> fetchDeltas(
@@ -78,19 +97,18 @@ internal suspend fun <T> fetchDeltas(
     maxPaginasPorRun: Int,
     fetchDelta: suspend (cursorTs: String, cursorId: String?) -> List<T>,
     applyBatch: suspend (List<T>, Long) -> List<String>,
-    extraerCursor: (T) -> Pair<String, String>?,
+    extraerCursor: (T) -> CursorDelta?,
     mensajeError: String
 ): ResultadoSync = withContext(ioDispatcher) {
     try {
-        var cursorTs = cursor.substringBefore('|')
-        var cursorId = cursor.substringAfter('|', "").ifEmpty { null }
+        var cursorActual = CursorDelta.parse(cursor)
         var totalFilas = 0
         val todosIdsServidor = mutableListOf<String>()
         var masPorSincronizar = false
         val ahora = System.currentTimeMillis()
 
         for (pagina in 1..maxPaginasPorRun) {
-            val delta = fetchDelta(cursorTs, cursorId)
+            val delta = fetchDelta(cursorActual.ts, cursorActual.id)
             if (delta.isEmpty()) break
 
             val batchIds = applyBatch(delta, ahora)
@@ -114,8 +132,7 @@ internal suspend fun <T> fetchDeltas(
                 )
                 break
             }
-            cursorTs = nuevoCursor.first
-            cursorId = nuevoCursor.second
+            cursorActual = nuevoCursor
             if (pagina == maxPaginasPorRun) masPorSincronizar = true
         }
 
@@ -141,14 +158,39 @@ internal suspend fun <T> fetchDeltas(
 }
 
 /**
+ * Rellena la temp table `_tmp_ids_serv` con [idsServidor] — boilerplate
+ * compartido por los dos `limpiarHuerfanos` (escaneos y urls bloqueadas).
+ *
+ * Debe llamarse DENTRO de una `db.withTransaction { }` (la temp table es
+ * por-conexion).
+ */
+internal fun rellenarTablaTemporalIds(
+    sqliteDb: androidx.sqlite.db.SupportSQLiteDatabase,
+    idsServidor: List<String>
+) {
+    sqliteDb.execSQL(
+        "CREATE TEMP TABLE IF NOT EXISTS _tmp_ids_serv (id TEXT NOT NULL)"
+    )
+    sqliteDb.execSQL("DELETE FROM _tmp_ids_serv")
+    idsServidor.chunked(500).forEach { chunk ->
+        sqliteDb.execSQL(
+            "INSERT INTO _tmp_ids_serv (id) VALUES " +
+                chunk.joinToString(",") { "(?)" },
+            chunk.toTypedArray()
+        )
+    }
+}
+
+/**
  * Bug M10 fix: limpia rows locales **no dirty** ausentes en [idsServidor]
  * para una tabla. Stream-based, O(0) orphan IDs en Kotlin — usa temp table
  * + `NOT EXISTS`.
  *
- * Extraido de los `limpiarHuerfanos` originales. La version de Escaneos
- * no la usa porque necesita recolectar `urlLimpia` afectadas ANTES del
- * DELETE para hacer reconciliacion de `urls_catalogo` despues —
- * ver [RepositorioEscaneosSync.limpiarHuerfanos].
+ * La version de Escaneos no la usa porque necesita recolectar
+ * `urlLimpia` afectadas ANTES del DELETE para hacer reconciliacion de
+ * `urls_catalogo` en la misma tx — ver
+ * [RepositorioEscaneosSync.limpiarHuerfanos] (comparte el relleno de la
+ * temp table via [rellenarTablaTemporalIds]).
  *
  * @param ioDispatcher dispatcher para withContext.
  * @param db instancia Room.
@@ -163,17 +205,7 @@ internal suspend fun limpiarNoDirtyAusentesEn(
 ) = withContext(ioDispatcher) {
     db.withTransaction {
         val sqliteDb = db.openHelper.writableDatabase
-        sqliteDb.execSQL(
-            "CREATE TEMP TABLE IF NOT EXISTS _tmp_ids_serv (id TEXT NOT NULL)"
-        )
-        sqliteDb.execSQL("DELETE FROM _tmp_ids_serv")
-        idsServidor.chunked(500).forEach { chunk ->
-            sqliteDb.execSQL(
-                "INSERT INTO _tmp_ids_serv (id) VALUES " +
-                    chunk.joinToString(",") { "(?)" },
-                chunk.toTypedArray()
-            )
-        }
+        rellenarTablaTemporalIds(sqliteDb, idsServidor)
         sqliteDb.execSQL(
             "DELETE FROM $tabla WHERE dirty = 0 " +
                 "AND NOT EXISTS (SELECT 1 FROM _tmp_ids_serv t WHERE t.id = $tabla.id)"
@@ -219,14 +251,14 @@ internal suspend fun BaseDatosSeguridad.eliminarFilaDirty(
 ) {
     if (dirty) {
         val opCreate = pendingOpDao().findExisting(
-            tabla = tabla, idLocal = idLocal, tipoOperacion = "CREATE"
+            tabla = tabla, idLocal = idLocal, tipoOperacion = PendingOpEntity.OP_CREATE
         )
         if (opCreate != null) pendingOpDao().borrarPorId(opCreate.id)
         eliminarRow()
     } else {
         val op = PendingOpEntity(
             tabla = tabla,
-            tipoOperacion = "DELETE",
+            tipoOperacion = PendingOpEntity.OP_DELETE,
             idLocal = idLocal,
             payloadJson = null,
             creadoEnMillis = System.currentTimeMillis()

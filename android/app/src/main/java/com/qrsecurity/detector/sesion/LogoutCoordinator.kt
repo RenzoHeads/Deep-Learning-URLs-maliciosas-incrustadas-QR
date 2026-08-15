@@ -18,6 +18,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
+import com.qrsecurity.detector.pipeline.Estado
 
 /**
  * Coordinador de cierre de sesion: un punto unico para vaciar el estado
@@ -110,7 +111,7 @@ class LogoutCoordinator @Inject constructor(
      *   5. Vaciar [CacheDetalleEscaneos] `@Singleton` (fuga cross-user de
      *      `DetalleUrlUiState.Cargado` con EscaneoEntity + flags del
      *      usuario anterior). Bug 3 fix (pieza c).
-     *   6. Resetear [Pipeline.estado] a [Pipeline.Estado.Escaneando] para
+     *   6. Resetear [Pipeline.estado] a [Estado.Escaneando] para
      *      que la UI no muestre `ResultadoListo` o `UrlDuplicada` stale del
      *      usuario anterior. Bug 3 fix (pieza d).
      */

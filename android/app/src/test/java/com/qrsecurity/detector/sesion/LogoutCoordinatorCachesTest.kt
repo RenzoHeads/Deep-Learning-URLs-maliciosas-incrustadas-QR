@@ -28,6 +28,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import com.qrsecurity.detector.pipeline.Estado
 
 /**
  * Bug 3 (pieza c) — LogoutCoordinator NO limpia CacheDetalleEscaneos
@@ -181,7 +182,7 @@ class LogoutCoordinatorCachesTest {
         pipeline.reiniciar()
         assertEquals(
             "Pipeline.estado debe ser Escaneando tras reiniciar() manual",
-            Pipeline.Estado.Escaneando,
+            Estado.Escaneando,
             pipeline.estado.value
         )
 
@@ -193,7 +194,7 @@ class LogoutCoordinatorCachesTest {
         assertEquals(
             "Pipeline.estado debe ser Escaneando tras logout " +
                 "(no debe quedar stale del usuario anterior)",
-            Pipeline.Estado.Escaneando,
+            Estado.Escaneando,
             pipeline.estado.value
         )
     }

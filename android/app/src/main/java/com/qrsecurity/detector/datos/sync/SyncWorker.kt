@@ -96,15 +96,15 @@ class SyncWorker @AssistedInject constructor(
 
         val estadoPulls = if (modoSync == SyncMode.SOLO_PUSH) {
             Log.d(TAG, "doWork() push-only: sync inicial completa → skip PULLs, solo PUSH")
-            EstadoPulls()
+            EstadoPulls.Ok()
         } else {
             Log.d(TAG, "doWork() procede con DELTA pull incremental (cursor-based) + PUSH pending_ops")
 
             // ── PULLs: siempre delta pull incremental (cursor-based) ──
-            // El primer login usa epoch cursor (1970-01-01T00:00:00Z) que equivale
+            // El primer login usa epoch cursor (ver CursorDelta.EPOCH) que equivale
             // a un full pull paginado. Subsequent syncs usan el cursor persistido.
             val estado = procesarDeltaPulls(token)
-            if (estado.authError) {
+            if (estado is EstadoPulls.ErrorAuth) {
                 // WAVE 16 fix (S5 CRITICAL): 401/403 en PULL → token expirado/invalido.
                 // Cerrar sesion (limpia token; preserva pending_ops en Room para que
                 // el re-login los empuje) y devolver Result.failure() para frenar
@@ -124,12 +124,12 @@ class SyncWorker @AssistedInject constructor(
         val repoEscaneosFn: suspend (PendingOpEntity) -> Boolean = { op -> repoEscaneos.procesarPendingOp(op, token) }
         val repoUrlsFn: suspend (PendingOpEntity) -> Boolean = { op -> repoUrls.procesarPendingOp(op, token) }
         val repos = mapOf<String, suspend (PendingOpEntity) -> Boolean>(
-            "escaneos" to repoEscaneosFn,
-            "urls_bloqueadas" to repoUrlsFn
+            PendingOpEntity.TABLA_ESCANEOS to repoEscaneosFn,
+            PendingOpEntity.TABLA_URLS_BLOQUEADAS to repoUrlsFn
         )
         val errorPush = procesarPendingOps(pendingDao, repos, workerStartMs)
 
-        if (estadoPulls.huboErrorTransitorio || errorPush) {
+        if (estadoPulls is EstadoPulls.ErrorTransitorio || errorPush) {
             Log.w(TAG, "doWork() error transitorio o push fallido → Result.retry()")
             return Result.retry()
         }
@@ -138,10 +138,11 @@ class SyncWorker @AssistedInject constructor(
 
             // Incremental sync unificado — marcar initial_sync_completed=true solo
             // cuando TODAS las tablas reportan masPorSincronizar=false (al dia).
-            if (!initialSyncCompleted && !estadoPulls.masPorSincronizar) {
+            val masPorSincronizar = (estadoPulls as? EstadoPulls.Ok)?.masPorSincronizar == true
+            if (!initialSyncCompleted && !masPorSincronizar) {
                 syncPrefs.edit().putBoolean(KEY_INITIAL_SYNC_COMPLETED, true).apply()
                 Log.d(TAG, "doWork() initial_sync_completed=true — todas las tablas al dia")
-            } else if (estadoPulls.masPorSincronizar) {
+            } else if (masPorSincronizar) {
                 Log.d(TAG, "doWork() initial sync aun en progreso — quedan paginas por sincronizar")
             }
         }

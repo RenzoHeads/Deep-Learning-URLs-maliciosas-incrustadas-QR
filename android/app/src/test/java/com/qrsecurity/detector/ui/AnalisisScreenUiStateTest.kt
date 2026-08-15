@@ -7,6 +7,8 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.qrsecurity.detector.pipeline.Estado
+import com.qrsecurity.detector.pipeline.ResultadoAnalisis
 
 /**
  * Bug 2 — Pantalla "Analizando..." visible bajo el dialogo UrlDuplicada.
@@ -40,7 +42,7 @@ class AnalisisScreenUiStateTest {
 
     // ── Fixtures ──
 
-    private val resultadoUrl = Pipeline.ResultadoAnalisis.ResultadoUrl(
+    private val resultadoUrl = ResultadoAnalisis.ResultadoUrl(
         urlOriginal = "https://www.ejemplo-duplicada.com/pagina",
         urlLimpia = "ejemplo-duplicada.com/pagina",
         probabilidad = 0.42f,
@@ -54,14 +56,14 @@ class AnalisisScreenUiStateTest {
         probabilidad = 0.97f
     )
 
-    private val urlDuplicada = Pipeline.Estado.UrlDuplicada(
+    private val urlDuplicada = Estado.UrlDuplicada(
         resultado = resultadoUrl,
         urlsLimpiaConsultadas = listOf("ejemplo-duplicada.com/pagina"),
         vecesEscaneadaMaxima = 3,
         ultimoEscaneoMillis = 1700000000000L
     )
 
-    private val resultadoListo = Pipeline.Estado.ResultadoListo(
+    private val resultadoListo = Estado.ResultadoListo(
         resultado = resultadoUrl,
         idLocal = "uuid-escaneo-123"
     )
@@ -76,8 +78,8 @@ class AnalisisScreenUiStateTest {
 
     @Test
     fun `urlMostradaParaEstado devuelve null cuando estado es ResultadoListo con NoUrl`() {
-        val noUrl = Pipeline.Estado.ResultadoListo(
-            resultado = Pipeline.ResultadoAnalisis.NoUrl(
+        val noUrl = Estado.ResultadoListo(
+            resultado = ResultadoAnalisis.NoUrl(
                 valorCrudo = "BEGIN:VCARD\nFN:Test\nEND:VCARD",
                 tipoContenido = "vcard"
             )
@@ -108,7 +110,7 @@ class AnalisisScreenUiStateTest {
 
     @Test
     fun `urlMostradaParaEstado devuelve null cuando estado es Escaneando`() {
-        val actual = urlMostradaParaEstado(Pipeline.Estado.Escaneando, analizando = false)
+        val actual = urlMostradaParaEstado(Estado.Escaneando, analizando = false)
         assertNull(actual)
     }
 
@@ -118,20 +120,20 @@ class AnalisisScreenUiStateTest {
      */
     @Test
     fun `urlMostradaParaEstado devuelve null cuando estado es Analizando`() {
-        val actual = urlMostradaParaEstado(Pipeline.Estado.Analizando, analizando = false)
+        val actual = urlMostradaParaEstado(Estado.Analizando, analizando = false)
         assertNull(actual)
     }
 
     @Test
     fun `urlMostradaParaEstado devuelve null cuando estado es Inicializando`() {
-        val actual = urlMostradaParaEstado(Pipeline.Estado.Inicializando, analizando = false)
+        val actual = urlMostradaParaEstado(Estado.Inicializando, analizando = false)
         assertNull(actual)
     }
 
     @Test
     fun `urlMostradaParaEstado devuelve null cuando estado es Error`() {
         val actual = urlMostradaParaEstado(
-            Pipeline.Estado.Error("Algo salio mal"), analizando = false
+            Estado.Error("Algo salio mal"), analizando = false
         )
         assertNull(actual)
     }
@@ -155,7 +157,7 @@ class AnalisisScreenUiStateTest {
 
     @Test
     fun `debeMostrarContenidoAnalizando devuelve true cuando estado es Escaneando`() {
-        val actual = debeMostrarContenidoAnalizando(Pipeline.Estado.Escaneando)
+        val actual = debeMostrarContenidoAnalizando(Estado.Escaneando)
         assertTrue("Escaneando debe mostrar el contenido Analizando", actual)
     }
 
@@ -166,13 +168,13 @@ class AnalisisScreenUiStateTest {
      */
     @Test
     fun `debeMostrarContenidoAnalizando devuelve true cuando estado es Analizando`() {
-        val actual = debeMostrarContenidoAnalizando(Pipeline.Estado.Analizando)
+        val actual = debeMostrarContenidoAnalizando(Estado.Analizando)
         assertTrue("Analizando debe mostrar el contenido Analizando (inference en progreso)", actual)
     }
 
     @Test
     fun `debeMostrarContenidoAnalizando devuelve true cuando estado es Inicializando`() {
-        val actual = debeMostrarContenidoAnalizando(Pipeline.Estado.Inicializando)
+        val actual = debeMostrarContenidoAnalizando(Estado.Inicializando)
         assertTrue("Inicializando debe mostrar el contenido Analizando", actual)
     }
 
@@ -187,7 +189,7 @@ class AnalisisScreenUiStateTest {
 
     @Test
     fun `debeMostrarContenidoAnalizando devuelve true cuando estado es Error`() {
-        val actual = debeMostrarContenidoAnalizando(Pipeline.Estado.Error("fail"))
+        val actual = debeMostrarContenidoAnalizando(Estado.Error("fail"))
         assertTrue("Error debe mostrar el contenido Analizando (mensaje caera via onMensaje)", actual)
     }
 

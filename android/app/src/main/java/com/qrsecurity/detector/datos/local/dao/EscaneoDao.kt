@@ -46,6 +46,15 @@ import kotlinx.coroutines.flow.Flow
  * sibling), el catálogo es autoritativo y los contadores son O(N_uniq) en
  * vez de O(N_rows).
  */
+/**
+ * Subquery compartida: ids SIN un op DELETE pendiente (no fallido) en
+ * `pending_ops` — esas filas ya estan "logicamente borradas". Repetida
+ * en 8 queries del DAO antes de extraerla.
+ */
+private const val IDS_SIN_DELETE_PENDIENTE =
+    "(SELECT idLocal FROM pending_ops " +
+        "WHERE tabla = 'escaneos' AND tipoOperacion = 'DELETE' AND fallida = 0)"
+
 @Dao
 interface EscaneoDao {
 
@@ -73,10 +82,7 @@ interface EscaneoDao {
         "SELECT e.* FROM escaneos e WHERE e.id = (" +
                 "SELECT e2.id FROM escaneos e2 " +
                 "WHERE e2.urlLimpia = e.urlLimpia " +
-                "AND e2.id NOT IN (" +
-                    "SELECT idLocal FROM pending_ops " +
-                    "WHERE tabla = 'escaneos' AND tipoOperacion = 'DELETE' AND fallida = 0" +
-                ") " +
+                "AND e2.id NOT IN $IDS_SIN_DELETE_PENDIENTE" +
                 "ORDER BY e2.creadoEnMillis DESC, e2.id DESC LIMIT 1" +
             ") ORDER BY e.creadoEnMillis DESC, e.id DESC"
     )
@@ -94,10 +100,7 @@ interface EscaneoDao {
         "SELECT e.* FROM escaneos e WHERE e.esMalicioso = 0 AND e.id = (" +
                 "SELECT e2.id FROM escaneos e2 " +
                 "WHERE e2.urlLimpia = e.urlLimpia " +
-                "AND e2.id NOT IN (" +
-                    "SELECT idLocal FROM pending_ops " +
-                    "WHERE tabla = 'escaneos' AND tipoOperacion = 'DELETE' AND fallida = 0" +
-                ") " +
+                "AND e2.id NOT IN $IDS_SIN_DELETE_PENDIENTE" +
                 "ORDER BY e2.creadoEnMillis DESC, e2.id DESC LIMIT 1" +
             ") ORDER BY e.creadoEnMillis DESC, e.id DESC"
     )
@@ -121,10 +124,8 @@ interface EscaneoDao {
         "SELECT * FROM escaneos " +
             "WHERE urlLimpia = :urlLimpia " +
             "AND id != :idActual " +
-            "AND id NOT IN (" +
-                "SELECT idLocal FROM pending_ops " +
-                "WHERE tabla = 'escaneos' AND tipoOperacion = 'DELETE' AND fallida = 0" +
-            ") ORDER BY creadoEnMillis DESC, id DESC"
+            "AND id NOT IN $IDS_SIN_DELETE_PENDIENTE " +
+            "ORDER BY creadoEnMillis DESC, id DESC"
     )
     fun observarReescaneosTodos(
         urlLimpia: String,
@@ -140,10 +141,7 @@ interface EscaneoDao {
         "SELECT COUNT(*) FROM escaneos " +
             "WHERE urlLimpia = :urlLimpia " +
             "AND id != :idActual " +
-            "AND id NOT IN (" +
-                "SELECT idLocal FROM pending_ops " +
-                "WHERE tabla = 'escaneos' AND tipoOperacion = 'DELETE' AND fallida = 0" +
-            ")"
+            "AND id NOT IN $IDS_SIN_DELETE_PENDIENTE"
     )
     fun observarTotalReescaneos(urlLimpia: String, idActual: String): Flow<Int>
 
@@ -180,10 +178,8 @@ interface EscaneoDao {
      */
     @Query(
         "SELECT * FROM escaneos WHERE urlLimpia = :urlLimpia " +
-            "AND id NOT IN (" +
-                "SELECT idLocal FROM pending_ops " +
-                "WHERE tabla = 'escaneos' AND tipoOperacion = 'DELETE' AND fallida = 0" +
-            ") ORDER BY creadoEnMillis DESC, id DESC"
+            "AND id NOT IN $IDS_SIN_DELETE_PENDIENTE " +
+            "ORDER BY creadoEnMillis DESC, id DESC"
     )
     suspend fun todosPorUrlLimpia(urlLimpia: String): List<EscaneoEntity>
 
@@ -196,10 +192,7 @@ interface EscaneoDao {
      */
     @Query(
         "SELECT COUNT(*) FROM escaneos WHERE urlLimpia = :urlLimpia " +
-            "AND id NOT IN (" +
-                "SELECT idLocal FROM pending_ops " +
-                "WHERE tabla = 'escaneos' AND tipoOperacion = 'DELETE' AND fallida = 0" +
-            ")"
+            "AND id NOT IN $IDS_SIN_DELETE_PENDIENTE"
     )
     suspend fun contarPorUrlLimpia(urlLimpia: String): Int
 
@@ -217,10 +210,8 @@ interface EscaneoDao {
      */
     @Query(
         "SELECT * FROM escaneos WHERE urlLimpia = :urlLimpia " +
-            "AND id NOT IN (" +
-                "SELECT idLocal FROM pending_ops " +
-                "WHERE tabla = 'escaneos' AND tipoOperacion = 'DELETE' AND fallida = 0" +
-            ") ORDER BY creadoEnMillis DESC, id DESC LIMIT 1"
+            "AND id NOT IN $IDS_SIN_DELETE_PENDIENTE " +
+            "ORDER BY creadoEnMillis DESC, id DESC LIMIT 1"
     )
     suspend fun ultimoPorUrlLimpia(urlLimpia: String): EscaneoEntity?
 
@@ -279,10 +270,7 @@ interface EscaneoDao {
             "WHERE e2.urlLimpia = :urlLimpia " +
             "AND (e2.creadoEnMillis > :creadoEnMillis " +
                  "OR (e2.creadoEnMillis = :creadoEnMillis AND e2.id > :id)) " +
-            "AND e2.id NOT IN (" +
-                "SELECT idLocal FROM pending_ops " +
-                "WHERE tabla = 'escaneos' AND tipoOperacion = 'DELETE' AND fallida = 0" +
-            ")" +
+            "AND e2.id NOT IN $IDS_SIN_DELETE_PENDIENTE" +
         ")"
     )
     suspend fun esUltimaVersion(urlLimpia: String, creadoEnMillis: Long, id: String): Boolean

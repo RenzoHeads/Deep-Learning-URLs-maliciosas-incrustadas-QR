@@ -5,6 +5,7 @@ import com.qrsecurity.detector.api.ClienteBackend
 import com.qrsecurity.detector.api.listarEscaneosDelta
 import com.qrsecurity.detector.datos.local.sha256Hex
 import kotlinx.coroutines.withContext
+import com.qrsecurity.detector.datos.local.entidades.PendingOpEntity
 
 /**
  * Sync engine (PULL) para [RepositorioEscaneos].
@@ -35,7 +36,9 @@ suspend fun RepositorioEscaneos.sincronizarDelta(
         backend.listarEscaneosDelta(token, cursorTs, LIMITE_PAGINA, cursorId = cursorId)
     },
     applyBatch = { delta, ahora -> aplicarBatchEscaneos(delta, ahora) },
-    extraerCursor = { escaneo -> escaneo.updatedAt?.let { ts -> Pair(ts, escaneo.id) } },
+    extraerCursor = { escaneo ->
+        escaneo.updatedAt?.let { ts -> CursorDelta(ts, escaneo.id) }
+    },
     mensajeError = "Error desconocido en delta sync de escaneos"
 )
 
@@ -66,12 +69,15 @@ internal suspend fun RepositorioEscaneos.aplicarBatchEscaneos(
         db.reconciliarUrlsCatalogo(urlLimpia, vecesEscaneadaOverride = existente?.vecesEscaneada)
     }
 
-    // Bug A1 fix: cursor keyset compuesto "ts|id"
+    // Bug A1 fix: cursor keyset compuesto "ts|id" (ver [CursorDelta]).
     val ultima = delta.last()
     if (ultima.updatedAt != null) {
-        db.syncStateDao().actualizarCursor("escaneos", "${ultima.updatedAt}|${ultima.id}")
+        db.syncStateDao().actualizarCursor(
+            PendingOpEntity.TABLA_ESCANEOS,
+            CursorDelta(ultima.updatedAt, ultima.id).aString()
+        )
     }
-    db.syncStateDao().actualizar("escaneos", ahora, exitosa = true)
+    db.syncStateDao().actualizar(PendingOpEntity.TABLA_ESCANEOS, ahora, exitosa = true)
 
     vivos.map { it.id }
 }
@@ -84,17 +90,7 @@ suspend fun RepositorioEscaneos.limpiarHuerfanos(idsServidor: List<String>) =
     withContext(ioDispatcher) {
         db.withTransaction {
             val sqliteDb = db.openHelper.writableDatabase
-            sqliteDb.execSQL(
-                "CREATE TEMP TABLE IF NOT EXISTS _tmp_ids_serv (id TEXT NOT NULL)"
-            )
-            sqliteDb.execSQL("DELETE FROM _tmp_ids_serv")
-            idsServidor.chunked(500).forEach { chunk ->
-                sqliteDb.execSQL(
-                    "INSERT INTO _tmp_ids_serv (id) VALUES " +
-                        chunk.joinToString(",") { "(?)" },
-                    chunk.toTypedArray()
-                )
-            }
+            rellenarTablaTemporalIds(sqliteDb, idsServidor)
 
             // D-3 sibling fix: collect urlLimpia of rows about to be deleted
             val urlLimpiaAfectadas = mutableListOf<String>()

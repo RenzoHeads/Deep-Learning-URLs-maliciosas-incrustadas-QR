@@ -3,6 +3,7 @@ package com.qrsecurity.detector.cache
 import com.qrsecurity.detector.ml.ControladorAlerta
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
+import com.qrsecurity.detector.pipeline.ResultadoAnalisis
 
 /**
  * Cache LRU (Least Recently Used) en memoria para resultados recientes de inferencia de URLs.
@@ -60,7 +61,7 @@ class CacheResultados(
      * @property delegado El delegado de hardware que efectivamente ejecuto la
      *  inferencia (``"NNAPI"``, ``"GPU"``, o ``"CPU"``). Bug M8 fix: antes este
      *  campo no existia, por lo que un cache hit reconstruria un
-     *  [com.qrsecurity.detector.pipeline.Pipeline.ResultadoAnalisis.ResultadoUrl]
+     *  [com.qrsecurity.detector.pipeline.ResultadoAnalisis.ResultadoUrl]
      *  usando `motorInferencia.nombreDelegado` **actual** — que puede diferir del
      *  delegado que originalmente inferio (ej. si el usuario cambio la
      *  preferencia de delegado entre escaneos, o si la cache sobrevive a un

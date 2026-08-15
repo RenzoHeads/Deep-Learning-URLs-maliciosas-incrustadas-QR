@@ -4,13 +4,14 @@ import com.qrsecurity.detector.ml.ControladorAlerta
 import org.junit.Test
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
+import com.qrsecurity.detector.pipeline.ResultadoAnalisis
 
 /**
  * Tests para el bug M8 — perdida de `delegado` en cache hit.
  *
  * Antes del fix, [CacheResultados.EntradaCache] no guardaba el delegado de
  * hardware que produjo el resultado (NNAPI/GPU/CPU). Cuando el Pipeline
- * observaba un cache hit, reconstruria el [com.qrsecurity.detector.pipeline.Pipeline.ResultadoAnalisis.ResultadoUrl]
+ * observaba un cache hit, reconstruria el [com.qrsecurity.detector.pipeline.ResultadoAnalisis.ResultadoUrl]
  * usando `motorInferencia.nombreDelegado` **actual** — que puede diferir del
  * delegado que originalmente inferio la URL (si el usuario, p.ej., cambio de
  * GPU a CPU entre escaneos, o si la cache sobrevive a un cambio de delegado

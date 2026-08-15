@@ -52,8 +52,8 @@ suspend fun RepositorioEscaneos.registrarLocal(
 
     val payloadJson = json.encodeToString(EscaneoEntity.serializer(), entidad)
     val op = PendingOpEntity(
-        tabla = "escaneos",
-        tipoOperacion = "CREATE",
+        tabla = PendingOpEntity.TABLA_ESCANEOS,
+        tipoOperacion = PendingOpEntity.OP_CREATE,
         idLocal = idLocal,
         payloadJson = payloadJson,
         creadoEnMillis = ahora
@@ -75,17 +75,17 @@ suspend fun RepositorioEscaneos.registrarLocal(
                 vecesEscaneada = (existente?.vecesEscaneada ?: 0) + 1
             )
         )
-        val estadoPrevio = db.syncStateDao().obtener("escaneos")
+        val estadoPrevio = db.syncStateDao().obtener(PendingOpEntity.TABLA_ESCANEOS)
         if (estadoPrevio == null) {
             db.syncStateDao().upsert(
                 SyncStateEntity(
-                    tabla = "escaneos",
+                    tabla = PendingOpEntity.TABLA_ESCANEOS,
                     ultimaSincronizacionAtMillis = ahora,
                     ultimaSincronizacionExitosa = false
                 )
             )
         } else {
-            db.syncStateDao().actualizarTimestamp("escaneos", ahora)
+            db.syncStateDao().actualizarTimestamp(PendingOpEntity.TABLA_ESCANEOS, ahora)
         }
     }
     idLocal
@@ -101,7 +101,7 @@ suspend fun RepositorioEscaneos.eliminarLocal(id: String) = withContext(ioDispat
     db.withTransaction {
         val fila = db.escaneoDao().obtenerPorId(id)
         if (fila == null) return@withTransaction
-        db.eliminarFilaDirty("escaneos", id, fila.dirty) {
+        db.eliminarFilaDirty(PendingOpEntity.TABLA_ESCANEOS, id, fila.dirty) {
             db.escaneoDao().eliminarPorId(id)
         }
         // BUG-C1 fix: reconciliar urls_catalogo
@@ -130,7 +130,7 @@ suspend fun RepositorioEscaneos.eliminarLocalPorUrlLimpia(urlLimpia: String) =
         db.withTransaction {
             val filas = db.escaneoDao().todosPorUrlLimpia(urlLimpia)
             for (fila in filas) {
-                db.eliminarFilaDirty("escaneos", fila.id, fila.dirty) {
+                db.eliminarFilaDirty(PendingOpEntity.TABLA_ESCANEOS, fila.id, fila.dirty) {
                     db.escaneoDao().eliminarPorId(fila.id)
                 }
             }
@@ -141,7 +141,7 @@ suspend fun RepositorioEscaneos.eliminarLocalPorUrlLimpia(urlLimpia: String) =
             // urls_bloqueadas (local + pending op) en esta misma tx atomica.
             val bloqueada = db.urlBloqueadaDao().obtenerPorUrl(urlLimpia)
             if (bloqueada != null) {
-                db.eliminarFilaDirty("urls_bloqueadas", bloqueada.id, bloqueada.dirty) {
+                db.eliminarFilaDirty(PendingOpEntity.TABLA_URLS_BLOQUEADAS, bloqueada.id, bloqueada.dirty) {
                     db.urlBloqueadaDao().eliminarPorId(bloqueada.id)
                 }
             }

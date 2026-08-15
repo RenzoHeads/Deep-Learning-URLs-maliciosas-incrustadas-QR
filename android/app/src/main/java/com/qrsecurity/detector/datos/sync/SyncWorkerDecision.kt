@@ -15,22 +15,45 @@ internal enum class SyncMode {
 }
 
 /**
- * Estado consolidado de los 4 PULLs para reducir complejidad de doWork().
+ * Estado consolidado de los PULLs — jerarquia sellada para que el consumidor
+ * ([SyncWorker.doWorkInternal]) haga match exhaustivo en vez de combinar 3
+ * booleanos sueltos.
  *
- * - [authError]: WAVE 16 fix (S5 CRITICAL) — 401/403 detectado en cualquier
- *   PULL → cerrar sesion (token invalido/expirado) y devolver Result.failure().
- *   Los pending_ops se conservan en Room (no se purgan) para que el re-login
- *   los empuje con el token nuevo.
- * - [huboErrorTransitorio]: error transitorio (5xx/429/sin-red) → Result.retry().
- * - [masPorSincronizar]: true si alguna tabla aun tiene mas paginas por
- *   sincronizar. El SyncWorker NO marca initial_sync_completed=true mientras
- *   esto sea true.
+ * - [ErrorAuth]: WAVE 16 fix (S5 CRITICAL) — 401/403 detectado en cualquier
+ *   PULL → cerrar sesion (token invalido/expirado) y devolver
+ *   `Result.failure()`. Los pending_ops se conservan en Room (no se purgan)
+ *   para que el re-login los empuje con el token nuevo.
+ * - [ErrorTransitorio]: error transitorio (5xx/429/sin-red) → `Result.retry()`.
+ * - [Ok]: pulls exitosos; [Ok.masPorSincronizar] true si alguna tabla aun
+ *   tiene paginas pendientes — el SyncWorker NO marca
+ *   initial_sync_completed=true mientras sea true.
  */
-internal data class EstadoPulls(
-    val authError: Boolean = false,
-    val huboErrorTransitorio: Boolean = false,
-    val masPorSincronizar: Boolean = false
-)
+internal sealed class EstadoPulls {
+
+    /** 401/403 — cerrar sesion y abortar con Result.failure(). */
+    object ErrorAuth : EstadoPulls()
+
+    /** 5xx/429/sin red — Result.retry() con backoff. */
+    object ErrorTransitorio : EstadoPulls()
+
+    /** Pulls exitosos. */
+    data class Ok(val masPorSincronizar: Boolean = false) : EstadoPulls()
+}
+
+/**
+ * Combina el estado acumulado de un PULL de tabla con el resultado de la
+ * siguiente: [ErrorAuth] y [ErrorTransitorio] son terminales (el consumer
+ * aborta/reintenta antes de leer `masPorSincronizar`); [Ok] acumula el OR
+ * de las banderas de paginacion pendiente.
+ */
+internal fun combinarEstadoPulls(
+    actual: EstadoPulls,
+    masPorSincronizar: Boolean
+): EstadoPulls = when (actual) {
+    is EstadoPulls.ErrorAuth -> actual
+    is EstadoPulls.ErrorTransitorio -> actual
+    is EstadoPulls.Ok -> EstadoPulls.Ok(actual.masPorSincronizar || masPorSincronizar)
+}
 
 internal fun decidirModoSync(
     hayPendingOps: Boolean,

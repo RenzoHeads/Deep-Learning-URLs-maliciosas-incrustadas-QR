@@ -2,10 +2,8 @@ package com.qrsecurity.detector.pipeline
 
 import android.content.Context
 import com.qrsecurity.detector.api.ClienteBackend
-import com.qrsecurity.detector.api.existeUrl
 import com.qrsecurity.detector.cache.CacheResultados
 import com.qrsecurity.detector.datos.local.BaseDatosSeguridad
-import com.qrsecurity.detector.datos.local.entidades.UrlCatalogoEntity
 import com.qrsecurity.detector.datos.repositorios.RepositorioEscaneos
 import com.qrsecurity.detector.datos.repositorios.RepositorioUrlsBloqueadas
 import com.qrsecurity.detector.datos.repositorios.bloquearLocal
@@ -16,9 +14,6 @@ import com.qrsecurity.detector.ml.MotorInferencia
 import com.qrsecurity.detector.ml.Preprocesador
 import com.qrsecurity.detector.qr.ExtractorUrls
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -70,6 +65,7 @@ class Pipeline @Inject constructor(
     // ── Componentes ──
     private val extractorUrls = ExtractorUrls()
     private val cache = CacheResultados()
+    private val deduplicador = DeduplicadorUrls(repoEscaneos, backend)
 
     init {
         // Cargar vocabulario char-level + hiperparametros del modelo LSTM TFLite
@@ -88,142 +84,6 @@ class Pipeline @Inject constructor(
     // ── Estado expuesto a la UI ──
     private val _estado = MutableStateFlow<Estado>(Estado.Inicializando)
     val estado: StateFlow<Estado> = _estado.asStateFlow()
-
-    /**
-     * Todos los posibles estados del pipeline.
-     */
-    sealed class Estado {
-        /** El pipeline esta arrancando (cargando modelo, etc.). */
-        data object Inicializando : Estado()
-
-        /** Esperando que se escanee un codigo QR. */
-        data object Escaneando : Estado()
-
-        /**
-         * Bug F fix: dedup check completado, inference en progreso.
-         *
-         * Estado intermedio entre [Escaneando] (extraccion + dedup) y
-         * [ResultadoListo] (inference completada). Permite que la UI
-         * navegue a AnalisisScreen SOLO cuando hay inference real en
-         * vuelo — no cuando el dedup check todavia no ha terminado
-         * (caso URL duplicada donde el pipeline emitira [UrlDuplicada]
-         * sin pasar por [Analizando]).
-         *
-         * Sin este estado, [Escaneando] servia tanto para "esperando QR"
-         * como para "dedup check en progreso" como para "inference en
-         * progreso" — la UI no podia distinguir y navegaba a
-         * AnalisisScreen para URLs duplicadas antes de que el dedup
-         * emitiera [UrlDuplicada], mostrando brevemente "Analizando..."
-         * bajo el dialogo de URL duplicada.
-         */
-        data object Analizando : Estado()
-
-        /**
-         * Deduplicacion (cache + log): todas las URLs del QR escaneado ya estaban
-         * en el cache maestro `urls_catalogo` (escaneadas antes). El pipeline
-         * NO persiste un nuevo escaneo ni re-ejecuta inferencia — se cortocircuita
-         * y deja que la UI (NavGuardian) pregunte al usuario si desea reescanear.
-         *
-         * Si el usuario confirma, se llama a [analizar] con `forzar=true`, que
-         * ignora el cache, re-ejecuta inferencia y produce un
-         * [ResultadoListo] (INSERTANDO un nuevo escaneo en el log append-only
-         * `escaneos` + UPSERT del cache en la misma transaccion).
-         *
-         * @property resultado El [ResultadoAnalisis.ResultadoUrl] peor del QR
-         *  (primaria + urlsAdicionales), para que el diálogo reutilice el
-         *  render de nivel/probabilidad que ya existe en la UI.
-         * @property urlsLimpiaConsultadas Las URLs (limpias) cuyo cache hit
-         *  triggered el estado — para mostrar "N URL(s) ya escaneada(s)" y para
-         *  que la UI decida el mensaje (single vs multi-URL).
-         * @property vecesEscaneadaMaxima El max `vecesEscaneada` entre las URLs
-         *  consultadas (info para el diálogo: "escaneada X veces").
-         * @property ultimoEscaneoMillis El `ultimoEscaneoMillis` del peor resultado
-         *  (para "última vez escaneada hace ...").
-         */
-        data class UrlDuplicada(
-            val resultado: ResultadoAnalisis.ResultadoUrl,
-            val urlsLimpiaConsultadas: List<String>,
-            val vecesEscaneadaMaxima: Int,
-            val ultimoEscaneoMillis: Long
-        ) : Estado()
-
-        /**
-         * Inferencia completada y un resultado esta listo.
-         *
-         * [idLocal]: UUID del escaneo persistido en Room cuando el QR contenia
-         * una URL (path de [Pipeline.analizar] que llama [Pipeline.registrarEscaneoLocal]).
-         * Es `null` cuando el QR NO contenia una URL (path [ResultadoAnalisis.NoUrl],
-         * que no persiste). La UI ([AnalisisScreen]) usa este id para navegar a
-         * DetalleUrl con el id exacto en vez de un match heuristico en el Flow
-         * `historial` — ese Flow sufre race con la emision de Room tras INSERT,
-         * lo que producía navegacion con id invalido → DetalleUrl "NoEncontrado".
-         */
-        data class ResultadoListo(
-            val resultado: ResultadoAnalisis,
-            val idLocal: String? = null
-        ) : Estado()
-
-        /** Ocurrio un error durante el analisis. */
-        data class Error(val mensaje: String) : Estado()
-    }
-
-    /**
-     * Resultado del analisis del pipeline. Ya sea un [ResultadoUrl] (con clasificacion de
-     * alerta) o un [NoUrl] cuando el contenido QR no era una URL.
-     *
-     * Bug C2 (fix): cuando el QR contiene multiples URLs, [ResultadoUrl] ahora
-     * modela la **peor** URL (por [ControladorAlerta.NivelAlerta] ordinal:
-     * MALICIOSO > SOSPECHOSO > SEGURO), y expone en [ResultadoUrl.urlsAdicionales]
-     * la lista completa de URLs analizadas para fines de forense/UI. La UI actual
-     * ya muestra el nivel peor; `urlsAdicionales` se usa para mostrar "Tambien se
-     * detectaron N URLs adicionales" si el equipo de producto lo desea.
-     *
-     * Cache/Room serializan solo el primario (`urlOriginal`, `urlLimpia`,
-     * `probabilidad`, `nivelAlerta`, `delegado`) — `urlsAdicionales` NO se
-     * persiste (son derivables re-analizando la URL cruda). Esto evita una
-     * migracion Room y mantiene backward-compat con la cache existente.
-     */
-    sealed class ResultadoAnalisis {
-        /**
-         * Resultado de inferencia para una URL extraida del codigo QR.
-         *
-         * @property urlOriginal URL cruda extraida (antes de [Preprocesador.limpiarUrl]).
-         * @property urlLimpia URL despues de [Preprocesador.limpiarUrl] (protocolo + www quitados).
-         * @property probabilidad Probabilidad sigmoid en [0, 1].
-         * @property nivelAlerta [ControladorAlerta.NivelAlerta] discreto (SEGURO/SOSPECHOSO/MALICIOSO).
-         * @property delegado El delegado de hardware usado (``"NNAPI"``, ``"GPU"``, o ``"CPU"``).
-         *  Bug M8 (fix): en cache hit, este valor se reconstruye desde
-         *  [CacheResultados.EntradaCache.delegado] (delegado **original** que
-         *  efectivamente ejecuto la inferencia), no desde
-         *  [MotorInferencia.nombreDelegado] actual. Esto previene reportes
-         *  inconsistentes si el usuario cambia la preferencia de delegado entre
-         *  escaneos y mantiene el dato de auditoria correcto en el historial.
-         * @property urlsAdicionales Resto de URLs encontradas en el mismo codigo QR
-         *  (incluyendo la primaria como primera entrada), ordenadas de peor a mejor
-         *  veredicto. Vacio si el QR contenia una sola URL (o se conserva la primera
-         *  entrada == this, segun preferencia de UI — aqui lo dejamos vacio para el
-         *  caso single-URL y se rellena solo en el multi-URL path).
-         */
-        data class ResultadoUrl(
-            val urlOriginal: String,
-            val urlLimpia: String,
-            val probabilidad: Float,
-            val nivelAlerta: ControladorAlerta.NivelAlerta,
-            val delegado: String,
-            val urlsAdicionales: List<ResultadoUrl> = emptyList()
-        ) : ResultadoAnalisis()
-
-        /**
-         * El contenido QR no era una URL — no se realizo inferencia.
-         *
-         * @property valorCrudo Payload original decodificado del QR.
-         * @property tipoContenido [ExtractorUrls.Extraido.NoUrl.tipoContenido] — ``"texto"``, ``"wifi"``, etc.
-         */
-        data class NoUrl(
-            val valorCrudo: String,
-            val tipoContenido: String
-        ) : ResultadoAnalisis()
-    }
 
     /**
      * Analizar un payload QR crudo de punta a punta.
@@ -293,7 +153,7 @@ class Pipeline @Inject constructor(
                             Preprocesador.limpiarUrl(it)
                         }
 
-                        if (!forzar && urlsLimpias.isNotEmpty() && esUrlDuplicada(urlsLimpias)) {
+                        if (!forzar && urlsLimpias.isNotEmpty() && deduplicador.esUrlDuplicada(urlsLimpias)) {
                             // Dedup: todas las URLs ya escaneadas antes →
                             // preguntar al usuario. NO persiste; el reescaneo
                             // (forzar=true) insertara el nuevo escaneo.
@@ -304,7 +164,7 @@ class Pipeline @Inject constructor(
                             // urlMostradaParaEstado). probabilidad/nivelAlerta/
                             // delegado no se renderizan en el dialogo de
                             // UrlDuplicada.
-                            val resumen = resumenCacheDuplicado(urlsLimpias)
+                            val resumen = deduplicador.resumenCacheDuplicado(urlsLimpias)
                             val placeholder = ResultadoAnalisis.ResultadoUrl(
                                 urlOriginal = extraido.urls.first(),
                                 urlLimpia = urlsLimpias.first(),
@@ -358,145 +218,6 @@ class Pipeline @Inject constructor(
             }
         }
     }
-
-    /**
-     * ¿Todas las URLs del QR ya tienen entrada en el cache maestro `urls_catalogo`?
-     *
-     * Dedup en dos fases (offline-first + cross-device):
-     *
-     * **Phase 1 — Cache local Room (offline-first):** consulta
-     * [RepositorioEscaneos.buscarUrlCatalogo] por cada URL limpia. Si todas
-     * tienen entrada local → duplicada. Costo O(log n) por PK `url_hash`.
-     *
-     * **Phase 2 — Cache backend Neon (cross-device):** si Phase 1 reporta
-     * al menos una URL sin cache local, consulta [ClienteBackend.existeUrl]
-     * para esas URLs faltantes. Si TODAS existen en el cache del backend
-     * (escaneadas por otro dispositivo del mismo usuario — `urls_catalogo`
-     * es global), también se considera duplicada. Si la llamada falla (sin
-     * red, sin token, backend caído), se devuelve false — el pipeline
-     * continúa a inferencia normal. El dedup local sigue funcionando
-     * offline; el cross-device es best-effort.
-     *
-     * Garantía multi-URL (fix C2): el dedup solo dispara [Estado.UrlDuplicada]
-     * cuando TODAS las URLs (primaria + [ResultadoAnalisis.ResultadoUrl.urlsAdicionales])
-     * tienen cache hit (local o backend). Si al menos una es nueva, hay
-     * novedad real y se infiere normal.
-     *
-     * Devuelve false si la lista de URLs está vacía (defensivo).
-     *
-     * Bug F fix: acepta `List<String>` (URLs limpias) en vez de
-     * `ResultadoUrl` — el dedup ahora corre ANTES de inference, sin
-     * necesidad del resultado completo.
-     */
-    private suspend fun esUrlDuplicada(urlsLimpia: List<String>): Boolean {
-        if (urlsLimpia.isEmpty()) return false
-        // Phase 1: local cache (offline-first, O(log n) por PK url_hash).
-        val urlsConCacheLocal = urlsLimpia.filter {
-            repoEscaneos.buscarUrlCatalogo(it) != null
-        }
-        if (urlsConCacheLocal.size == urlsLimpia.size) return true
-        // Phase 2: cross-device — consultar backend para URLs sin cache local.
-        val urlsSinCacheLocal = urlsLimpia.filterNot { it in urlsConCacheLocal }
-        return verificarUrlsEnBackendDedup(urlsSinCacheLocal)
-    }
-
-    /**
-     * Phase 2 del dedup cross-device: consulta el backend
-     * [ClienteBackend.existeUrl] para URLs que no estaban en el cache local
-     * Room. Si TODAS existen en el cache maestro del backend, se considera
-     * duplicada.
-     *
-     * Offline-first: si la llamada falla (sin red, sin token, backend caído),
-     * se devuelve false — el pipeline continúa a inferencia normal y el
-     * escaneo se persiste localmente (poblando el cache local para futuros
-     * hits Phase 1 sin necesidad de red). El dedup cross-device es
-     * best-effort, no bloqueante.
-     */
-    private suspend fun verificarUrlsEnBackendDedup(urls: List<String>): Boolean {
-        if (urls.isEmpty()) return true
-        return try {
-            // Audit fix (performance): las consultas existeUrl corrían
-            // SECUENCIALES — un QR multi-URL con N URLs nuevas paginaba N
-            // round-trips antes de mostrar "Analizando". Ahora corren en
-            // paralelo (coroutineScope + async); la latencia pasa de
-            // N×RTT a ~1×RTT.
-            kotlinx.coroutines.coroutineScope {
-                urls.map { url ->
-                    async { backend.existeUrl(url).existe }
-                }.all { it.await() }
-            }
-        } catch (e: Exception) {
-            if (e is kotlinx.coroutines.CancellationException) throw e
-            // Offline-first: sin red / sin auth → fallback a cache local.
-            false
-        }
-    }
-
-    /**
-     * Recolecta el resumen del cache para llenar [Estado.UrlDuplicada]:
-     * las URLs consultadas, el max `vecesEscaneada` entre ellas y el
-     * `ultimoEscaneoMillis` del peor resultado.
-     *
-     * Asume que [esUrlDuplicada] ya devolvió true (todas existen en el cache
-     * local o en el backend), pero es defensive con valores null (si una
-     * entrada se evapora entre el check y aquí — raro pero posible en races).
-     *
-     * Bug E fix: cuando [esUrlDuplicada] detectó la URL via Phase 2 (backend
-     * `existeUrl` en cache maestro global `urls_catalogo`) pero NO hay entrada
-     * local (ej: usuario nuevo tras `clearAllTables` — cache local vacío),
-     * `entradas` no incluye esa URL → `vecesMaxima` terminaba en 0 → el diálogo
-     * mostraba "escaneada 0 vez(es)". Como `urls_catalogo` es global (sin
-     * `id_usuario`), el backend NO expone `veces_escaneada` por seguridad
-     * (CWE-639 + CWE-200 cross-user data leak). Por lo tanto no podemos saber
-     * el conteo real cross-device — pero sí sabemos que la URL fue escaneada
-     * **al menos una vez** (el backend dijo `existe=true`). Usamos
-     * `maxOf(localMax, 1)` cuando alguna URL no tiene entrada local (Phase 2
-     * hit) para que el diálogo muestre un conteo mínimo significativo en vez
-     * del confuso "0 veces".
-     *
-     * Análogamente, `ultimoEscaneoMillisPeor` del peor (primaria) también puede
-     * ser 0 cuando la primaria solo existe en el backend — el diálogo oculta
-     * la fecha cuando este valor es 0 (ver [HomeScreen]), por lo que es seguro.
-     *
-     * Bug F fix: acepta `List<String>` (URLs limpias) en vez de
-     * `ResultadoUrl` — el dedup ahora corre ANTES de inference. La
-     * "primaria" es `urlsLimpia.first()` (la primera URL extraída del QR),
-     * equivalente al comportamiento previo donde `resultado.urlLimpia`
-     * era la primaria selección-peor del `procesarMultiplesUrls`.
-     */
-    private suspend fun resumenCacheDuplicado(
-        urlsLimpia: List<String>
-    ): ResumenDedup {
-        val entradas: List<UrlCatalogoEntity> = urlsLimpia.mapNotNull {
-            repoEscaneos.buscarUrlCatalogo(it)
-        }
-        val localMax = entradas.maxOfOrNull { it.vecesEscaneada } ?: 0
-        // Bug E: si alguna URL no tiene entrada local (Phase 2 backend hit),
-        // el mínimo significativo es 1 — el backend confirmó que existe.
-        val vecesMaxima = if (entradas.size < urlsLimpia.size) {
-            maxOf(localMax, 1)
-        } else {
-            localMax
-        }
-        val primaria = urlsLimpia.first()
-        return ResumenDedup(
-            urlsLimpia = urlsLimpia,
-            vecesMaxima = vecesMaxima,
-            // ultimoEscaneoMillis del cache para el peor (primaria).
-            // 0 cuando la primaria solo existe en el backend (Phase 2 hit) —
-            // el diálogo oculta la fecha cuando es 0 (ver HomeScreen).
-            ultimoEscaneoMillisPeor = entradas
-                .firstOrNull { it.urlLimpia == primaria }
-                ?.ultimoEscaneoMillis ?: 0L
-        )
-    }
-
-    /** Contenedor temporal para construir [Estado.UrlDuplicada]. */
-    private data class ResumenDedup(
-        val urlsLimpia: List<String>,
-        val vecesMaxima: Int,
-        val ultimoEscaneoMillisPeor: Long
-    )
 
     /**
      * Procesa multiples URLs extraidas de un QR: tokeniza, infiere (o usa cache),

@@ -5,6 +5,7 @@ import com.qrsecurity.detector.api.ClienteBackend
 import com.qrsecurity.detector.api.ClienteBackend.UrlBloqueada
 import com.qrsecurity.detector.api.listarUrlsBloqueadasDelta
 import kotlinx.coroutines.withContext
+import com.qrsecurity.detector.datos.local.entidades.PendingOpEntity
 
 /**
  * Sync engine (PULL) para [RepositorioUrlsBloqueadas].
@@ -25,7 +26,7 @@ suspend fun RepositorioUrlsBloqueadas.sincronizarDelta(
         backend.listarUrlsBloqueadasDelta(token, cursorTs, LIMITE_PAGINA, cursorId = cursorId)
     },
     applyBatch = { delta, ahora -> aplicarBatchUrlsBloqueadas(delta, ahora) },
-    extraerCursor = { url -> url.updatedAt?.let { ts -> Pair(ts, url.id) } },
+    extraerCursor = { url -> url.updatedAt?.let { ts -> CursorDelta(ts, url.id) } },
     mensajeError = "Error en delta sync de URLs bloqueadas"
 )
 
@@ -44,14 +45,15 @@ internal suspend fun RepositorioUrlsBloqueadas.aplicarBatchUrlsBloqueadas(
         db.urlBloqueadaDao().insertarTodos(entidades)
     }
 
-    // Bug A1 fix: cursor keyset compuesto "ts|id"
+    // Bug A1 fix: cursor keyset compuesto "ts|id" (ver [CursorDelta]).
     val ultima = delta.last()
     if (ultima.updatedAt != null) {
         db.syncStateDao().actualizarCursor(
-            "urls_bloqueadas", "${ultima.updatedAt}|${ultima.id}"
+            PendingOpEntity.TABLA_URLS_BLOQUEADAS,
+            CursorDelta(ultima.updatedAt, ultima.id).aString()
         )
     }
-    db.syncStateDao().actualizar("urls_bloqueadas", ahora, exitosa = true)
+    db.syncStateDao().actualizar(PendingOpEntity.TABLA_URLS_BLOQUEADAS, ahora, exitosa = true)
 
     vivos.map { it.id }
 }
@@ -61,4 +63,4 @@ internal suspend fun RepositorioUrlsBloqueadas.aplicarBatchUrlsBloqueadas(
  * Stream-based via temp table + NOT EXISTS.
  */
 suspend fun RepositorioUrlsBloqueadas.limpiarHuerfanos(idsServidor: List<String>) =
-    limpiarNoDirtyAusentesEn(ioDispatcher, db, "urls_bloqueadas", idsServidor)
+    limpiarNoDirtyAusentesEn(ioDispatcher, db, PendingOpEntity.TABLA_URLS_BLOQUEADAS, idsServidor)

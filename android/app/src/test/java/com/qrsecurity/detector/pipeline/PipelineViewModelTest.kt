@@ -23,7 +23,7 @@ import org.robolectric.annotation.Config
  * (TFLite + Room + ClienteBackend).
  *
  * Cobertura:
- *  - `reiniciar()` cambia `estado` a `Pipeline.Estado.Escaneando`.
+ *  - `reiniciar()` cambia `estado` a `Estado.Escaneando`.
  *  - `analizar(payloadCrudo = "")` lleva el estado a `Error` (path
  *    rapido: el `ExtractorUrls` mapea payload vacio a
  *    `Extraido.Vacio` sin tocar TFLite ni Room).
@@ -101,7 +101,7 @@ class PipelineViewModelTest {
     fun estadoInicial_esInicializando() {
         assertEquals(
             "Pipeline recien creado debe estar en Inicializando",
-            Pipeline.Estado.Inicializando,
+            Estado.Inicializando,
             viewModel.estado.value
         )
     }
@@ -115,7 +115,7 @@ class PipelineViewModelTest {
         viewModel.reiniciar()
         assertEquals(
             "reiniciar debe llevar el estado a Escaneando",
-            Pipeline.Estado.Escaneando,
+            Estado.Escaneando,
             viewModel.estado.value
         )
     }
@@ -126,7 +126,7 @@ class PipelineViewModelTest {
         viewModel.reiniciar()
         assertEquals(
             "reiniciar repetido debe dejar estado en Escaneando",
-            Pipeline.Estado.Escaneando,
+            Estado.Escaneando,
             viewModel.estado.value
         )
     }
@@ -148,9 +148,9 @@ class PipelineViewModelTest {
         val estadoFinal = viewModel.estado.value
         assertTrue(
             "Payload vacio debe llevar a Error, no a Escaneando atascado. Estado actual: $estadoFinal",
-            estadoFinal is Pipeline.Estado.Error
+            estadoFinal is Estado.Error
         )
-        val mensajeError = (estadoFinal as Pipeline.Estado.Error).mensaje
+        val mensajeError = (estadoFinal as Estado.Error).mensaje
         assertNotNull("Mensaje de error no debe ser null", mensajeError)
         assertTrue(
             "Mensaje de error debe mencionar 'vacio' o similar. Fue: '$mensajeError'",
@@ -171,12 +171,12 @@ class PipelineViewModelTest {
         val estadoFinal = viewModel.estado.value
         assertTrue(
             "Payload no-URL debe llegar a ResultadoListo. Estado actual: $estadoFinal",
-            estadoFinal is Pipeline.Estado.ResultadoListo
+            estadoFinal is Estado.ResultadoListo
         )
-        val resultado = (estadoFinal as Pipeline.Estado.ResultadoListo).resultado
+        val resultado = (estadoFinal as Estado.ResultadoListo).resultado
         assertTrue(
             "Resultado debe ser ResultadoAnalisis.NoUrl. Fue: $resultado",
-            resultado is Pipeline.ResultadoAnalisis.NoUrl
+            resultado is ResultadoAnalisis.NoUrl
         )
     }
 
