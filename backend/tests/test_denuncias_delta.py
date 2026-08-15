@@ -1,17 +1,12 @@
 """Tests delta-sync para el router de denuncias (``/denuncias``).
 
-GREEN  → comportamiento actual.
-RED    → nuevo comportamiento no implementado (``updated_at``/``deleted_at``,
-         ``modificados_desde``, endpoint DELETE).
-PASS   → aserciones sobre soft-delete que ya estan soportadas tras la
-         migracion 006 (columnas ``updated_at``/``deleted_at`` en el
-         esquema); antes estaban marcadas como pendientes.
+Cubre modo normal, modo delta (``modificados_desde``), keyset pagination
+(``cursor_id``), campos ``updated_at``/``deleted_at`` y endpoint DELETE.
 """
 from __future__ import annotations
 
 import uuid
 
-import pytest
 from app.modelos import DenunciaRespuesta
 
 
@@ -58,7 +53,7 @@ def test_listar_denuncias(client):
 
 
 # ============================================================================
-# RED
+# Campos de respuesta (updated_at / deleted_at)
 # ============================================================================
 def test_denuncia_respuesta_tiene_updated_at():
     fields = set(DenunciaRespuesta.model_fields.keys())

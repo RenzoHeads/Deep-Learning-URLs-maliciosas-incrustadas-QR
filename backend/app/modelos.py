@@ -114,7 +114,7 @@ class UrlCatalogoRespuesta(BaseModel):
     + ``ultimo_nivel_alerta`` (veredicto discreto, coarse, necesario para que
     el cliente decida si reescanear — propósito original del dedup
     cross-device). Los campos sensibles se eliminaron del modelo Pydantic
-    **y** del ``SELECT`` SQL en ``buscar_url_catalogo`` (defense in depth).
+    (defense in depth).
     """
     existe: bool
     url_limpia: str | None = None
@@ -205,26 +205,4 @@ def fila_a_denuncia(fila: asyncpg.Record) -> DenunciaRespuesta:
         creado_en=fila["creado_en"],
         updated_at=fila.get("updated_at"),
         deleted_at=fila.get("deleted_at"),
-    )
-
-
-def fila_a_url_catalogo(fila: asyncpg.Record | None) -> UrlCatalogoRespuesta:
-    """Convierte una fila de ``urls_catalogo`` en [UrlCatalogoRespuesta].
-
-    Si ``fila`` es ``None`` (la URL no existe en el cache maestro), devuelve
-    una respuesta con ``existe=False`` y todos los campos nulos — contrato
-    esperado por el endpoint ``GET /escaneos/existe-url`` y por el cliente
-    Android para saber que debe escanear la URL.
-
-    Security fix: solo mapea ``url_limpia`` + ``ultimo_nivel_alerta``. Los
-    campos sensibles (``ultima_probabilidad``, ``ultimo_escaneo_millis``,
-    ``veces_escaneada``) ya no se exponen — ver docstring de
-    [UrlCatalogoRespuesta].
-    """
-    if fila is None:
-        return UrlCatalogoRespuesta(existe=False)
-    return UrlCatalogoRespuesta(
-        existe=True,
-        url_limpia=fila["url_limpia"],
-        ultimo_nivel_alerta=fila["ultimo_nivel_alerta"],
     )

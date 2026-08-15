@@ -21,7 +21,7 @@ ataques desde un cliente Android comprometido vienen de una sola IP
 y un Vercel reroute_tipicamente reutiliza la misma instancia caliente
 para conexiones cercanas en el tiempo.
 
-Limites por defecto (configurables via env):
+Limites (constantes de modulo):
   - AUTH:  10 req / 60 s por IP  (registrar + login: brute-force lento)
   - API:   120 req / 60 s por IP (sync + CRUD: cliente normal hace ~5
                                    req por sync; un bucle haga 120/s es
@@ -141,9 +141,10 @@ async def _verificar(ip: str, clase: str) -> tuple[bool, int]:
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """Middleware Starlette que aplica rate limiting fixed-window.
 
-    Limpia contadores expirados periodicamente para evitar crecimiento
-    ilimitado del dict en instancias long-running (en Vercel esto es
-    efimero, pero en uvicorn --reload local puede vivir horas).
+    El dict de contadores solo resetea sus ventanas al ser re-accedidas
+    (ver ``_verificar``); no hay barrido periodico de entradas expiradas.
+    El crecimiento esta acotado por (~N_ips * 2 clases), ver comentario
+    en ``_contadores``.
     """
 
     async def dispatch(self, request: Request, call_next) -> Response:

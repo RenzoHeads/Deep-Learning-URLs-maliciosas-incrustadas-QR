@@ -1,18 +1,12 @@
 """Tests delta-sync para el router de escaneos (``/escaneos``).
 
-GREEN  → comportamiento actual que debe seguir pasando.
-RED    → aserciones sobre NUEVO comportamiento todavia no implementado
-         (campos ``updated_at`` / ``deleted_at``, parametro ``modificados_desde``,
-          soft-delete). Fallan contra el codigo actual.
-PASS   → aserciones sobre soft-delete que ya estan soportadas tras la
-         migracion 006 (columnas ``updated_at``/``deleted_at`` en el
-         esquema); antes estaban marcadas como pendientes.
+Cubre modo normal, modo delta (``modificados_desde``), keyset pagination
+(``cursor_id``), campos ``updated_at``/``deleted_at`` y soft-delete.
 """
 from __future__ import annotations
 
 import uuid
 
-import pytest
 from app.modelos import EscaneoRespuesta
 
 
@@ -89,7 +83,7 @@ def test_eliminar_escaneo_devuelve_204(client):
 
 
 # ============================================================================
-# RED — nuevo comportamiento NO implementado aun (debe FALLAR contra actual)
+# Campos de respuesta (updated_at / deleted_at)
 # ============================================================================
 def test_escaneo_respuesta_tiene_updated_at():
     # EscaneoRespuesta no define ``updated_at`` hoy -> AttributeError/TypeError

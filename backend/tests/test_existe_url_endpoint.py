@@ -13,8 +13,6 @@ Casos cubiertos:
   - URLs distintas no se confunden.
   - Borrar el único escaneo vivo → ``existe=False`` (soft-delete respeta
     el dedup).
-  - Per-user isolation: un escaneo de OTRO usuario no disparar ``existe=True``
-    para el usuario actual.
 
 Security fix: la respuesta ya NO expone ``ultima_probabilidad``,
 ``ultimo_escaneo_millis`` ni ``veces_escaneada`` — esos campos permitían

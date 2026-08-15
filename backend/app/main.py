@@ -26,6 +26,8 @@ from app.routers import auth, historial, bloqueadas, denuncias
 
 logger = logging.getLogger(__name__)
 
+VERSION_API = "1.0.0"
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -42,7 +44,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="QR Guardian API",
     description="Backend para la app Android QR Guardian — deteccion de URLs maliciosas en codigos QR",
-    version="1.0.0",
+    version=VERSION_API,
     lifespan=lifespan,
 )
 
@@ -80,7 +82,7 @@ async def raiz():
     """Endpoint de verificacion."""
     return {
         "aplicacion": "QR Guardian API",
-        "version": "1.0.0",
+        "version": VERSION_API,
         "estado": "activo",
     }
 

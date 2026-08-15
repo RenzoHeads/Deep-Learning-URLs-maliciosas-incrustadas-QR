@@ -70,9 +70,7 @@ async def crear_denuncia(
             status_code=409,
             detail="Denuncia ya eliminada — id_cliente reusado",
         )
-    respuesta = fila_a_denuncia(fila)
-    respuesta.nombre_categoria = fila.get("nombre_categoria")
-    return respuesta
+    return fila_a_denuncia(fila)
 
 
 @router.get("", response_model=list[DenunciaRespuesta])

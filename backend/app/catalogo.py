@@ -48,54 +48,6 @@ def hash_url(url_limpia: str) -> str:
     return hashlib.sha256(url_limpia.encode("utf-8")).hexdigest()
 
 
-async def buscar_url_catalogo(
-    conexion: asyncpg.Connection, url_limpia: str
-) -> dict[str, Any] | None:
-    """Busca una URL en el cache maestro ``urls_catalogo`` por su hash.
-
-    Patron cache+log (deduplicacion): el backend mantiene un cache maestro
-    denormalizado ``urls_catalogo`` (PK ``url_hash`` = SHA-256(url_limpia))
-    con el ultimo resultado conocido + un contador ``veces_escaneada``. El
-    endpoint ``GET /escaneos/existe-url`` usa esta funcion para responder
-    sin tocar el log append-only ``historial_escaneos``.
-
-    Reutiliza la ``conexion`` del caller (ya dentro de un ``pool.acquire()``
-    o transaccion) — no abre una nueva conexion.
-
-    Security fix (cross-user data leak): ``urls_catalogo`` es una tabla
-    **global** (PK ``url_hash`` unico, sin columna ``id_usuario``) — el
-    catalogo es intencionalmente crowd-sourced para que el dedup
-    cross-device funcione. Sin embargo, el ``SELECT`` ahora recupera
-    **solo** las columnas necesarias para la respuesta stripped
-    (``url_hash``, ``url_limpia``, ``ultimo_nivel_alerta``). Las columnas
-    sensibles (``ultima_probabilidad``, ``ultimo_escaneo_millis``,
-    ``veces_escaneada``) no se fetchan — defense in depth: aunque alguien
-    agregue esos campos de vuelta al modelo Pydantic, el SQL no los sirve.
-    Ver [UrlCatalogoRespuesta] para el contrato de respuesta.
-
-    Args:
-        conexion: Conexion asyncpg activa.
-        url_limpia: URL limpia (sin normalizar aqui — el caller normaliza).
-
-    Returns:
-        ``dict`` con las columnas no sensibles de ``urls_catalogo``
-        (``url_hash``, ``url_limpia``, ``ultimo_nivel_alerta``) si existe la
-        entrada, o ``None`` si la URL no fue escaneada antes.
-    """
-    h = hash_url(url_limpia)
-    fila = await conexion.fetchrow(
-        """
-        SELECT url_hash, url_limpia, ultimo_nivel_alerta
-        FROM urls_catalogo
-        WHERE url_hash = $1
-        """,
-        h,
-    )
-    if fila is None:
-        return None
-    return dict(fila)
-
-
 async def upsert_url_catalogo(
     conexion: asyncpg.Connection,
     url_limpia: str,
@@ -192,10 +144,10 @@ async def recompute_url_catalogo_after_delete(
     [app.servicios.historial.eliminar_escaneo]). Esta funcion no abre
     su propio ``BEGIN``/``COMMIT``.
 
-    Anti-leak (ver [buscar_url_catalogo]): el cache ``urls_catalogo`` es
-    global y **sin** ``id_usuario`` — los recuentos son agregados
-    cross-device. Esta funcion devuelve nada (no sirve datos al
-    cliente); solo muta el cache internamente.
+    Anti-leak: el cache ``urls_catalogo`` es global y **sin**
+    ``id_usuario`` — los recuentos son agregados cross-device. Esta
+    funcion devuelve nada (no sirve datos al cliente); solo muta el
+    cache internamente.
 
     Args:
         conexion: Conexion asyncpg activa dentro de una transaccion.
