@@ -1,20 +1,21 @@
 # ===========================================
-# Excluir TODO excepto frontend Android + backend
+# Producto: app Android + backend + pipeline ML versionado
 # ===========================================
 
 # --- Vibecoding / AI assistance artifacts ---
 .omo/
 .codegraph/
 .opencode/
+.superpowers/
+.zcode/
+.claude/
 docs/superpowers/
 docs/tech_spec.md
 docs/auditoria_pais_generico.md
 docs/modulos.md
 docs/navegacion.md
 docs/arquitectura.mmd
-MODEL_CARD.md
 PLAN_IMPLEMENTACION_SEMINARIO2.md
-README.md
 android/docs/
 android/lint_full.txt
 android/app/debug.keystore
@@ -23,40 +24,21 @@ android/app/debug.keystore
 appium-err.log
 appium.log
 session.json
+f2-build-log.txt
 *.log
 
-# --- Notebooks de entrenamiento ---
-*.ipynb
-
-# --- Scripts de entrenamiento/exportación ---
-train_canine_s.py
-export_onnx.py
-export_tflite.py
-
-# --- Config de modelo ---
-max_len_config.json
-thresholds.json
-
-# --- Datasets ---
-master_regionalizado/
-master_generico/
-master_regionalizado_v2/
-prueba_latam/
-prueba_generica/
+# --- Artefactos de auditoria/datos generados (NO los corpus maestros) ---
 corpus_aumento_*.csv
 auditoria_pais_generico_benigno.csv
 
-# --- Colab export (carpeta autocontenida para subir a Google Colab) ---
+# --- Colab export (bundle duplicado para subir a Colab; el original vive en raiz) ---
 colab_lstm/
 
 # --- Entregas ---
 entrega/
 entregas/
 
-# --- Evaluation ---
-evaluation/
-
-# --- Python (deps de entrenamiento) ---
+# --- Python ---
 __pycache__/
 *.py[cod]
 *$py.class
@@ -68,21 +50,24 @@ build/
 .eggs/
 venv/
 .venv/
-requirements.txt
+.venv-tflite/
+.pytest_cache/
 
-# --- Model outputs ---
+# --- Model outputs (checkpoints y modelos exportados, no el codigo) ---
 outputs_roberta/
+salida_roberta/
 *.pt
 *.pth
 *.onnx
 *.tflite
 
-# --- Evaluation results ---
+# --- Evaluation results (los scripts si estan versionados) ---
 evaluation/results/
 *.png
 
 # --- Android build artifacts ---
 android/.gradle/
+android/build-logic/.gradle/
 android/build/
 android/app/build/
 android/local.properties
