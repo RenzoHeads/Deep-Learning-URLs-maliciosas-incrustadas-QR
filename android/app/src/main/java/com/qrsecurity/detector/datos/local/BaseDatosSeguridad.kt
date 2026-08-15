@@ -1,21 +1,14 @@
 package com.qrsecurity.detector.datos.local
 
 import androidx.room.Database
-import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
-import android.content.Context
-import com.qrsecurity.detector.BuildConfig
-import com.qrsecurity.detector.datos.local.dao.CategoriaDao
-import com.qrsecurity.detector.datos.local.dao.DenunciaDao
 import com.qrsecurity.detector.datos.local.dao.EscaneoDao
 import com.qrsecurity.detector.datos.local.dao.PendingOpDao
 import com.qrsecurity.detector.datos.local.dao.SyncStateDao
 import com.qrsecurity.detector.datos.local.dao.UrlBloqueadaDao
 import com.qrsecurity.detector.datos.local.dao.UrlCatalogoDao
-import com.qrsecurity.detector.datos.local.entidades.CategoriaDenunciaEntity
-import com.qrsecurity.detector.datos.local.entidades.DenunciaEntity
 import com.qrsecurity.detector.datos.local.entidades.EscaneoEntity
 import com.qrsecurity.detector.datos.local.entidades.PendingOpEntity
 import com.qrsecurity.detector.datos.local.entidades.SyncStateEntity
@@ -26,21 +19,20 @@ import com.qrsecurity.detector.datos.local.migraciones.Migracion4A5
 import com.qrsecurity.detector.datos.local.migraciones.Migracion5A6
 import com.qrsecurity.detector.datos.local.migraciones.Migracion6A7
 import com.qrsecurity.detector.datos.local.migraciones.Migracion7A8
+import com.qrsecurity.detector.datos.local.migraciones.Migracion8A9
 
 /**
  * Base de datos Room — fuente de verdad local (offline-first).
  *
- * Contiene 7 tablas:
+ * Contiene 5 tablas:
  *   - escaneos (historial de QR escaneados)
  *   - urls_bloqueadas (URLs que el usuario ha bloqueado)
- *   - denuncias (URLs denunciadas)
- *   - categorias_denuncia (datos de referencia read-only)
  *   - pending_ops (cola outbox para sync con backend)
  *   - sync_state (ultima sync exitosa por tabla)
  *   - urls_catalogo (cache maestro de dedup: una fila por URL escaneada,
  *     último estado + conteo; lookup O(log n) por urlHash SHA-256)
  *
- * Version 8 — Schema exportado a `app/schemas/` por KSP.
+ * Version 9 — Schema exportado a `app/schemas/` por KSP.
  *   v1 → v2: FK Denuncia→Categoria + indices en url/idCategoria/(tabla,idLocal)/nombre.
  *   v2 → v3: columna ultimoCursorModificacion en sync_state (delta sync cursor).
  *   v3 → v4: tabla urls_catalogo + backfill desde escaneos (cache de deduplicacion).
@@ -52,21 +44,30 @@ import com.qrsecurity.detector.datos.local.migraciones.Migracion7A8
  *     (Categoría 2 D-2 + D-6 audit fix — queries de dedup O(N log N) en
  *     vez de O(N²); observa{rTodos,rTodas} ordenados por indice en vez de
  *     filesort).
+ *   v8 → v9: DROP de `denuncias` + `categorias_denuncia` + limpieza del
+ *     outbox/cursor de denuncias (feature eliminada — nunca tuvo UI y el
+ *     SyncWorker gastaba red poblando tablas sin consumidores).
  *
- * Singleton thread-safe via `companion object get()`. El patrón `@Volatile`
- * + double-checked locking garantiza una sola instancia por proceso.
+ * Las migraciones históricas que tocan `denuncias` (1→2, 6→7, 7→8) se
+ * conservan intactas: son pasos intermedios obligatorios del camino de
+ * upgrade v1→v9 (la tabla existe en esos puntos del camino y se elimina
+ * recién en 8→9).
+ *
+ * El wiring de migraciones vive en [TODAS_MIGRACIONES] — única lista
+ * compartida por [com.qrsecurity.detector.di.DatabaseModule] (la instancia
+ * Hilt que usa toda la app). Audit fix CRITICAL: DatabaseModule registraba
+ * solo 4 de 7 migraciones, causando wipe (debug) o crash (release) en
+ * upgrades desde v5/v6/v7.
  */
 @Database(
     entities = [
         EscaneoEntity::class,
         UrlBloqueadaEntity::class,
-        DenunciaEntity::class,
-        CategoriaDenunciaEntity::class,
         PendingOpEntity::class,
         SyncStateEntity::class,
         UrlCatalogoEntity::class
     ],
-    version = 8,
+    version = 9,
     exportSchema = true
 )
 abstract class BaseDatosSeguridad : RoomDatabase() {
@@ -74,15 +75,11 @@ abstract class BaseDatosSeguridad : RoomDatabase() {
     // DAOs — uno por entidad
     abstract fun escaneoDao(): EscaneoDao
     abstract fun urlBloqueadaDao(): UrlBloqueadaDao
-    abstract fun denunciaDao(): DenunciaDao
-    abstract fun categoriaDao(): CategoriaDao
     abstract fun pendingOpDao(): PendingOpDao
     abstract fun syncStateDao(): SyncStateDao
     abstract fun urlCatalogoDao(): UrlCatalogoDao
 
     companion object {
-        @Volatile
-        private var INSTANCIA: BaseDatosSeguridad? = null
 
         /**
          * Migration 1 → 2:
@@ -327,31 +324,31 @@ abstract class BaseDatosSeguridad : RoomDatabase() {
         }
 
         /**
-         * Obtiene o construye la instancia unica de la base de datos.
-         * Thread-safe via double-checked locking.
-         *
-         * Uso: `BaseDatosSeguridad.get(context)`
-         *
-         * M-26: `fallbackToDestructiveMigration` solo en DEBUG builds.
-         * En release no se permite — un schema bump sin migration explicita
-         * lanzaria IllegalStateException en lugar de wipear datos de usuario.
+         * Migration 8 → 9: elimina las tablas del flujo de denuncias
+         * (feature retirada — ver [Migracion8A9]).
          */
-        fun get(context: Context): BaseDatosSeguridad {
-            return INSTANCIA ?: synchronized(this) {
-                INSTANCIA ?: Room.databaseBuilder(
-                    context.applicationContext,
-                    BaseDatosSeguridad::class.java,
-                    "qr_guardian.db"
-                )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8)
-                    .also { builder ->
-                        if (BuildConfig.DEBUG) {
-                            builder.fallbackToDestructiveMigration()
-                        }
-                    }
-                    .build()
-                    .also { INSTANCIA = it }
+        val MIGRATION_8_9: Migration = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                Migracion8A9.migrar(db)
             }
         }
+
+        /**
+         * Única lista de migraciones válida del esquema — consumida por
+         * [com.qrsecurity.detector.di.DatabaseModule] al construir la
+         * instancia Hilt.
+         *
+         * Audit fix CRITICAL: DatabaseModule duplicaba esta lista a mano y
+         * solo registraba 4 de las migraciones; un upgrade desde v5/v6/v7
+         * caía en `fallbackToDestructiveMigration` (debug → wipe total) o
+         * `IllegalStateException` (release → crash). Centralizar la lista
+         * aquí hace imposible el drift entre `version` y las migraciones
+         * registradas — el test `MigracionesWiringTest` verifica que el
+         * camino 1→[VERSION] esté cubierto de forma contigua.
+         */
+        val TODAS_MIGRACIONES: Array<Migration> = arrayOf(
+            MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
+            MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9
+        )
     }
 }

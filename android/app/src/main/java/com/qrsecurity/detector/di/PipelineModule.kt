@@ -6,6 +6,8 @@ import com.qrsecurity.detector.api.ClienteBackend
 import com.qrsecurity.detector.datos.repositorios.RepositorioEscaneos
 import com.qrsecurity.detector.datos.repositorios.RepositorioUrlsBloqueadas
 import com.qrsecurity.detector.datos.sync.MediadorSincronizacion
+import com.qrsecurity.detector.ml.MotorInferencia
+import com.qrsecurity.detector.ml.MotorInferenciaReal
 import android.content.Context
 import dagger.Module
 import dagger.Provides
@@ -30,6 +32,12 @@ object PipelineModule {
 
     @Provides
     @Singleton
+    fun provideMotorInferencia(
+        @ApplicationContext context: Context
+    ): MotorInferencia = MotorInferenciaReal(context)
+
+    @Provides
+    @Singleton
     fun providePipeline(
         @ApplicationContext context: Context,
         db: BaseDatosSeguridad,
@@ -37,6 +45,10 @@ object PipelineModule {
         json: Json,
         repoEscaneos: RepositorioEscaneos,
         repoUrlsBloqueadas: RepositorioUrlsBloqueadas,
-        mediadorSync: MediadorSincronizacion
-    ): Pipeline = Pipeline(context, db, backend, json, repoEscaneos, repoUrlsBloqueadas, mediadorSync)
+        mediadorSync: MediadorSincronizacion,
+        motorInferencia: MotorInferencia
+    ): Pipeline = Pipeline(
+        context, db, backend, json, repoEscaneos, repoUrlsBloqueadas,
+        mediadorSync, motorInferencia
+    )
 }

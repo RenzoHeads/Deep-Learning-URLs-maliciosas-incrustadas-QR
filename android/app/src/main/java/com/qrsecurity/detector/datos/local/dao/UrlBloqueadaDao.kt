@@ -68,13 +68,6 @@ interface UrlBloqueadaDao {
     @Query("SELECT id FROM urls_bloqueadas")
     suspend fun todosLosIds(): List<String>
 
-    /**
-     * Bug M10 fix: ids locales `dirty = 0` para diff contra servidor.
-     * [com.qrsecurity.detector.datos.repositorios.RepositorioUrlsBloqueadas.limpiarHuerfanos].
-     */
-    @Query("SELECT id FROM urls_bloqueadas WHERE dirty = 0")
-    suspend fun idsNoDirty(): List<String>
-
     @Query("DELETE FROM urls_bloqueadas WHERE id IN (:ids)")
     suspend fun eliminarPorIds(ids: List<String>)
 }

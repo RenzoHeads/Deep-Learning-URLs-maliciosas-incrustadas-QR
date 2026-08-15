@@ -1,7 +1,10 @@
 package com.qrsecurity.detector.ml
 
+import android.content.res.AssetManager
+import org.json.JSONObject
+
 /**
- * Preprocesamiento para el modelo TFLite CANINE-S.
+ * Preprocesamiento para el modelo LSTM char-level TFLite.
  *
  * Dos responsabilidades:
  *
@@ -10,28 +13,88 @@ package com.qrsecurity.detector.ml
  *    Esto replica el preprocesamiento aplicado al dataset de entrenamiento para que
  *    la distribucion de caracteristicas en inferencia coincida con el entrenamiento.
  *
- * 2. **[tokenizar]** — implementa el tokenizador CANINE como un mapeo simple
- *    **de codepoints Unicode a nivel de caracter** (sin archivo de vocabulario externo).
- *    Cada codepoint Unicode se extrae via [String.codePointAt] + [Character.charCount]
- *    (no ``Char.code``, que devuelve el code unit UTF-16 y rompe suplementarios/IDN/emoji).
- *    La secuencia de enteros resultante se rellena con [PAD_IDX] = 0 hasta [MAX_LEN] = 150
- *    o se trunca si es mas larga.
+ * 2. **[tokenizar]** — mapea cada caracter de la URL limpia a su indice en el
+ *    vocabulario char-level (``char2idx``) cargado desde ``assets/ml/vocab.json``.
+ *    La secuencia de enteros resultante se rellena con [PAD_IDX] hasta [MAX_LEN]
+ *    o se trunca si es mas larga. Los caracteres fuera del vocabulario se mapean
+ *    a [UNK_IDX].
  *
- * El array de salida es un array Int unidimensional de longitud [MAX_LEN], adecuado para
- * colocarlo en el tensor de entrada del modelo TFLite.
+ * Diferencias con la version CANINE-S anterior:
+ *  - **Vocabulario**: char2idx desde vocab.json (124 chars) en vez de codepoints
+ *    Unicode directos. El LSTM fue entrenado con este vocabulario fijo.
+ *  - **MAX_LEN**: 100 (percentil 95 de longitudes del train set) en vez de 150.
+ *  - **PAD_IDX/UNK_IDX**: cargados desde model_metadata.json (0 y 1 respectivamente).
  *
- * Nota: El modelo CANINE publicado usa un mapeo de codepoints Unicode basado en hash
- * para la combinacion de piezas de subpalabra, pero para el despliegue on-device en Android
- * sin archivos de vocabulario/corpus externos, el enfoque pragmatico es un mapeo directo
- * de codepoints, que es sin perdida y rapido.
+ * El array de salida es un [IntArray] de longitud [MAX_LEN], adecuado para el
+ * tensor de entrada del modelo TFLite (dtype int32, shape [1, MAX_LEN]).
  */
 object Preprocesador {
 
-    /** Longitud maxima de secuencia aceptada por el modelo CANINE-S. */
-    const val MAX_LEN = 150
+    // ── Hiperparametros (cargados desde model_metadata.json) ──
 
-    /** Indice de padding — CANINE usa pad token id = 0. */
-    const val PAD_IDX = 0
+    /** Longitud maxima de secuencia aceptada por el modelo LSTM. */
+    @Volatile
+    var MAX_LEN: Int = 100
+        private set
+
+    /** Indice de padding — fila 0 del embedding (ceros por padding_idx). */
+    @Volatile
+    var PAD_IDX: Int = 0
+        private set
+
+    /** Indice de token desconocido (out-of-vocabulary). */
+    @Volatile
+    var UNK_IDX: Int = 1
+        private set
+
+    /** Tamano del vocabulario (incluye PAD y UNK). */
+    @Volatile
+    var VOCAB_SIZE: Int = 124
+        private set
+
+    // ── Vocabulario char2idx (cargado desde vocab.json) ──
+
+    @Volatile
+    private var char2idx: Map<String, Int>? = null
+
+    /** `true` si [inicializar] se ha llamado y el vocabulario esta cargado. */
+    val estaInicializado: Boolean
+        get() = char2idx != null
+
+    /**
+     * Resetear el estado del preprocesador a no inicializado.
+     *
+     * Uso exclusivo en **tests** para forzar re-inicializacion entre tests
+     * con diferentes vocabularios. En produccion, [inicializar] es idempotente
+     * y no necesita reset.
+     */
+    fun reset() {
+        char2idx = null
+    }
+
+    /**
+     * Inicializar el preprocesador con un vocabulario y hiperparametros directos.
+     *
+     * Uso exclusivo en **tests JVM** (sin [AssetManager] disponible). En
+     * produccion, usar [inicializar] con [AssetManager] para cargar desde
+     * ``assets/ml/vocab.json`` y ``assets/ml/model_metadata.json``.
+     *
+     * Es idempotente: si ya esta cargado, no hace nada.
+     */
+    fun inicializarTest(
+        vocab: Map<String, Int>,
+        maxLen: Int,
+        padIdx: Int,
+        unkIdx: Int,
+        vocabSize: Int
+    ) {
+        if (char2idx != null) return
+        char2idx = vocab
+        MAX_LEN = maxLen
+        PAD_IDX = padIdx
+        UNK_IDX = unkIdx
+        VOCAB_SIZE = vocabSize
+    }
 
     /** Prefijos de protocolo a quitar durante la limpieza de URL. */
     private val PREFIJOS_PROTOCOLO = listOf(
@@ -39,16 +102,46 @@ object Preprocesador {
     )
 
     /**
+     * Inicializar el preprocesador cargando vocab.json y model_metadata.json
+     * desde ``assets/ml/``.
+     *
+     * Debe llamarse una vez antes de cualquier [tokenizar] — tipicamente desde
+     * [com.qrsecurity.detector.pipeline.Pipeline] al arrancar.
+     *
+     * Es idempotente: si ya esta cargado, no hace nada.
+     */
+    fun inicializar(assets: AssetManager) {
+        if (char2idx != null) return
+
+        // Cargar model_metadata.json
+        val metadataJson = assets.open("ml/model_metadata.json").bufferedReader().use {
+            JSONObject(it.readText())
+        }
+        MAX_LEN = metadataJson.getInt("max_len")
+        PAD_IDX = metadataJson.getInt("pad_idx")
+        UNK_IDX = metadataJson.getInt("unk_idx")
+        VOCAB_SIZE = metadataJson.getInt("vocab_size")
+
+        // Cargar vocab.json
+        val vocabJson = assets.open("ml/vocab.json").bufferedReader().use {
+            JSONObject(it.readText())
+        }
+        val char2idxObj = vocabJson.getJSONObject("char2idx")
+        val mapa = HashMap<String, Int>(char2idxObj.length())
+        val keys = char2idxObj.keys()
+        while (keys.hasNext()) {
+            val ch = keys.next()
+            mapa[ch] = char2idxObj.getInt(ch)
+        }
+        char2idx = mapa
+    }
+
+    /**
      * Normalizar una URL para entrada al modelo quitando protocolo y prefijo ``www.``.
      *
-     * **WAVE 12 fix (C2 CRITICAL):** antes aplicabamos `.lowercase()` y
-     * `.trimEnd('/')`, dos transformaciones que el `clean_url` de Python
-     * (dataset de entrenamiento) NO aplica. Eso producía skew: el modelo
-     * infería sobre strings que nunca vio en training (e.g.
-     * `"Example.com/Path"` → `"example.com/path"`, `"evil.com/"` →
-     * `"evil.com"`), degradando silenciosamente la probabilidad. Ahora
-     * solo `trim()` (whitespace externo) + quitar protocolo y `www.` —
-     * contrato 1:1 con el preprocesador de training.
+     * Replica 1:1 el ``clean_url`` del dataset de entrenamiento: solo ``trim()``
+     * (whitespace externo) + quitar protocolo y ``www.`` — NO aplica ``lowercase()``
+     * ni ``trimEnd('/')`` para evitar skew entre training e inference.
      *
      * Ejemplos:
      *   "https://www.example.com/path" -> "example.com/path"
@@ -77,38 +170,35 @@ object Preprocesador {
     }
 
     /**
-     * Tokenizador CANINE: mapeo de codepoints Unicode a nivel de caracter.
+     * Tokenizar una URL limpia a una secuencia de indices del vocabulario char-level.
      *
-     * Cada caracter de [urlLimpia] se convierte a su codepoint [Int].
-     * El resultado se rellena hasta [MAX_LEN] con [PAD_IDX] o se trunca.
+     * Cada caracter de [urlLimpia] se mapea a su indice en ``char2idx``. Los
+     * caracteres fuera del vocabulario se mapean a [UNK_IDX]. La secuencia se
+     * rellena con [PAD_IDX] hasta [MAX_LEN] o se trunca si es mas larga.
+     *
+     * Requiere que [inicializar] haya sido llamado previamente.
      *
      * @param urlLimpia La salida de [limpiarUrl].
-     * @return [IntArray] de longitud [MAX_LEN] con codepoints + padding.
+     * @return [IntArray] de longitud [MAX_LEN] con indices de vocabulario + padding.
      */
     fun tokenizar(urlLimpia: String): IntArray {
-        // Pre-llenar con padding.
         val resultado = IntArray(MAX_LEN) { PAD_IDX }
+        val vocab = char2idx ?: throw IllegalStateException(
+            "Preprocesador no inicializado — llama inicializar(assets) antes de tokenizar"
+        )
 
-        // Bug H5: iterar codepoints Unicode reales, no UTF-16 code units.
-        // ``urlLimpia[i].code`` devuelve el code unit UTF-16 (un surrogate
-        // aislado para BMP > U+FFFF, ej. emoji o dominios IDN), no el
-        // codepoint Unicode. CANINE opera sobre codepoints, por lo que una
-        // URL con emoji o etiquetas IDN romperia la inferencia (cada
-        // surrogate se tokenizaria como un codepoint distinto y fuera del
-        // rango valido del vocabulario CANINE). Usamos [String.codePointAt]
-        // + [Character.charCount] para avanzar correctamente por codepoints
-        // suplementarios (2 chars UTF-16 por codepoint).
         var idx = 0
         var i = 0
         while (i < urlLimpia.length && idx < MAX_LEN) {
             val cp = urlLimpia.codePointAt(i)
-            // CANINE preserva los codepoints tal cual; el padding ocupa el
-            // ID 0, lo que significa que un caracter NUL real (codepoint 0)
-            // chocaria con pad, pero NUL en URLs es invalido y es improbable
-            // que aparezca. Mapeamos cualquier codepoint 0 (teoricamente
-            // posible solo si la entrada viene pre-corrupta) a PAD_IDX+1
-            // para preservar la distincion.
-            resultado[idx] = if (cp == PAD_IDX) PAD_IDX + 1 else cp
+            // Mapear codepoint a su representacion de string para lookup en char2idx.
+            // char2idx usa String de 1 caracter (o "<PAD>"/"<UNK>").
+            val key = if (cp <= Char.MAX_VALUE.code) {
+                cp.toChar().toString()
+            } else {
+                String(Character.toChars(cp))
+            }
+            resultado[idx] = vocab[key] ?: UNK_IDX
             idx++
             i += Character.charCount(cp)
         }

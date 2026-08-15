@@ -270,61 +270,6 @@ interface EscaneoDao {
     @Query("UPDATE escaneos SET dirty = 0, syncedAtMillis = :syncedAt WHERE id = :id")
     suspend fun marcarSincronizado(id: String, syncedAt: Long): Int
 
-    // ── Estadisticas deduplicadas (Bug 3 fix + D-3 audit fix) ──
-    //
-    // v6/v7 contaba sobre el log `escaneos`: `COUNT(DISTINCT urlLimpia)` y
-    // un COUNT con subquery correlacionada por cada fila maliciosa. Con
-    // millones de filas (reescaneos de las mismas N URLs), esto era
-    // O(N_rows) y O(M_maliciosas × K_rescanes_maliciosos).
-    //
-    // D-3 audit fix: el cache `urls_catalogo` tiene exactamente una fila
-    // por URL unica con el ultimo estado denormalizado (`ultimoNivelAlerta`
-    // + `ultimaProbabilidad` + `ultimoEscaneoMillis` + `vecesEscaneada`).
-    // Contar sobre el cache es O(N_uniq) — para 2 URLs × 10.000 rescaneos
-    // = 2 filas en el cache vs. 20.000 en el log. Cero rescaneos cuentan.
-    //
-    // Correctitud: el cache se mantiene sincronizado con `escaneos` en:
-    //  - [RepositorioEscaneos.registrarLocal] (escaneo local, misma tx)
-    //  - [RepositorioEscaneos.eliminarLocal] (borrado local, misma tx)
-    //  - [RepositorioEscaneos.eliminarLocalPorUrlLimpia] (cascade delete)
-    //  - [RepositorioEscaneos.aplicarBatchEscaneos] (PULL vivos + tombstones
-    //    — D-3 sibling fix en el repositorio, antes no se tocaba el cache).
-    //
-    // Invariante clave: el cache refleja el estado "una fila viva por URL"
-    // tras cada commit; `contarPorUrlLimpia` excluye filas con DELETE
-    // pendiente, asi que un DELETE local inmediatamente desaparece del
-    // cache (igual que desaparece de los Flows de historial por el filtro
-    // `NOT IN pending_ops`).
-
-    /**
-     * Total de URLs unicas escaneadas (sin contar reescaneos).
-     *
-     * Bug 3 fix: `COUNT(DISTINCT urlLimpia)` en vez de `COUNT(*)`.
-     * Bug estadisticas-parpadeo: excluye DELETEs pendientes.
-     * D-3 fix: lee directamente `urls_catalogo` (una fila por URL unica en
-     * vez de recorrer el log append-only `escaneos`). O(N_uniq) en vez de
-     * O(N_rows). Confia en que el cache se mantiene sincronizado via
-     * `registrarLocal` / `eliminarLocal` / `aplicarBatchEscaneos`.
-     */
-    @Query("SELECT COUNT(*) FROM urls_catalogo")
-    fun observarTotalUnicos(): Flow<Int>
-
-    /**
-     * Cuenta URLs unicas cuyo **ultimo** escaneo fue malicioso.
-     *
-     * Bug 3 fix: solo cuenta URLs cuyo ultimo escaneo fue malicioso (una URL
-     * escaneada primero como maliciosa y luego como segura NO cuenta — el
-     * cache `urls_catalogo.ultimoNivelAlerta` siempre refleja el ultimo
-     * escaneo via `registrarLocal` / `aplicarBatchEscaneos`).
-     * D-3 fix: filtra `urls_catalogo` en vez de hacer un full table scan +
-     * subquery correlacionada sobre `escaneos`. O(N_uniq) en vez de
-     * O(N_rows × K_rescanes).
-     */
-    @Query(
-        "SELECT COUNT(*) FROM urls_catalogo WHERE ultimoNivelAlerta = 'MALICIOSO'"
-    )
-    fun observarAmenazasUnicas(): Flow<Int>
-
     /**
      * Obtiene un escaneo por su id (para pantalla de detalle desde historial).
      * Devuelve null si no existe (p.ej. fue borrado tras navegacion).
@@ -371,15 +316,6 @@ interface EscaneoDao {
     /** Lista todos los ids locales (helper de verificacion para tests de integracion). */
     @Query("SELECT id FROM escaneos")
     suspend fun todosLosIds(): List<String>
-
-    /**
-     * Bug M10 fix: lista ids locales marcados `dirty = 0` (sincronizados).
-     * Usado por [com.qrsecurity.detector.datos.repositorios.RepositorioEscaneos.limpiarHuerfanos]
-     * para diff contra los ids que reporta el servidor y eliminar los rows
-     * que ya no existen ahi (zombies tras PULL).
-     */
-    @Query("SELECT id FROM escaneos WHERE dirty = 0")
-    suspend fun idsNoDirty(): List<String>
 
     /** Elimina rows por id en lote (para limpieza de rows no presentes en servidor). */
     @Query("DELETE FROM escaneos WHERE id IN (:ids)")

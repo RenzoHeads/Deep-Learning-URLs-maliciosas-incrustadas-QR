@@ -28,8 +28,12 @@ class RepositorioUrlsBloqueadas(
     internal val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) {
 
-    internal val MAX_PAGINAS_POR_RUN = 5
-    internal val LIMITE_PAGINA = 200
+    /**
+     * Constantes de paginacion — compartidas via [PaginacionSync]
+     * (audit fix: antes duplicadas por repositorio).
+     */
+    internal val MAX_PAGINAS_POR_RUN = PaginacionSync.MAX_PAGINAS_POR_RUN
+    internal val LIMITE_PAGINA = PaginacionSync.LIMITE_PAGINA
 
     fun observarTodos(): Flow<List<UrlBloqueadaEntity>> = db.urlBloqueadaDao().observarTodos()
 

@@ -128,6 +128,20 @@ private suspend fun RepositorioEscaneos.procesarCreate(
             }
             DecisionPush.Decision.Retry -> false
         }
+    } catch (e: android.database.sqlite.SQLiteConstraintException) {
+        // Audit fix (reKey PK collision): la fila con el id del servidor ya
+        // existe localmente (llegó por PULL antes de que este PUSH terminara).
+        // El UPDATE `reKey` viola la PK en vez de afectar 0 filas. Sin esta
+        // rama, el catch genérico devolvía false → retry infinito del op.
+        // Resolución: eliminar la fila local (client UUID) y borrar el op —
+        // el PULL ya insertó/reemplazará la fila con el id del servidor.
+        // Nota: `urls_catalogo` se reconciliará en el próximo PULL/borrado
+        // (reconciliarUrlsCatalogo corre en aplicarBatchEscaneos).
+        db.withTransaction {
+            db.escaneoDao().eliminarPorId(op.idLocal)
+            db.pendingOpDao().borrarPorId(op.id)
+        }
+        true
     } catch (e: Exception) {
         // Bug H3 (mismo fix que Pipeline.kt:329): rethrow CancellationException
         // para no ejecutar side effects en corutina cancelada.

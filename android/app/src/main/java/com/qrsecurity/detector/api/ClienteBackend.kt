@@ -18,7 +18,6 @@ import java.util.concurrent.TimeUnit
  *  - Auth: [registrarUsuario] / [login] en `ClienteBackendAuth.kt`
  *  - Escaneos (historial + dedup) en `ClienteBackendEscaneos.kt`
  *  - URLs bloqueadas en `ClienteBackendUrlsBloqueadas.kt`
- *  - Denuncias en `ClienteBackendDenuncias.kt`
  *  - Helpers HTTP (post/get/delete/ejecutarYMapear/buildDeltaUrl) en
  *    `ClienteBackendHttp.kt`
  *
@@ -30,7 +29,19 @@ import java.util.concurrent.TimeUnit
 class ClienteBackend(
     baseUrl: String = BASE_POR_DEFECTO,
     internal val tokenProvider: () -> String? = { null },
-    clienteOkHttp: OkHttpClient? = null
+    clienteOkHttp: OkHttpClient? = null,
+    /**
+     * Instancia de [Json] compartida — en produccion llega la provista por
+     * [com.qrsecurity.detector.di.NetworkModule] (audit fix: antes se
+     * construya una propia con `encodeDefaults=false` divergente de la del
+     * gráfico Hilt, duplicando la configuración de serialización del
+     * proceso). El default mantiene un Json razonable para tests que
+     * construyen el cliente a mano.
+     */
+    internal val json: Json = Json {
+        ignoreUnknownKeys = true
+        isLenient = true
+    }
 ) {
 
     /** Interceptor de auth (M-13): inyecta `Authorization: Bearer <token>` si hay. */
@@ -84,12 +95,6 @@ class ClienteBackend(
 
     internal val base: String = baseUrl.trimEnd('/')
 
-    internal val json: Json = Json {
-        ignoreUnknownKeys = true
-        isLenient = true
-        encodeDefaults = false
-    }
-
     // ──────────────────────────────────────────────────────────────
     // Tipos de salida (DTOs serializables)
     // ──────────────────────────────────────────────────────────────
@@ -123,26 +128,6 @@ class ClienteBackend(
         val id: String,
         val url: String,
         val razon: String? = null,
-        @SerialName("creado_en") val creadoEn: String,
-        @SerialName("updated_at") val updatedAt: String? = null,
-        @SerialName("deleted_at") val deletedAt: String? = null
-    )
-
-    @Serializable
-    data class CategoriaDenuncia(
-        val id: Int,
-        val nombre: String,
-        val descripcion: String? = null
-    )
-
-    @Serializable
-    data class Denuncia(
-        val id: String,
-        val url: String,
-        @SerialName("id_categoria") val idCategoria: Int,
-        @SerialName("nombre_categoria") val nombreCategoria: String? = null,
-        val descripcion: String? = null,
-        val estado: String,
         @SerialName("creado_en") val creadoEn: String,
         @SerialName("updated_at") val updatedAt: String? = null,
         @SerialName("deleted_at") val deletedAt: String? = null

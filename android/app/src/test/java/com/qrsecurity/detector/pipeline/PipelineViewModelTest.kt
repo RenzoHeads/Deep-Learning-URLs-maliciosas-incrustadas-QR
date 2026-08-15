@@ -37,9 +37,9 @@ import org.robolectric.annotation.Config
  *    `Dispatchers.Main` por defecto. Sin `setMain`, el Job se queda
  *    pendiente y `runTest` lanza `UncompletedCoroutinesError` al final.
  *    `StandardTestDispatcher` da control manual via `advanceUntilIdle()`.
- *  - `PipelineViewModel(application)` construye `Pipeline(application)`
- *    directamente. `MotorInferencia(application)` solo guarda
- *    `application.assets` y NO carga TFLite (placeholder).
+ *  - `PipelineViewModel(application)` construye `Pipeline(application)` con un
+ *    [com.qrsecurity.detector.ml.MotorInferenciaFake] (probabilidad fija 0.5,
+ *    sin JNI/TFLite) para poder ejecutar en JVM/Robolectric sin crash.
  *  - El path vacio y el path no-URL NO invocan `registrarEscaneoLocal`,
  *    asi que Room no se toca para esos casos.
  *
@@ -79,7 +79,8 @@ class PipelineViewModelTest {
         val repoEscaneos = com.qrsecurity.detector.datos.repositorios.RepositorioEscaneos(db, backend, json, testDispatcher)
         val repoUrlsBloqueadas = com.qrsecurity.detector.datos.repositorios.RepositorioUrlsBloqueadas(db, backend, json, testDispatcher)
         val mediadorSync = com.qrsecurity.detector.datos.sync.MediadorSincronizacion(app)
-        val pipeline = com.qrsecurity.detector.pipeline.Pipeline(app, db, backend, json, repoEscaneos, repoUrlsBloqueadas, mediadorSync)
+        com.qrsecurity.detector.ml.setupTestVocab()
+        val pipeline = com.qrsecurity.detector.pipeline.Pipeline(app, db, backend, json, repoEscaneos, repoUrlsBloqueadas, mediadorSync, com.qrsecurity.detector.ml.MotorInferenciaFake())
         // PipelineViewModel requiere SavedStateHandle (Hilt lo inyecta en prod;
         // en test pasamos uno vacío — no usamos resultadoCacheado aquí).
         val savedState = androidx.lifecycle.SavedStateHandle()

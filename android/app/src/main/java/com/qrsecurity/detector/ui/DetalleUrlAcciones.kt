@@ -54,6 +54,7 @@ internal fun SeccionAcciones(
     onSolicitarDesbloqueo: () -> Unit,
     onSolicitarBloqueo: () -> Unit,
     onSolicitarEliminar: () -> Unit,
+    onAbrirEnlace: (onInvalida: () -> Unit) -> Unit,
     onMensaje: (TipoMensaje, String) -> Unit
 ) {
     val escaneo = estado.escaneo
@@ -73,14 +74,19 @@ internal fun SeccionAcciones(
             BotonPrimario(
                 icono = Icons.Filled.LockOpen,
                 etiqueta = "Abrir enlace",
-                subEtiqueta = "Se abre en navegador protegido",
+                // Audit fix S2: copy honesto — se abre un chooser normal de
+                // navegadores, no un "navegador protegido".
+                subEtiqueta = "Se abre en tu navegador",
                 habilitado = true,
                 onClick = {
-                    val url = urlParaAbrir(escaneo.urlOriginal, escaneo.urlLimpia)
-                    if (url == null) {
-                        onMensaje(TipoMensaje.ERROR, "Enlace con esquema no permitido")
+                    // Audit fix P5: distinguir "URL vacía" de "esquema no
+                    // permitido" — antes ambos mostraban el mismo mensaje.
+                    if (escaneo.urlOriginal.isBlank() && escaneo.urlLimpia.isBlank()) {
+                        onMensaje(TipoMensaje.ERROR, "La URL está vacía")
                     } else {
-                        abrirEnNavegador(contexto, url)
+                        // La pantalla decide: nivel SEGURO → abre directo;
+                        // SOSPECHOSO/MALICIOSO → modal de confirmación.
+                        onAbrirEnlace { onMensaje(TipoMensaje.ERROR, "Enlace con esquema no permitido") }
                     }
                 }
             )

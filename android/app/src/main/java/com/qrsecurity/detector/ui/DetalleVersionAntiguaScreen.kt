@@ -9,6 +9,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -64,9 +65,13 @@ fun PantallaDetalleVersionAntigua(
         }
     }
 
-    BackHandler(onBack = onBack)
+    // Audit fix B4+P1: el estado del modal se declara ANTES del BackHandler
+    // (que lo consulta) y con rememberSaveable — sobrevive rotacion/process
+    // death. El back del sistema queda desactivado mientras el modal esta
+    // abierto: cierra el modal, no la pantalla entera.
+    var modalEliminarVisible by rememberSaveable { mutableStateOf(false) }
 
-    var modalEliminarVisible by remember { mutableStateOf(false) }
+    BackHandler(enabled = !modalEliminarVisible, onBack = onBack)
 
     Box(modifier = Modifier.fillMaxSize().background(CyberFondo)) {
         when (val estado = uiState) {

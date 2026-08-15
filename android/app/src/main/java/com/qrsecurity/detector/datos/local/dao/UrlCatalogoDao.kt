@@ -31,11 +31,10 @@ interface UrlCatalogoDao {
      * dentro de la transacción del INSERT en `escaneos` para mantener cache y
      * log atómicos.
      *
-     * Nota: usamos `@Insert(onConflict = REPLACE)` (no `@Upsert`) por la misma
-     * razón documentada en [CategoriaDao]: Room con sqlite4java (Shadow de
-     * Robolectric) lanza `SQLiteConstraintException: Cannot execute for last
-     * inserted row ID` al hacer `@Upsert` sobre un row con PK ya existente.
-     * `REPLACE` borra el row viejo y reinserta, evitando la trampa.
+     * Nota: usamos `@Insert(onConflict = REPLACE)` en vez de `@Upsert` por
+     * compatibilidad historica con los shadows de Robolectric usados en los
+     * tests (el @Upsert de [CategoriaDao] ya no existe — feature denuncias
+     * eliminada). REPLACE borra el row viejo y reinserta.
      */
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(entidad: UrlCatalogoEntity)

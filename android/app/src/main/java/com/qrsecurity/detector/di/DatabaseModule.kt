@@ -1,8 +1,6 @@
 package com.qrsecurity.detector.di
 
 import com.qrsecurity.detector.datos.local.BaseDatosSeguridad
-import com.qrsecurity.detector.datos.local.dao.CategoriaDao
-import com.qrsecurity.detector.datos.local.dao.DenunciaDao
 import com.qrsecurity.detector.datos.local.dao.EscaneoDao
 import com.qrsecurity.detector.datos.local.dao.PendingOpDao
 import com.qrsecurity.detector.datos.local.dao.SyncStateDao
@@ -24,13 +22,15 @@ import javax.inject.Singleton
  * hospedada en [SingletonComponent] para que sobreviva a cambios de
  * configuracion y se comparta entre todos los repositorios + el SyncWorker.
  *
- * Reemplaza al patron manual `companion object { fun get(context) }` —
- * ahora Hilt gestiona el ciclo de vida y la unica instancia. El companion
- * object en [BaseDatosSeguridad] se mantiene para compatibilidad con los
- * call sites que aun no migran a inyeccion (screens Compose que usan
- * `LocalContext.current`); la instancia creada por Hilt y la del companion
- * son la misma Room database subyacente (Room reutiliza el mismo archivo
- * SQLite), por lo que no hay duplicidad de datos.
+ * Audit fix CRITICAL: las migraciones se toman de la lista unica
+ * [BaseDatosSeguridad.TODAS_MIGRACIONES]. Antes este modulo registraba a
+ * mano solo 4 de las migraciones mientras la version del esquema avanzaba,
+ * causando wipe de datos (debug) o crash de arranque (release) en upgrades
+ * desde v5/v6/v7.
+ *
+ * M-26: `fallbackToDestructiveMigration` solo en DEBUG builds. En release
+ * no se permite — un schema bump sin migration explicita lanzaria
+ * IllegalStateException en lugar de wipear datos de usuario.
  */
 @Module
 @InstallIn(SingletonComponent::class)
@@ -46,12 +46,7 @@ object DatabaseModule {
             BaseDatosSeguridad::class.java,
             "qr_guardian.db"
         )
-            .addMigrations(
-                BaseDatosSeguridad.MIGRATION_1_2,
-                BaseDatosSeguridad.MIGRATION_2_3,
-                BaseDatosSeguridad.MIGRATION_3_4,
-                BaseDatosSeguridad.MIGRATION_4_5
-            )
+            .addMigrations(*BaseDatosSeguridad.TODAS_MIGRACIONES)
             .also { builder ->
                 if (BuildConfig.DEBUG) {
                     builder.fallbackToDestructiveMigration()
@@ -65,12 +60,6 @@ object DatabaseModule {
 
     @Provides
     fun provideUrlBloqueadaDao(db: BaseDatosSeguridad): UrlBloqueadaDao = db.urlBloqueadaDao()
-
-    @Provides
-    fun provideDenunciaDao(db: BaseDatosSeguridad): DenunciaDao = db.denunciaDao()
-
-    @Provides
-    fun provideCategoriaDao(db: BaseDatosSeguridad): CategoriaDao = db.categoriaDao()
 
     @Provides
     fun providePendingOpDao(db: BaseDatosSeguridad): PendingOpDao = db.pendingOpDao()

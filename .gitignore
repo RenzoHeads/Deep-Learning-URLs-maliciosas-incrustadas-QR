@@ -46,6 +46,9 @@ prueba_generica/
 corpus_aumento_*.csv
 auditoria_pais_generico_benigno.csv
 
+# --- Colab export (carpeta autocontenida para subir a Google Colab) ---
+colab_lstm/
+
 # --- Entregas ---
 entrega/
 entregas/

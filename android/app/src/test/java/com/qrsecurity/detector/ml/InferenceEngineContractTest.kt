@@ -7,15 +7,15 @@ import org.junit.Assert.assertTrue
 /**
  * Tests de contrato para el bug C1 (doble-sigmoid).
  *
- * El placeholder [MotorInferencia] devuelve una probabilidad U[0,1] (NO logits).
- * El Pipeline debe llamar a [ControladorAlerta.clasificar] directamente sobre
- * ese valor, sin volver a aplicar sigmoid. El flag `MotorInferencia.devuelveLogits`
- * distingue el modo:
- *  - `true`  → salida cruda es logits (futuro TFLite) → usar [desdeLogits]
- *  - `false` → salida ya es probabilidad (placeholder actual) → usar [clasificar]
+ * El [MotorInferencia] devuelve logits crudos cuando [MotorInferencia.devuelveLogits]
+ * es `true` (motor TFLite real). El Pipeline debe llamar a
+ * [ControladorAlerta.desdeLogits] que aplica sigmoid antes de clasificar.
+ * Cuando [MotorInferencia.devuelveLogits] es `false` (motor fake de tests),
+ * el Pipeline usa [ControladorAlerta.clasificar] directamente sobre el valor
+ * de salida, sin aplicar sigmoid.
  *
- * Cuando se restaure el motor TFLite real, basta con quitar el override
- * `devuelveLogits = false` del placeholder.
+ * Estos tests verifican la logica de [ControladorAlerta] (sigmoid, clasificar,
+ * desdeLogits) que el Pipeline usa para distinguir ambos modos.
  */
 class InferenceEngineContractTest {
 

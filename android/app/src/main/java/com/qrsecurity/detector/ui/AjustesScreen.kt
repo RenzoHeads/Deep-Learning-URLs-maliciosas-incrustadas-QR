@@ -30,27 +30,25 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
+import com.qrsecurity.detector.BuildConfig
 import com.qrsecurity.detector.ui.theme.CyberCyan
 import com.qrsecurity.detector.ui.theme.CyberFondo
 import com.qrsecurity.detector.ui.theme.CyberGlass
-import com.qrsecurity.detector.ui.theme.CyberGlassAlto
 import com.qrsecurity.detector.ui.theme.CyberGlassBorde
 import com.qrsecurity.detector.ui.theme.CyberRojo
 import com.qrsecurity.detector.ui.theme.CyberTextoPrincipal
@@ -67,12 +65,15 @@ import com.qrsecurity.detector.ui.theme.TamanosToque
  * F3.5: UI Compose que replica el layout de Pencil fcKsF.
  * NO incluye Plan Pro/Free (eliminado por decision del usuario).
  *
- * Secciones (de Pencil):
- *  - Seguridad: toggle "Escaneo automatico"
+ * Secciones:
  *  - Privacidad y datos: Exportar / Borrar historial / Idioma
- *  - Acerca de: Version (sin Plan/Pro)
+ *  - Acerca de: Version (desde BuildConfig — sin Plan/Pro)
  *  - Cerrar sesion (danger)
  *  - Footer
+ *
+ * Audit fix M6: se elimino el toggle "Escaneo automatico" — era un estado
+ * `rememberSaveable` local sin persistencia ni efecto real (setting
+ * decorativo que mentia al usuario).
  *
  * @param onCerrarSesion Callback tras cerrar sesion (navega a LOGIN).
  * @param onMensaje Callback para mostrar snackbars.
@@ -85,7 +86,7 @@ fun PantallaAjustes(
     viewModel: AjustesViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    var escaneoAutomatico by rememberSaveable { mutableStateOf(true) }
+    val lifecycleOwner = LocalLifecycleOwner.current
 
     // Escucha eventos one-shot del VM. Solo navega al login cuando el
     // logout completo (LogoutCoordinator: clearAllTables + reset cursores
@@ -93,10 +94,17 @@ fun PantallaAjustes(
     // onCerrarSesion() en paralelo con viewModel.onAction(CerrarSesion),
     // lo que navegaba ANTES de que la limpieza completara, dejando DB,
     // cursores y SyncWorker en estado inconsistente.
-    LaunchedEffect(Unit) {
-        viewModel.eventos.collect { evento ->
-            when (evento) {
-                AjustesEvento.LogoutCompletado -> onCerrarSesion()
+    //
+    // Audit fix B6: repeatOnLifecycle(STARTED) — antes el collect corria
+    // con LaunchedEffect(Unit) plano (inconsistente con las otras 5
+    // pantallas) y un LogoutCompletado podia consumirse con la pantalla en
+    // STOPPED, disparando la navegacion fuera de ciclo de vida.
+    LaunchedEffect(viewModel) {
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            viewModel.eventos.collect { evento ->
+                when (evento) {
+                    AjustesEvento.LogoutCompletado -> onCerrarSesion()
+                }
             }
         }
     }
@@ -143,28 +151,19 @@ fun PantallaAjustes(
             }
         }
 
-        // --- Seguridad Card ---
-        TarjetaSeccion(titulo = "Seguridad") {
-            FilaToggle(
-                etiqueta = "Escaneo automatico",
-                activado = escaneoAutomatico,
-                onToggleChange = { escaneoAutomatico = it }
-            )
-        }
-
         // --- Privacidad Card ---
         TarjetaSeccion(titulo = "Privacidad y datos") {
             FilaAjuste(
                 etiqueta = "Exportar historial",
                 icono = Icons.Filled.Download,
-               OnClick = { onMensaje(TipoMensaje.INFO, "Funcion proximamente disponible") }
+                onClick = { onMensaje(TipoMensaje.INFO, "Funcion proximamente disponible") }
             )
             HorizontalDivider(color = CyberGlassBorde, thickness = 1.dp)
             FilaAjuste(
                 etiqueta = "Borrar historial",
                 icono = Icons.Filled.Delete,
                 peligro = true,
-                OnClick = { onMensaje(TipoMensaje.INFO, "Funcion proximamente disponible") }
+                onClick = { onMensaje(TipoMensaje.INFO, "Funcion proximamente disponible") }
             )
             HorizontalDivider(color = CyberGlassBorde, thickness = 1.dp)
             FilaAjusteValor(
@@ -178,7 +177,7 @@ fun PantallaAjustes(
         TarjetaSeccion(titulo = "Acerca de") {
             FilaAjusteValor(
                 etiqueta = "Version",
-                valor = "2.4.1",
+                valor = BuildConfig.VERSION_NAME,
                 icono = Icons.Filled.Info
             )
         }
@@ -216,7 +215,7 @@ fun PantallaAjustes(
 
         // --- Footer ---
         Text(
-            text = "SeguridadQR 2.4.1 \u00B7 Hecho con cuidado",
+            text = "SeguridadQR ${BuildConfig.VERSION_NAME} \u00B7 Hecho con cuidado",
             style = MaterialTheme.typography.labelSmall,
             color = CyberTextoSecundario,
             textAlign = TextAlign.Center,
@@ -261,7 +260,7 @@ private fun TarjetaSeccion(
 private fun FilaAjuste(
     etiqueta: String,
     icono: ImageVector,
-    OnClick: () -> Unit,
+    onClick: () -> Unit,
     peligro: Boolean = false
 ) {
     val colorTexto = if (peligro) CyberRojo else CyberTextoPrincipal
@@ -269,7 +268,7 @@ private fun FilaAjuste(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = OnClick)
+            .clickable(onClick = onClick)
             .padding(vertical = Espaciado.md),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Espaciado.lg)
@@ -324,38 +323,6 @@ private fun FilaAjusteValor(
             text = valor,
             style = MaterialTheme.typography.bodyMedium,
             color = CyberTextoSecundario
-        )
-    }
-}
-
-@Composable
-private fun FilaToggle(
-    etiqueta: String,
-    activado: Boolean,
-    onToggleChange: (Boolean) -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = Espaciado.md),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Espaciado.lg)
-    ) {
-        Text(
-            text = etiqueta,
-            style = MaterialTheme.typography.bodyMedium,
-            color = CyberTextoPrincipal,
-            modifier = Modifier.weight(1f)
-        )
-        Switch(
-            checked = activado,
-            onCheckedChange = onToggleChange,
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = CyberFondo,
-                checkedTrackColor = CyberCyan,
-                uncheckedThumbColor = CyberTextoSecundario,
-                uncheckedTrackColor = CyberGlassAlto
-            )
         )
     }
 }

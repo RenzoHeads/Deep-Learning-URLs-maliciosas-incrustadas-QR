@@ -1,5 +1,22 @@
 # Detección de URLs Maliciosas Incrustadas en Códigos QR mediante Deep Learning
 
+## Estructura del repositorio
+
+Además de los notebooks de investigación, el repo contiene el **producto completo**:
+
+- **`android/`** — App Android (Kotlin + Jetpack Compose + Hilt + Room
+  offline-first + WorkManager). Escanea QR con CameraX/ML Kit, clasifica la
+  URL on-device con un **LSTM char-level TFLite** (~830 KB en
+  `app/src/main/assets/ml/`), y sincroniza historial/URLs bloqueadas con el
+  backend vía outbox (`pending_ops`) con idempotencia y delta-sync.
+- **`backend/`** — API FastAPI + asyncpg sobre PostgreSQL (Neon), desplegada
+  en Vercel (`qr-guardian-api.vercel.app`). Auth por token bearer, bcrypt,
+  rate limiting. Ver `backend/README` y `backend/vercel.json`.
+- **Notebooks y pipelines ML** — este README (abajo) documenta la parte de
+  investigación: entrenamiento/comparación de 4 arquitecturas (LSTM, BiLSTM,
+  CNN-LSTM, Transformer CANINE-S). El modelo desplegado en la app es el LSTM
+  (ver `MODEL_CARD.md` — sección de actualización).
+
 ## Resumen
 
 Este proyecto implementa y evalúa cuatro arquitecturas de Deep Learning para la clasificación binaria de URLs maliciosas (phishing) incrustadas en códigos QR. Los modelos se entrenan y evalúan sobre dos corpus paralelos ,uno **regionalizado** (enfocado en Latinoamérica) y otro **genérico** (global), con el objetivo de estudiar el impacto de la regionalización lingüística y geográfica en la capacidad de generalización del detector.

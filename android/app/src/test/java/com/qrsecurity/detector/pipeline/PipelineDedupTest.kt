@@ -49,8 +49,9 @@ import org.robolectric.annotation.Config
  * través del VM porque lanza `analizar` en `viewModelScope` (Main =
  * testDispatcher), y el `withContext(Dispatchers.Default)` interno del
  * Pipeline corre en un OS thread real; el helper `drenar` (advanceUntilIdle +
- * yield) espera a que el estado se asiente. El motor de inferencia es el
- * placeholder aleatorio determinista (no carga TFLite).
+ * yield) espera a que el estado se asiente. El motor de inferencia es
+ * [com.qrsecurity.detector.ml.MotorInferenciaFake] (probabilidad fija, sin
+ * TFLite/JNI) para poder ejecutar en Robolectric/JVM.
  *
  * Seed del catalog: en vez de adivinar la `urlLimpia` que produce
  * [com.qrsecurity.detector.ml.Preprocesador.limpiarUrl], hacemos un primer
@@ -85,7 +86,8 @@ class PipelineDedupTest {
         repo = RepositorioEscaneos(db, backend, json, testDispatcher)
         val repoUrlsBloqueadas = RepositorioUrlsBloqueadas(db, backend, json, testDispatcher)
         val mediadorSync = MediadorSincronizacion(app)
-        val pipeline = Pipeline(app, db, backend, json, repo, repoUrlsBloqueadas, mediadorSync)
+        com.qrsecurity.detector.ml.setupTestVocab()
+        val pipeline = Pipeline(app, db, backend, json, repo, repoUrlsBloqueadas, mediadorSync, com.qrsecurity.detector.ml.MotorInferenciaFake())
         vm = PipelineViewModel(pipeline, SavedStateHandle())
     }
 

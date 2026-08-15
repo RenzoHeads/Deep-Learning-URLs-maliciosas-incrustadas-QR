@@ -8,18 +8,22 @@ import com.qrsecurity.detector.datos.repositorios.RepositorioEscaneos
 import com.qrsecurity.detector.datos.repositorios.RepositorioUrlsBloqueadas
 import com.qrsecurity.detector.datos.sync.MediadorSincronizacion
 import dagger.hilt.android.lifecycle.HiltViewModel
+import java.time.Duration
+import java.time.ZoneId
+import java.time.ZonedDateTime
+import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
-import javax.inject.Inject
 
 data class GrupoHistorial(
     val titulo: String,
@@ -44,16 +48,23 @@ internal fun filtrarHistorial(
     busqueda: String,
     bloqueadasUrls: Set<String>
 ): List<EscaneoEntity> {
+    // Audit fix D2: comparar contra NivelAlerta (single source of truth)
+    // en vez de literales "SEGURO"/"SOSPECHOSO" sueltos.
     val porFiltro = when (filtro) {
-        "SEGURAS" -> historial.filter { it.nivelAlerta == "SEGURO" }
-        "SOSPECHOSAS" -> historial.filter { it.nivelAlerta == "SOSPECHOSO" }
+        "SEGURAS" -> historial.filter { it.nivelAlerta == NivelAlerta.SEGURO.id }
+        "SOSPECHOSAS" -> historial.filter { it.nivelAlerta == NivelAlerta.SOSPECHOSO.id }
         "BLOQUEADAS" -> historial.filter { it.urlLimpia in bloqueadasUrls }
         else -> historial
     }
     return if (busqueda.isBlank()) {
         porFiltro
     } else {
-        porFiltro.filter { it.urlLimpia.contains(busqueda, ignoreCase = true) }
+        // Audit fix P9: la busqueda matchea tambien la URL original (la que
+        // el usuario vio en el QR), no solo la limpia.
+        porFiltro.filter {
+            it.urlLimpia.contains(busqueda, ignoreCase = true) ||
+                it.urlOriginal.contains(busqueda, ignoreCase = true)
+        }
     }
 }
 
@@ -96,12 +107,11 @@ class DatosTabsViewModel @Inject constructor(
     // en vez de WhileSubscribed(3_000). Antes, al dejar HistorialScreen
     // por >3s el Flow se detenia; al volver reiniciaba desde emptyList()
     // hasta que Room re-emitia — flash de lista vacia en cada re-entrada.
-    // Con Eagerly el Flow colecta continuamente (como totalEscaneos y
-    // urlsBloqueadas), y Room emite la lista cacheada antes de que la
-    // UI llegue a pintar. La memoria retenida es real pero acotada: una
-    // referencia a la List<EscaneoEntity> ya materializada por Room en
-    // su cache interno; el Flow solo mantiene la referencia, no duplica
-    // los datos.
+    // Con Eagerly el Flow colecta continuamente (como urlsBloqueadas), y
+    // Room emite la lista cacheada antes de que la UI llegue a pintar. La
+    // memoria retenida es real pero acotada: una referencia a la
+    // List<EscaneoEntity> ya materializada por Room en su cache interno;
+    // el Flow solo mantiene la referencia, no duplica los datos.
     //
     // Room controla el dispatcher de sus consultas; el filtrado y la
     // agrupacion se aplican despues en [historialUiState] sobre Default.
@@ -126,37 +136,11 @@ class DatosTabsViewModel @Inject constructor(
             .debounce(300)
             .stateIn(viewModelScope, SharingStarted.Eagerly, "")
 
-    // ── CONTADORES: Eagerly + null initial para eliminar parpadeo de "0" ──
+    // ── CONTADORES (audit fix M1): eliminados totalEscaneos/amenazas ──
     //
-    // Bug 3 fix (parpadeo "0"): antes usaban StateFlow<Int> con initialValue=0.
-    // El problema no era solo WhileSubscribed (que ya se arreglo con Eagerly)
-    // sino que el initialValue=0 era indistinguible del valor real "0 escaneos".
-    // Mostrar "0" mientras se carga elconteo real (e.g. 33) generaba un
-    // parpadeo visible de "0" → "33" en la UI.
-    //
-    // Ahora usamos StateFlow<Int?> con initialValue=null. La UI distingue:
-    //  - null  → "cargando" → mostrar placeholder (guion o skeleton)
-    //  - 0     → "realmente cero" → mostrar "0"
-    //  - N > 0 → mostrar "N"
-    //
-    // Eagerly sigue activo: el Flow colecta desde que el ViewModel se crea
-    // (al montar NavGuardian), asi que Room emite el conteo cacheado en <1ms.
-    // El `null` solo dura ese lapso inicial o si Room tarda excepcionalmente.
-    //
-    // Bug 3 fix (URLs unicas): los DAOs exponen observarTotalUnicos /
-    // observarAmenazasUnicas que cuentan DISTINCT urlLimpia (no filas
-    // individuales), asi un reescaneo de una URL ya contada no incrementa
-    // el contador.
-
-    val totalEscaneos: StateFlow<Int?> =
-        repoEscaneos.observarTotal()
-            .map { it }
-            .stateIn(viewModelScope, SharingStarted.Eagerly, null)
-
-    val amenazas: StateFlow<Int?> =
-        repoEscaneos.observarAmenazas()
-            .map { it }
-            .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    // Eran dos StateFlow Eagerly corriendo para siempre desde el arranque
+    // sin NINGUN consumidor en la UI (solo tests). Los contadores que la
+    // UI pinta se derivan en [historialUiState] desde la lista ya cargada.
 
     // ── BLOQUEADAS: Flow eager para eliminar parpadeo de contador ──
     // Bug fix: antes usaba WhileSubscribed(5_000) con emptyList() como
@@ -181,6 +165,24 @@ class DatosTabsViewModel @Inject constructor(
     }
 
     /**
+     * Ticker que emite al pasar cada medianoche local (audit fix P6): los
+     * grupos "Hoy/Ayer" se computan contra `System.currentTimeMillis()`,
+     * pero el combine solo re-emite cuando cambian Room/filtro/busqueda.
+     * Sin este ticker, al pasar medianoche con la app abria los headers
+     * quedaban stale hasta la proxima mutacion. El valor emitido es
+     * irrelevante — solo fuerza el recomputo de [historialUiState].
+     */
+    private val medianocheTicker: kotlinx.coroutines.flow.Flow<Long> = flow {
+        while (true) {
+            val ahora = ZonedDateTime.now(ZoneId.systemDefault())
+            val proximaMedianoche = ahora.toLocalDate().plusDays(1)
+                .atStartOfDay(ZoneId.systemDefault())
+            delay(Duration.between(ahora, proximaMedianoche).toMillis())
+            emit(System.currentTimeMillis())
+        }
+    }
+
+    /**
      * Estado derivado del historial. La busqueda, el filtro y la agrupacion
      * se ejecutan fuera del hilo principal para que la recomposicion solo
      * reciba el resultado listo para pintar.
@@ -194,23 +196,23 @@ class DatosTabsViewModel @Inject constructor(
      *  2. Al re-entrar al historial tras >3s, el Flow se reiniciaba desde
      *     el valor inicial (zeros) + 300ms de debounce adicional.
      *
-     * Ahora: Eagerly (activo desde la creacion del VM, como totalEscaneos
-     * y urlsBloqueadas), initialValue = HistorialUiState() (todos los
-     * contadores en null → la UI muestra "—" en vez de "0"). El debounce
-     * se aplica solo a busquedaHistorialDebounced para que Room data fluya
-     * sin demora.
+     * Ahora: Eagerly (activo desde la creacion del VM, como urlsBloqueadas),
+     * initialValue = HistorialUiState() (todos los contadores en null → la
+     * UI muestra "—" en vez de "0"). El debounce se aplica solo a
+     * busquedaHistorialDebounced para que Room data fluya sin demora.
      */
     val historialUiState: StateFlow<HistorialUiState> = combine(
         historialTodos,
         urlsBloqueadas,
         _filtroHistorial,
-        busquedaHistorialDebounced
-    ) { historial, urlsBloqueadas, filtro, busqueda ->
+        busquedaHistorialDebounced,
+        medianocheTicker
+    ) { historial, urlsBloqueadas, filtro, busqueda, _ ->
         val bloqueadasUrls = urlsBloqueadas.mapTo(hashSetOf()) { it.url }
         val filtradas = filtrarHistorial(historial, filtro, busqueda, bloqueadasUrls)
         val totalTodos = historial.size
-        val totalSeguras = historial.count { it.nivelAlerta == "SEGURO" }
-        val totalSospechosas = historial.count { it.nivelAlerta == "SOSPECHOSO" }
+        val totalSeguras = historial.count { it.nivelAlerta == NivelAlerta.SEGURO.id }
+        val totalSospechosas = historial.count { it.nivelAlerta == NivelAlerta.SOSPECHOSO.id }
         val totalBloqueadas = historial.count { it.urlLimpia in bloqueadasUrls }
         HistorialUiState(
             grupos = agruparHistorialPorFecha(filtradas),

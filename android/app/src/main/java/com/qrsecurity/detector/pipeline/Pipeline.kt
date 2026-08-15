@@ -16,6 +16,9 @@ import com.qrsecurity.detector.ml.MotorInferencia
 import com.qrsecurity.detector.ml.Preprocesador
 import com.qrsecurity.detector.qr.ExtractorUrls
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -56,13 +59,29 @@ class Pipeline @Inject constructor(
     private val json: Json,
     private val repoEscaneos: RepositorioEscaneos,
     private val repoUrlsBloqueadas: RepositorioUrlsBloqueadas,
-    private val mediadorSync: MediadorSincronizacion
+    private val mediadorSync: MediadorSincronizacion,
+    /**
+     * Motor de inferencia inyectable — en produccion [com.qrsecurity.detector.ml.MotorInferenciaReal]
+     * (TFLite), en tests [com.qrsecurity.detector.ml.MotorInferenciaFake] (determinista, sin JNI).
+     */
+    private val motorInferencia: MotorInferencia
 ) {
 
     // ── Componentes ──
     private val extractorUrls = ExtractorUrls()
-    private val motorInferencia: MotorInferencia by lazy { MotorInferencia(context) }
     private val cache = CacheResultados()
+
+    init {
+        // Cargar vocabulario char-level + hiperparametros del modelo LSTM TFLite
+        // desde assets/ml/vocab.json y assets/ml/model_metadata.json.
+        // Idempotente: si ya esta cargado, no hace nada.
+        // En tests, el MotorInferenciaFake evita tocar assets/TFLite — pero el
+        // Preprocesador sigue necesitando el vocabulario para tokenizar. Los
+        // tests JVM puros (PreprocesadorTest) usan inicializarTest(); los tests
+        // Robolectric que construyen Pipeline real dependeran de que los assets
+        // esten disponibles (configurados via Robolectric @Config assetsDir).
+        Preprocesador.inicializar(context.assets)
+    }
 
     // db, backend, json, repoEscaneos, mediadorSync ya vienen inyectados.
 
@@ -396,7 +415,16 @@ class Pipeline @Inject constructor(
     private suspend fun verificarUrlsEnBackendDedup(urls: List<String>): Boolean {
         if (urls.isEmpty()) return true
         return try {
-            urls.all { backend.existeUrl(it).existe }
+            // Audit fix (performance): las consultas existeUrl corrían
+            // SECUENCIALES — un QR multi-URL con N URLs nuevas paginaba N
+            // round-trips antes de mostrar "Analizando". Ahora corren en
+            // paralelo (coroutineScope + async); la latencia pasa de
+            // N×RTT a ~1×RTT.
+            kotlinx.coroutines.coroutineScope {
+                urls.map { url ->
+                    async { backend.existeUrl(url).existe }
+                }.all { it.await() }
+            }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e
             // Offline-first: sin red / sin auth → fallback a cache local.

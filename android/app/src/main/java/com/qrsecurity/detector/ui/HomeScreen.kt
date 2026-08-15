@@ -11,6 +11,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -43,10 +44,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.camera.view.PreviewView
@@ -66,6 +71,16 @@ import com.qrsecurity.detector.ui.theme.Espaciado
 import com.qrsecurity.detector.ui.theme.RadioBorde
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+
+/**
+ * Fraccion del min(viewW, viewH) que define el reticulo de escaneo centrado.
+ *
+ * Compartida entre [ScanReticle] (que lo DIBUJA) y [qrDentroDeReticulo] (que
+ * VALIDA que el centro del QR detectado cae dentro del reticulo). Si se cambia
+ * este valor, ambos se actualizan en sincronia — sin riesgo de que el dibujo
+ * muestre un area distinta a la que el validador acepta.
+ */
+private const val FACTOR_RETICULO = 0.6f
 
 /**
  * Pantalla de Inicio — camara full-bleed con overlay minimal.
@@ -107,7 +122,8 @@ import kotlinx.coroutines.launch
 @Composable
 fun PantallaHome(
     onEscanear: () -> Unit,
-    pipelineViewModel: PipelineViewModel
+    pipelineViewModel: PipelineViewModel,
+    onMensaje: (TipoMensaje, String) -> Unit = { _, _ -> }
 ) {
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
@@ -117,6 +133,7 @@ fun PantallaHome(
     var moduloCamara by remember { mutableStateOf<ModuloCamara?>(null) }
     var yaNavegoAnalisis by rememberSaveable { mutableStateOf(false) }
     var deteccionQr by remember { mutableStateOf<DeteccionQr?>(null) }
+    var tamanoBox by remember { mutableStateOf(IntSize.Zero) }
 
     // ── Navegacion a AnalisisScreen cuando inicia el analisis ──
     LaunchedEffect(analizando, estado) {
@@ -137,6 +154,21 @@ fun PantallaHome(
         if (estado is Pipeline.Estado.Escaneando && deteccionQr != null) {
             deteccionQr = null
             moduloCamara?.reanudarDeteccion()
+        }
+    }
+
+    // ── QR no-URL: el pipeline resuelve NoUrl tan rapido que el gate
+    //    de navegacion nunca lo pilla (analizando ya es false). Manejar
+    //    aqui: limpiar modal, reanudar camara, mostrar mensaje. ──
+    LaunchedEffect(estado) {
+        val e = estado
+        if (e is Pipeline.Estado.ResultadoListo &&
+            e.resultado is Pipeline.ResultadoAnalisis.NoUrl
+        ) {
+            deteccionQr = null
+            moduloCamara?.reanudarDeteccion()
+            pipelineViewModel.reiniciar()
+            onMensaje(TipoMensaje.INFO, "El QR no contiene una URL")
         }
     }
 
@@ -167,11 +199,12 @@ fun PantallaHome(
     }
 
     // ── Refresh del callback QR (H1 fix: evitar stale callback) ──
-    LaunchedEffect(analizando, estado, deteccionQr) {
+    LaunchedEffect(analizando, estado, deteccionQr, tamanoBox) {
         moduloCamara?.setOnQrDetectado { deteccion ->
             if (!analizando &&
                 estado !is Pipeline.Estado.UrlDuplicada &&
-                deteccionQr == null
+                deteccionQr == null &&
+                qrDentroDeReticulo(deteccion, tamanoBox.width, tamanoBox.height)
             ) {
                 // Pausar la deteccion inmediatamente — antes de que
                 // ningun otro frame pueda disparar otro escaneo.
@@ -184,6 +217,7 @@ fun PantallaHome(
     Box(
         modifier = Modifier
             .fillMaxSize()
+            .onSizeChanged { tamanoBox = it }
             .background(CyberFondo)
     ) {
         // ─── Camera viewfinder (full-bleed, FILL_CENTER) ───
@@ -208,6 +242,26 @@ fun PantallaHome(
             },
             modifier = Modifier.fillMaxSize()
         )
+
+        // ─── Frozen-frame snapshot (covers live preview while QR holds) ───
+        // El [DeteccionQr.instantanea] es el Bitmap del frame EXACTO en el que
+        // ML Kit detecto el QR (capturado sincrono dentro del success listener
+        // del BarcodeScanner, antes de imageProxy.close()). Al renderizarlo con
+        // ContentScale.Crop ≈ FILL_CENTER del PreviewView, el overlay de dim
+        // strips + cyan border se alinea 1:1 con el QR visible en el snapshot
+        // congelado — sin importar cuanto se mueva el telefono despues.
+        //
+        // Sin este snapshot, el overlay (computado del boundingBox del frame N)
+        // se queda quieto en coords de pantalla, pero el preview en vivo pasa
+        // a frame N+K donde el QR ya se movio → el overlay ya no apunta al QR.
+        deteccionQr?.instantanea?.let { bmp ->
+            Image(
+                bitmap = bmp.asImageBitmap(),
+                contentDescription = null,
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop
+            )
+        }
 
         // ─── Scan reticle (centered square with corner brackets + scan line) ───
         // Solo visible en idle (sin deteccion activa ni analizando)
@@ -405,7 +459,7 @@ private fun ScanReticle() {
     Canvas(
         modifier = Modifier.fillMaxSize()
     ) {
-        val reticleSize = minOf(size.width, size.height) * 0.6f
+        val reticleSize = minOf(size.width, size.height) * FACTOR_RETICULO
         val left = (size.width - reticleSize) / 2f
         val top = (size.height - reticleSize) / 2f
         val right = left + reticleSize
@@ -512,4 +566,63 @@ private fun OverlayResaltadoQr(deteccion: DeteccionQr) {
             style = Stroke(width = 3.dp.toPx())
         )
     }
+}
+
+/**
+ * Valida que el QR detectado cae COMPLETAMENTE dentro del reticulo de
+ * escaneo centrado (el mismo que dibuja [ScanReticle]).
+ *
+ * [ScanReticle] dibuja un cuadrado de lado `min(boxW, boxH) * FACTOR_RETICULO`
+ * centrado en el Box. El [DeteccionQr.boundingBox] esta en coordenadas de
+ * imagen post-rotacion; se mapea a coordenadas de pantalla usando la misma
+ * formula FILL_CENTER del [PreviewView]
+ * (`scale = max(viewW/imgW, viewH/imgH)`, centrado) que usa [OverlayResaltadoQr].
+ *
+ * Exige que las 4 esquinas del boundingBox del QR caigan dentro del reticulo —
+ * no basta con que el centro este dentro. El QR debe estar COMPLETAMENTE
+ * encuadrado para que el escaneo se acepte, de modo que el usuario tenga que
+ * alinearlo por completo dentro del area indicada.
+ *
+ * @param deteccion la deteccion QR con boundingBox + dimensiones de imagen.
+ * @param boxW ancho del Box contenedor en pixels (de `onSizeChanged`).
+ * @param boxH alto del Box contenedor en pixels (de `onSizeChanged`).
+ * @return true si el QR completo cae dentro del reticulo, false si asoma fuera.
+ *     Retorna true (acepta) si las dimensiones del Box o de la imagen son
+ *     invalidas (0 o negativas) — degradacion elegante: si no podemos medir,
+ *     no bloqueamos el escaneo.
+ */
+private fun qrDentroDeReticulo(
+    deteccion: DeteccionQr,
+    boxW: Int,
+    boxH: Int
+): Boolean {
+    // Degradacion elegante: si el Box todavia no se measured (size Zero),
+    // aceptar la deteccion para no bloquear el escaneo antes del primer layout.
+    if (boxW <= 0 || boxH <= 0) return true
+
+    val imgW = deteccion.anchoImagen.toFloat()
+    val imgH = deteccion.altoImagen.toFloat()
+    if (imgW <= 0f || imgH <= 0f) return true
+
+    // FILL_CENTER: scale = max(viewW/imgW, viewH/imgH), centrado
+    val scale = maxOf(boxW / imgW, boxH / imgH)
+    val offsetX = (boxW - imgW * scale) / 2f
+    val offsetY = (boxH - imgH * scale) / 2f
+
+    // Mapear las 4 esquinas del bbox QR → coords de pantalla
+    val screenLeft = offsetX + deteccion.boundingBox.left * scale
+    val screenRight = offsetX + deteccion.boundingBox.right * scale
+    val screenTop = offsetY + deteccion.boundingBox.top * scale
+    val screenBottom = offsetY + deteccion.boundingBox.bottom * scale
+
+    // Limites del reticulo (same formula que ScanReticle)
+    val reticleSize = minOf(boxW, boxH) * FACTOR_RETICULO
+    val reticleLeft = (boxW - reticleSize) / 2f
+    val reticleTop = (boxH - reticleSize) / 2f
+    val reticleRight = reticleLeft + reticleSize
+    val reticleBottom = reticleTop + reticleSize
+
+    // Las 4 esquinas del QR deben caer dentro del reticulo
+    return screenLeft >= reticleLeft && screenRight <= reticleRight &&
+           screenTop >= reticleTop && screenBottom <= reticleBottom
 }

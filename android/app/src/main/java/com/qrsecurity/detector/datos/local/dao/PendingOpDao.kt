@@ -53,7 +53,7 @@ interface PendingOpDao {
      * id mayor que uno recien reciclado. El Outbox requiere orden oldest-first
      * por tiempo de encolamiento, no por id. ``ORDER BY creadoEnMillis ASC
      * LIMIT 1`` consulta explicitamente el campo intencional de orden y
-     * ademas abre la puerta al indice ``idx_pending_ops_creado``. Usa
+     * ademas usa el indice ``idx_pending_ops_creadoEnMillis``. Usa
      * ``ORDER BY creadoEnMillis ASC LIMIT 1`` para buscar el mas viejo por
      * tiempo. Mismo SQL thread-safe (no cambia el op podria por race) — la
      * atomicidad ha sido provista por el ``withTransaction`` del Repo en

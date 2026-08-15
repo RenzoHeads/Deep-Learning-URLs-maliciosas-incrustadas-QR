@@ -4,7 +4,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -34,7 +33,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -59,7 +57,6 @@ import androidx.lifecycle.repeatOnLifecycle
 import com.qrsecurity.detector.ui.theme.CyberCyan
 import com.qrsecurity.detector.ui.theme.CyberFondo
 import com.qrsecurity.detector.ui.theme.CyberGlass
-import com.qrsecurity.detector.ui.theme.CyberGlassVariant
 import com.qrsecurity.detector.ui.theme.CyberTextoPrincipal
 import com.qrsecurity.detector.ui.theme.CyberTextoSecundario
 import com.qrsecurity.detector.ui.theme.Elevacion
@@ -111,7 +108,9 @@ fun PantallaLogin(
     }
 
     var usuario by rememberSaveable { mutableStateOf("") }
-    var password by rememberSaveable { mutableStateOf("") }
+    // Audit fix S3: la contraseña con `remember` (NO rememberSaveable) — no
+    // viaja al Bundle de instancia ni sobrevive process death en claro.
+    var password by remember { mutableStateOf("") }
     var mostrarPassword by remember { mutableStateOf(false) }
 
     Column(
@@ -204,15 +203,7 @@ fun PantallaLogin(
                         },
                         singleLine = true,
                         shape = RoundedCornerShape(RadioBorde.md),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedContainerColor = CyberGlassVariant,
-                            unfocusedContainerColor = CyberGlassVariant,
-                            focusedBorderColor = CyberCyan,
-                            unfocusedBorderColor = MaterialTheme.colorScheme.outline,
-                            cursorColor = CyberCyan,
-                            focusedTextColor = CyberTextoPrincipal,
-                            unfocusedTextColor = CyberTextoPrincipal
-                        )
+                        colors = coloresCampoTexto()
                     )
                 }
 
@@ -248,15 +239,7 @@ fun PantallaLogin(
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                         singleLine = true,
                         shape = RoundedCornerShape(RadioBorde.md),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedContainerColor = CyberGlassVariant,
-                            unfocusedContainerColor = CyberGlassVariant,
-                            focusedBorderColor = CyberCyan,
-                            unfocusedBorderColor = MaterialTheme.colorScheme.outline,
-                            cursorColor = CyberCyan,
-                            focusedTextColor = CyberTextoPrincipal,
-                            unfocusedTextColor = CyberTextoPrincipal
-                        )
+                        colors = coloresCampoTexto()
                     )
                 }
 

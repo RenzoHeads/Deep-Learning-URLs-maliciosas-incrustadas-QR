@@ -97,12 +97,17 @@ object NetworkModule {
     @Singleton
     fun provideClienteBackend(
         sesion: SesionUsuario,
-        okHttpClient: OkHttpClient
+        okHttpClient: OkHttpClient,
+        json: Json
     ): ClienteBackend {
         return ClienteBackend(
             baseUrl = ClienteBackend.BASE_POR_DEFECTO,
             tokenProvider = { sesion.obtenerToken() },
-            clienteOkHttp = okHttpClient
+            clienteOkHttp = okHttpClient,
+            // Audit fix (Json duplicado): el cliente usa la MISMA instancia
+            // proveida aqui — antes construia una propia con config
+            // divergente (encodeDefaults=false).
+            json = json
         )
     }
 }

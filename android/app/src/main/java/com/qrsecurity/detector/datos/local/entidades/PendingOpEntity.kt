@@ -18,8 +18,8 @@ import androidx.room.PrimaryKey
  *   - fallida = true: error permanente (4xx excepto 401/409/404), no se reintenta
  *   - intentos: contador para backoff exponencial en 5xx
  *
- * Index: creadoEnMillis ASC WHERE fallida = 0 — el sync engine siempre pop el
- * op no-fallido mas viejo.
+ * Index: creadoEnMillis ASC — el sync engine siempre pop el op mas viejo
+ * (los ops fallidos se saltan por logica, no por indice parcial).
  */
 @Entity(
     tableName = "pending_ops",

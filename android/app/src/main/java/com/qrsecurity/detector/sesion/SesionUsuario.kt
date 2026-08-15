@@ -34,15 +34,23 @@ open class SesionUsuario @Inject constructor(
     private val context: Context
 ) {
 
-    // Bug 3 (pieza a): StateFlow reactivo del estado de sesion.
+    // Bug 3 (pieza a) + audit race-fix: StateFlow reactivo del estado de
+    // sesion, TRI-STATE:
+    //   - null  → estado aun no resuelto (precargar() no ha sincronizado con
+    //             el disco). NavGuardian muestra un splash y NO construye el
+    //             NavHost — elimina la race donde `destinoInicial` se congelaba
+    //             en LOGIN para un usuario con sesion valida porque el disco
+    //             tardaba mas que la primera composicion.
+    //   - false → sin sesion.
+    //   - true  → sesion activa.
+    //
     // NavGuardian consume `estadoSesion` via `collectAsStateWithLifecycle()`
     // y reacciona automaticamente cuando `guardarSesion()` o `cerrarSesion()`
-    // cambian el valor — sin need de re-leer prefs() en cada recomposicion.
-    // Inicia en false; `precargar()` lo sincroniza con el estado real del
-    // disco en el primer acceso (que ocurre antes de que NavGuardian compose).
-    protected open val _estadoSesion: MutableStateFlow<Boolean> = MutableStateFlow(false)
+    // cambian el valor. `precargar()` lo resuelve con el estado real del disco
+    // en el primer acceso (llamado desde AppSeguridadQR.onCreate en background).
+    protected open val _estadoSesion: MutableStateFlow<Boolean?> = MutableStateFlow(null)
 
-    open val estadoSesion: StateFlow<Boolean> = _estadoSesion.asStateFlow()
+    open val estadoSesion: StateFlow<Boolean?> = _estadoSesion.asStateFlow()
 
     // L-2 fix: lock para double-checked locking en prefs(). Como precargar()
     // puede ejecutarse en Dispatchers.IO desde AppSeguridadQR.onCreate
@@ -85,13 +93,13 @@ open class SesionUsuario @Inject constructor(
      * Thread-safe: delega a [prefs], que usa double-checked locking sobre
      * [prefsLock]. Llamarlo desde cualquier dispatcher es seguro.
      */
-    fun precargar() {
+    open fun precargar() {
         prefs()
-        // Bug 3 (pieza a): sincronizar _estadoSesion con el estado real del
+        // Bug 3 (pieza a): resolver el estado tri-state con el valor real del
         // disco en el primer acceso — precargar() se llama desde
-        // AppSeguridadQR.onCreate en background ANTES de que NavGuardian
-        // compose, asi estadoSesion ya refleja el estado persistido cuando
-        // la UI lo recolecta.
+        // AppSeguridadQR.onCreate en background. Mientras el valor es null,
+        // NavGuardian muestra splash en vez de congelar un destino inicial
+        // potencialmente erróneo.
         _estadoSesion.value = estaLogueado()
     }
 

@@ -279,13 +279,13 @@ class DetalleUrlViewModel @Inject constructor(
             try {
                 repositorioEscaneos.eliminarLocalPorUrlLimpia(urlLimpia)
                 mediadorSincronizacion.dispararSyncUnica()
-                // Invalidar cache: el id ya no existe en la BD. Sin esto,
-                // reabrir el mismo detalle tras eliminar mostraria el cache
-                // stale (Cargado) en lugar de NoEncontrado.
-                val cargado = _uiState.value as? DetalleUrlUiState.Cargado
-                if (cargado != null) {
-                    cacheDetalle.invalidar(cargado.escaneo.id)
-                }
+                // Invalidar cache — el borrado es EN CASCADA (elimina la
+                // ultima version + todos los reescaneos de la URL), asi que
+                // hay que invalidar TODOS los ids de la misma urlLimpia, no
+                // solo el navegado (audit fix B7: los demas ids quedaban
+                // como Cargado stale y pintaban un detalle fantasma al
+                // re-entrar desde AnalisisAnteriores).
+                cacheDetalle.invalidarPorUrlLimpia(urlLimpia)
                 _mensaje.send(MensajeUi(TipoMensaje.EXITO, "URL eliminada del historial"))
                 _eliminarCompletado.send(true)
             } catch (e: Exception) {

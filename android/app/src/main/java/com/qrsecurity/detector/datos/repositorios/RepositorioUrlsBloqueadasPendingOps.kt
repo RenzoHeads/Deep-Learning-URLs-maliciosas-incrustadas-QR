@@ -95,6 +95,20 @@ private suspend fun RepositorioUrlsBloqueadas.procesarCreate(
             }
             DecisionPush.Decision.Retry -> false
         }
+    } catch (e: android.database.sqlite.SQLiteConstraintException) {
+        // Audit fix (reKey PK collision): la fila con el id del servidor ya
+        // existe localmente (llegó por PULL antes de que este PUSH terminara
+        // — p.ej. la misma URL bloqueada desde otro dispositivo). El UPDATE
+        // `reKey` viola la PK en vez de afectar 0 filas. Sin esta rama, el
+        // catch genérico devolvía false → retry infinito del op (nunca
+        // marcarFallida). Resolución: eliminar la fila local (client UUID) y
+        // borrar el op — el PULL ya insertó/reemplazará la fila con el id
+        // del servidor.
+        db.withTransaction {
+            db.urlBloqueadaDao().eliminarPorId(op.idLocal)
+            db.pendingOpDao().borrarPorId(op.id)
+        }
+        true
     } catch (e: Exception) {
         // Bug H3 (mismo fix que Pipeline.kt:329): rethrow CancellationException
         // para no ejecutar side effects en corutina cancelada.

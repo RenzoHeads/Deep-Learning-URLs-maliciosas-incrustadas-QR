@@ -16,6 +16,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -24,6 +25,7 @@ import androidx.compose.ui.draw.clip
 
 import com.qrsecurity.detector.ui.theme.CyberCyan
 import com.qrsecurity.detector.ui.theme.CyberGlass
+import com.qrsecurity.detector.ui.theme.CyberGlassVariant
 import com.qrsecurity.detector.ui.theme.CyberTextoPrincipal
 import com.qrsecurity.detector.ui.theme.CyberTextoSecundario
 import com.qrsecurity.detector.ui.theme.Espaciado
@@ -143,3 +145,22 @@ internal fun ContenidoNoEncontradoComun(
         }
     }
 }
+
+/**
+ * Colores compartidos del [androidx.compose.material3.OutlinedTextField] en
+ * los formularios (Login/Registro): superficie oscura (CyberGlassVariant),
+ * borde cyan al enfocar, cursor cyan.
+ *
+ * Audit fix D4: el mismo bloque estaba duplicado verbatim 3 veces (2 en
+ * LoginScreen + 1 en RegistroScreen como `fieldColors` privada).
+ */
+@Composable
+internal fun coloresCampoTexto() = OutlinedTextFieldDefaults.colors(
+    focusedContainerColor = CyberGlassVariant,
+    unfocusedContainerColor = CyberGlassVariant,
+    focusedBorderColor = CyberCyan,
+    unfocusedBorderColor = MaterialTheme.colorScheme.outline,
+    cursorColor = CyberCyan,
+    focusedTextColor = CyberTextoPrincipal,
+    unfocusedTextColor = CyberTextoPrincipal
+)

@@ -12,7 +12,10 @@ android {
     defaultConfig {
         applicationId = "com.qrsecurity.detector"
         versionCode = 1
-        versionName = "1.0.0"
+        // Audit fix D3: la UI mostraba "2.4.1" hardcodeado en 2 sitios mientras
+        // el build declaraba 1.0.0 — drift garantizado. Unica fuente:
+        // BuildConfig.VERSION_NAME.
+        versionName = "2.4.1"
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -90,7 +93,6 @@ dependencies {
 
     // ─── AndroidX Core ───
     implementation(libs.androidx.core.ktx)
-    implementation(libs.androidx.appcompat)
     implementation(libs.google.material)
     implementation(libs.androidx.activity.compose)
 
@@ -99,10 +101,6 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
-
-    // ─── Play Asset Delivery — ~500 MB TFLite model on demand ───
-    implementation(libs.play.asset.delivery)
-    implementation(libs.play.asset.delivery.ktx)
 
     // ─── CameraX ───
     implementation(libs.androidx.camera.core)
@@ -113,15 +111,15 @@ dependencies {
     // ─── ML Kit Barcode Scanning (GMS) ───
     implementation(libs.mlkit.barcode.scanning)
 
-    // ─── ZXing — fallback QR decoder ───
-    implementation(libs.zxing.core)
-
     // ─── TensorFlow Lite ───
+    // Audit fix: el modelo LSTM real (~830 KB) viaja en assets/ml/ — se
+    // eliminaron play-asset-delivery (era para un hipotetico modelo de
+    // ~500 MB), zxing (fallback QR decoder que nunca existio en codigo) y
+    // tensorflow-lite-support/gpu-delegate-plugin (sin uso). Nota: 2.17.0
+    // sigue usando el namespace org.tensorflow (LiteRT es posterior).
     implementation(libs.tensorflow.lite)
-    implementation(libs.tensorflow.lite.support)
     implementation(libs.tensorflow.lite.gpu)
     implementation(libs.tensorflow.lite.gpu.api)
-    implementation(libs.tensorflow.lite.gpu.delegate.plugin)
 
     // ─── Jetpack Compose (BOM-managed) ───
     implementation(platform(libs.androidx.compose.bom))
@@ -176,8 +174,7 @@ dependencies {
     testImplementation(libs.androidx.compose.ui.test.junit4)
     testImplementation(libs.androidx.compose.material3)
 
-    androidTestImplementation(libs.androidx.test.junit)
-    androidTestImplementation(libs.androidx.espresso.core)
-    androidTestImplementation(platform(libs.androidx.compose.bom))
-    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    // Audit fix: eliminadas las 4 androidTestImplementation — no existe
+    // src/androidTest (config muerta). Re-añadirlas junto con tests
+    // instrumentados reales.
 }

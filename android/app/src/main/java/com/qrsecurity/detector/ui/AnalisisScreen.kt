@@ -19,7 +19,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.HideSource
 import androidx.compose.material.icons.filled.Public
@@ -45,7 +44,6 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.qrsecurity.detector.pipeline.Pipeline
 import com.qrsecurity.detector.pipeline.PipelineViewModel
@@ -56,7 +54,6 @@ import com.qrsecurity.detector.ui.theme.CyberGlassAlto
 import com.qrsecurity.detector.ui.theme.CyberGlassBorde
 import com.qrsecurity.detector.ui.theme.CyberTextoPrincipal
 import com.qrsecurity.detector.ui.theme.CyberTextoSecundario
-import com.qrsecurity.detector.ui.theme.CyberVerdeAlerta
 import com.qrsecurity.detector.ui.theme.Elevacion
 import com.qrsecurity.detector.ui.theme.Espaciado
 import com.qrsecurity.detector.ui.theme.RadioBorde
@@ -94,6 +91,7 @@ import com.qrsecurity.detector.ui.theme.TamanosToque
  *   resultado es seguro (navega a DETALLE_URL/{id}).
  * @param onMensaje Callback para mostrar snackbars.
  * @param pipelineViewModel VM del pipeline (compartido a nivel NavGuardian).
+ * @param datosViewModel VM de historial (compartido a nivel NavGuardian).
  */
 @Composable
 fun PantallaAnalisis(
@@ -101,11 +99,15 @@ fun PantallaAnalisis(
     onResultadoSeguro: (String) -> Unit,
     onVolverHome: () -> Unit,
     onMensaje: (TipoMensaje, String) -> Unit = { _, _ -> },
-    pipelineViewModel: PipelineViewModel
+    pipelineViewModel: PipelineViewModel,
+    datosViewModel: DatosTabsViewModel
 ) {
     val estado by pipelineViewModel.estado.collectAsStateWithLifecycle()
     val analizando by pipelineViewModel.analizando.collectAsStateWithLifecycle()
-    val datosViewModel: DatosTabsViewModel = hiltViewModel()
+    // Audit fix B2: antes se creaba una segunda instancia local via
+    // hiltViewModel() (scope NavBackStackEntry de ANALISIS) ademas de la de
+    // NavGuardian — dos colecciones eager de todos los flows Room en
+    // paralelo. Ahora la instancia compartida llega por parametro.
     val historial by datosViewModel.historialTodos.collectAsStateWithLifecycle()
     // ── Reaccion a estados terminales del pipeline ──
     LaunchedEffect(estado) {
@@ -113,21 +115,19 @@ fun PantallaAnalisis(
             is Pipeline.Estado.ResultadoListo -> {
                 when (val resultado = e.resultado) {
                     is Pipeline.ResultadoAnalisis.ResultadoUrl -> {
-                        // Bug 1 fix: usar el idLocal exacto retornado por el
-                        // Pipeline (UUID de registrarLocal) en vez de un match
-                        // heuristico en el Flow `historial`. Ese Flow sufre
-                        // race con la emision de Room tras INSERT: el
-                        // LaunchedEffect puede correr antes de que el Flow
-                        // emita la nueva fila → match=null → navegacion con
-                        // id invalido → DetalleUrl "NoEncontrado".
-                        // Fallback al match heuristico solo si idLocal es
-                        // null (escritura en Room fallo — muy raro).
+                        // Audit fix B3: el fallback SOLO busca escaneos de la
+                        // MISMA urlLimpia. Antes el ultimo `maxByOrNull` no
+                        // filtraba por URL y navegaba al escaneo mas reciente
+                        // de OTRA URL, mostrando su veredicto como si fuera
+                        // el resultado del QR recien escaneado.
                         val idNavegacion = e.idLocal
                             ?: historial.firstOrNull {
                                 it.urlLimpia == resultado.urlLimpia &&
                                     it.urlOriginal == resultado.urlOriginal
                             }?.id
-                            ?: historial.maxByOrNull { it.creadoEnMillis }?.id
+                            ?: historial.filter {
+                                it.urlLimpia == resultado.urlLimpia
+                            }.maxByOrNull { it.creadoEnMillis }?.id
 
                         if (idNavegacion != null) {
                             if (resultado.nivelAlerta ==
@@ -141,7 +141,7 @@ fun PantallaAnalisis(
                         } else {
                             onMensaje(
                                 TipoMensaje.ERROR,
-                                "No se pudo guardar el analisis"
+                                "No se pudo guardar el análisis"
                             )
                             pipelineViewModel.reiniciar()
                         }
@@ -157,12 +157,6 @@ fun PantallaAnalisis(
                 pipelineViewModel.reiniciar()
             }
             is Pipeline.Estado.UrlDuplicada -> {
-                // Bug B fix: el dialogo de re-escaneo se muestra sobre
-                // HomeScreen (donde esta la camara viva), no sobre
-                // AnalisisScreen. Navegamos de vuelta a HOME sin llamar
-                // pipelineViewModel.reiniciar() — el estado UrlDuplicada
-                // persiste en el StateFlow para que HomeScreen lo observe
-                // y abra el AlertDialog sobre el viewfinder.
                 onVolverHome()
             }
             else -> Unit
@@ -334,7 +328,9 @@ fun PantallaAnalisis(
     } // fin if (debeMostrarContenidoAnalizando)
 }
 
-private enum class EstadoCheck { ACTIVO, PENDIENTE, COMPLETADO }
+// Audit fix M5: se elimino COMPLETADO — nunca se construia (FilaCheck solo
+// recibe ACTIVO/PENDIENTE); su rama en el `when` era inalcanzable.
+private enum class EstadoCheck { ACTIVO, PENDIENTE }
 
 @Composable
 private fun FilaCheck(
@@ -388,12 +384,6 @@ private fun FilaCheck(
                 text = "Pendiente",
                 style = MaterialTheme.typography.labelMedium,
                 color = CyberTextoSecundario
-            )
-            EstadoCheck.COMPLETADO -> Icon(
-                imageVector = Icons.Filled.CheckCircle,
-                contentDescription = null,
-                tint = CyberVerdeAlerta,
-                modifier = Modifier.size(TamanosIcono.estandar)
             )
         }
     }

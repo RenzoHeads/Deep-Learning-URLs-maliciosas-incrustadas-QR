@@ -1,6 +1,8 @@
 package com.qrsecurity.detector.camera
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Matrix
 import android.graphics.Rect
 import androidx.camera.core.AspectRatio
 import androidx.camera.core.CameraSelector
@@ -17,7 +19,6 @@ import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -32,16 +33,28 @@ import java.util.concurrent.atomic.AtomicLong
  * espacio de imagen a coordenadas de pantalla, para dibujar un overlay estilo
  * Google Lens que resalta el QR detectado.
  *
+ * [instantanea] es el Bitmap del frame EXACTO en el que ML Kit detecto el QR,
+ * ya rotado a [anchoImagen] x [altoImagen]. La UI lo renderiza sobre el preview
+ * en vivo (ContentScale.Crop ≈ FILL_CENTER) cuando se dispara una deteccion,
+ * congelando el viewfinder: el overlay de bounding box se queda perfectamente
+ * alineado con el QR que el usuario vio, sin importar cuanto se mueva el
+ * telefono despues. Es nulo si la captura del frame fallo (degradacion
+ * elegante — en ese caso se mantiene el comportamiento previo: overlay sobre el
+ * preview en vivo, potencialmente desalineado si el usuario mueve el telefono).
+ *
  * @param payload URL cruda del codigo QR.
  * @param boundingBox Rectangulo del QR en coordenadas de imagen post-rotacion.
  * @param anchoImagen Ancho de la imagen post-rotacion (pixels).
  * @param altoImagen Alto de la imagen post-rotacion (pixels).
+ * @param instantanea Bitmap del frame exacto de la deteccion (post-rotacion),
+ *     o null si la captura fallo. La UI lo renderiza para congelar el viewfinder.
  */
 data class DeteccionQr(
     val payload: String,
     val boundingBox: Rect,
     val anchoImagen: Int,
-    val altoImagen: Int
+    val altoImagen: Int,
+    val instantanea: Bitmap? = null
 )
 
 /**
@@ -214,13 +227,15 @@ class ModuloCamara(
 
             // Bug A14 fix: antes de re-vincular el analizador, shutDownear el
             // executor previo si quedaba vivo (rotacion, re-entrada, navegacion).
-            // runCatching: nunca propagar excepciones de shutdown; un hilo
-            // interruptado no debe romper el rebinding.
+            //
+            // Audit fix (main-thread block): solo shutdown() — el
+            // awaitTermination(2s) previo corría DENTRO del listener del
+            // future (main executor) y podía bloquear el hilo principal
+            // hasta 2s si el analyzer estaba procesando un frame.
+            // shutdown() ya impide que se encolen tareas nuevas; una tarea
+            // en vuelo termina sola (el analyzer cierra el ImageProxy).
             runCatching {
-                executorAnalizador?.let { previo ->
-                    previo.shutdown()
-                    previo.awaitTermination(2, TimeUnit.SECONDS)
-                }
+                executorAnalizador?.shutdown()
             }
 
             // ── Nuevo executor para este ciclo de analisis ──
@@ -293,6 +308,8 @@ class ModuloCamara(
                 procesarCodigosDetectados(
                     codigosBarras,
                     context,
+                    imageProxy,
+                    rotacion,
                     onQrDetectado,
                     ultimoTimestampAceptado,
                     debounceMs,
@@ -311,13 +328,24 @@ class ModuloCamara(
     /**
      * Procesa la lista de codigos de barras detectados por ML Kit.
      * Filtra solo QR, aplica debounce y dispara el callback en hilo principal
-     * con un [DeteccionQr] que incluye el boundingBox y las dimensiones de la
+     * con un [DeteccionQr] que incluye el boundingBox, las dimensiones de la
      * imagen post-rotacion (necesarias para mapear el bbox a coordenadas de
-     * pantalla en la UI).
+     * pantalla en la UI) y el [DeteccionQr.instantanea] — el Bitmap del frame
+     * exacto que ML Kit analizo para congelar el viewfinder.
+     *
+     * @param imageProxy el frame analizado (aun vivo — el close() corre en
+     *     el listener de completion, DESPUES de este success listener). Se usa
+     *     para extraer el bitmap del frame exacto, sincrono, antes de que
+     *     el close libere el buffer.
+     * @param rotacion grados de rotacion del sensor (rotationDegrees del
+     *     imageProxy). Se usa para rotar el bitmap a la orientacion post-rotacion
+     *     (coincide con anchoImagen/altoImagen ya validados).
      */
     private fun procesarCodigosDetectados(
         codigosBarras: List<Barcode>,
         context: Context,
+        imageProxy: ImageProxy,
+        rotacion: Int,
         onQrDetectado: (DeteccionQr) -> Unit,
         ultimoTimestamp: AtomicLong,
         debounceMs: Long,
@@ -334,11 +362,19 @@ class ModuloCamara(
                         if (ts - cur >= debounceMs) ts else cur
                     }
                     if (aceptado == ts) {
+                        // Capturar el bitmap del frame EXACTO aqui, sincrono,
+                        // antes de que el addOnCompleteListener dispare
+                        // imageProxy.close() (que corre DESPUES de este
+                        // success listener). Si lo postergamos al callback
+                        // del hilo principal (ContextCompat main executor)
+                        // ya seria tarde: el close() ya habria liberado el buffer.
+                        val instantanea = extraerInstantanea(imageProxy, rotacion)
                         val deteccion = DeteccionQr(
                             payload = valorCrudo,
                             boundingBox = bbox,
                             anchoImagen = anchoImagen,
-                            altoImagen = altoImagen
+                            altoImagen = altoImagen,
+                            instantanea = instantanea
                         )
                         ContextCompat.getMainExecutor(context).execute {
                             onQrDetectado(deteccion)
@@ -347,6 +383,37 @@ class ModuloCamara(
                 }
             }
         }
+    }
+
+    /**
+     * Extrae el Bitmap del frame exacto que ML Kit acaba de analizar, con la
+     * rotacion del sensor aplicada para que sus dimensiones coincidan con
+     * [DeteccionQr.anchoImagen] x [DeteccionQr.altoImagen] (post-rotacion).
+     *
+     * [ImageProxy.toBitmap] (camera-core 1.2.0+) retorna el bitmap SIN rotar
+     * (orientacion cruda del sensor); por eso aplicamos [Matrix.postRotate] a
+     * mano. El bitmap resultante matchea el espacio en el que ML Kit reporta
+     * [Barcode.boundingBox], de modo que el overlay de la UI (computado con
+     * scale = max(viewW/imgW, viewH/imgH) FILL_CENTER) se alinea 1:1 con el
+     * bitmap renderizado via Compose's ContentScale.Crop.
+     *
+     * Debe llamarse DENTRO del success listener de [escanerCodigosBarras.process]
+     * (antes del completion listener que dispara [imageProxy.close]) — de lo
+     * contrario el buffer ya estaria liberado.
+     *
+     * @return el bitmap rotado, o null si la extraccion fallo (degradacion
+     *     elegante — la UI sin bitmap cae al comportamiento previo: overlay
+     *     sobre el preview en vivo).
+     */
+    private fun extraerInstantanea(imageProxy: ImageProxy, rotacion: Int): Bitmap? {
+        return runCatching {
+            val cruda = imageProxy.toBitmap()
+            if (rotacion == 0) cruda
+            else {
+                val matrix = Matrix().apply { postRotate(rotacion.toFloat()) }
+                Bitmap.createBitmap(cruda, 0, 0, cruda.width, cruda.height, matrix, true)
+            }
+        }.getOrNull()
     }
 
     /**
@@ -401,15 +468,16 @@ class ModuloCamara(
      * la pantalla al desmontar la camara. Es seguro llamarlo multiples veces:
      * si el executor ya era ``null`` o ya estaba shutDowneado, no hace nada.
      *
-     * El shutdown + awaitTermination se envuelve en ``runCatching``: nunca
-     * propagamos excepciones de shutdown (un hilo interruptado o forzado a
-     * cerrarse no debe romper el teardown).
+     * Audit fix (main-thread block): `detener()` (ON_PAUSE) y el cleanup de
+     * Compose corren en el hilo principal — antes este metodo hacia
+     * `awaitTermination(2, TimeUnit.SECONDS)`, bloqueando el main thread
+     * hasta 2s por rotación/backgrounding. Ahora solo shutdown() (no
+     * bloqueante); una tarea en vuelo termina sola.
      */
     fun releaseCameraResources() {
         val executor = executorAnalizador ?: return
         runCatching {
             executor.shutdown()
-            executor.awaitTermination(2, TimeUnit.SECONDS)
         }
         executorAnalizador = null
     }

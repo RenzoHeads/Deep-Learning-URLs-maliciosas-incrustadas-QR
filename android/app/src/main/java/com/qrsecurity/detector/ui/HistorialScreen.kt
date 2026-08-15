@@ -52,7 +52,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.qrsecurity.detector.datos.local.entidades.EscaneoEntity
-import com.qrsecurity.detector.ui.theme.CyberAmbar
 import com.qrsecurity.detector.ui.theme.CyberCyan
 import com.qrsecurity.detector.ui.theme.CyberFondo
 import com.qrsecurity.detector.ui.theme.CyberGlass
@@ -431,18 +430,23 @@ private fun FilaEscaneo(
     onVerDetalle: (String) -> Unit,
     onMensaje: (TipoMensaje, String) -> Unit
 ) {
-    val (icono, color) = when (escaneo.nivelAlerta) {
-        "SEGURO" -> Icons.Filled.CheckCircle to CyberVerdeAlerta
-        "SOSPECHOSO" -> Icons.Filled.Warning to CyberAmbar
-        else -> Icons.Filled.Block to CyberRojo
+    // Audit fix D1: el mapeo nivel→(icono, color, etiqueta) usa
+    // [NivelAlerta] (single source of truth) en vez de literales crudos —
+    // el fallback ante un id desconocido también es consistente
+    // (SOSPECHOSO, fail-safe).
+    val nivel = escaneo.nivelAlertaEnum
+    val (icono, color) = when (nivel) {
+        NivelAlerta.SEGURO -> Icons.Filled.CheckCircle to nivel.color
+        NivelAlerta.SOSPECHOSO -> Icons.Filled.Warning to nivel.color
+        NivelAlerta.MALICIOSO -> Icons.Filled.Block to nivel.color
     }
     val etiqueta = if (bloqueada) {
         "Bloqueada"
     } else {
-        when (escaneo.nivelAlerta) {
-            "SEGURO" -> "Segura"
-            "SOSPECHOSO" -> "Sospechosa"
-            else -> "Maliciosa"
+        when (nivel) {
+            NivelAlerta.SEGURO -> "Segura"
+            NivelAlerta.SOSPECHOSO -> "Sospechosa"
+            NivelAlerta.MALICIOSO -> "Maliciosa"
         }
     }
 

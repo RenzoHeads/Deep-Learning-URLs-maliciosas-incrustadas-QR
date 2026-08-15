@@ -25,7 +25,6 @@ import kotlinx.coroutines.test.setMain
 import kotlinx.serialization.json.Json
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -109,13 +108,15 @@ class DatosTabsViewModelTest {
     }
 
     /**
-     * Suscribe los 7 StateFlows del ViewModel para que WhileSubscribed(5_000)
-     * mantenga el upstream activo y Room emita cambios reactivos.
+     * Suscribe los StateFlows del ViewModel para que el upstream Eagerly
+     * mantenga Room emitiendo cambios reactivos.
+     *
+     * Audit fix M1: totalEscaneos/amenazas eliminados del VM (flows eager
+     * sin consumidor en la UI) — sus subscriptores y tests tambien se
+     * retiraron.
      */
     private fun subscribirTodos() {
         collectorJobs += viewModel.viewModelScope.launch { viewModel.historialTodos.collect { } }
-        collectorJobs += viewModel.viewModelScope.launch { viewModel.totalEscaneos.collect { } }
-        collectorJobs += viewModel.viewModelScope.launch { viewModel.amenazas.collect { } }
         collectorJobs += viewModel.viewModelScope.launch { viewModel.urlsBloqueadas.collect { } }
     }
 
@@ -124,18 +125,6 @@ class DatosTabsViewModelTest {
     @Test
     fun estadoInicial_historialTodos_emptyList() {
         assertEquals(emptyList<EscaneoEntity>(), viewModel.historialTodos.value)
-    }
-
-    @Test
-    fun estadoInicial_totalEscaneos_null() {
-        // Bug 3 fix: StateFlow<Int?> inicia en null para distinguir
-        // "cargando" de "0 real". Cuando Room emite, sera 0 (DB vacia).
-        assertNull(viewModel.totalEscaneos.value)
-    }
-
-    @Test
-    fun estadoInicial_amenazas_null() {
-        assertNull(viewModel.amenazas.value)
     }
 
     @Test
@@ -165,53 +154,6 @@ class DatosTabsViewModelTest {
 
         assertEquals("historialTodos debe emitir 1 escaneo tras insert", 1, viewModel.historialTodos.value.size)
         assertEquals("esc-1", viewModel.historialTodos.value[0].id)
-    }
-
-    @Test
-    fun totalEscaneos_emiteContadorTrasInsertMultiple() = runTest(testDispatcher) {
-        subscribirTodos()
-        // Bug 3 fix: totalEscaneos consulta urls_catalogo (cache dedup), no
-        // escaneos. Usar registrarLocal (no insertarTodos directo) para que
-        // la transaccion atomica llene ambas tablas — escaneos + urls_catalogo.
-        repoEscaneos.registrarLocal(
-            urlOriginal = "https://a.example.com",
-            urlLimpia = "a.example.com",
-            probabilidad = 0.1f,
-            nivelAlerta = "SEGURO"
-        )
-        repoEscaneos.registrarLocal(
-            urlOriginal = "https://b.example.com",
-            urlLimpia = "b.example.com",
-            probabilidad = 0.9f,
-            nivelAlerta = "MALICIOSO",
-            delegado = "NNAPI"
-        )
-        drenarRoomYDispatcher()
-
-        assertEquals("totalEscaneos debe emitir 2 tras insert dos URLs unicas", 2, viewModel.totalEscaneos.value)
-    }
-
-    @Test
-    fun amenazas_emiteContadorSoloMaliciosos() = runTest(testDispatcher) {
-        subscribirTodos()
-        // Bug 3 fix: amenazas consulta urls_catalogo WHERE ultimoNivelAlerta =
-        // 'MALICIOSO'. Usar registrarLocal para llenar el cache dedup.
-        repoEscaneos.registrarLocal(
-            urlOriginal = "https://safe.example.com",
-            urlLimpia = "safe.example.com",
-            probabilidad = 0.1f,
-            nivelAlerta = "SEGURO"
-        )
-        repoEscaneos.registrarLocal(
-            urlOriginal = "https://mal.example.com",
-            urlLimpia = "mal.example.com",
-            probabilidad = 0.9f,
-            nivelAlerta = "MALICIOSO",
-            delegado = "NNAPI"
-        )
-        drenarRoomYDispatcher()
-
-        assertEquals("amenazas debe emitir 1 (solo el malicioso)", 1, viewModel.amenazas.value)
     }
 
     @Test

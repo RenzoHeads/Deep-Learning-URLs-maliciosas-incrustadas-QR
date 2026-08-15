@@ -314,12 +314,11 @@ class ClienteBackendMockWebServerTest {
         // su token=null default.
         //
         // Necesitamos invocar el endpoint via el metodo que acepta token
-        // como String (no nulo). Para verificar el caso REAL sin auth,
-        // invocamos `listarCategoriasDenuncia` que no toma token:
-        // ...
+        // como String (no nulo) — el helper `get()` con token=null no
+        // agrega el header (ver helper en ClienteBackendHttp.kt).
         //
         // Nota: este test verifica que `listarEscaneosDelta(token="")` aun
-        // seteo el header (porque el helper boxtoa el '' != null). Esto
+        // seteo el header (porque el helper comprueba '' != null). Esto
         // puede ser un bug latente: llamadas con token="" envian
         // "Authorization: Bearer " (Bearer con payload vacio).
         // Confirmamos y documentamos:
@@ -329,47 +328,5 @@ class ClienteBackendMockWebServerTest {
                 authHeader.startsWith("Bearer")
             )
         }
-    }
-
-    @Test
-    fun `listarCategoriasDenuncia no envia Authorization headerendpoint publico`() = runTest {
-        server.enqueue(
-            MockResponse()
-                .setResponseCode(200)
-                .setBody("""[{"id": 1, "nombre": "Phishing"}]""")
-                .setHeader("Content-Type", "application/json")
-        )
-
-        val cliente = clienteConToken(token = "test-token-abc")
-
-        val resultado = cliente.listarCategoriasDenuncia()
-
-        // Verificar que el endpoint publico NO envia Authorization
-        // aunque el tokenProvider devuelva un token (porque esta
-        // llamada llama al helper `get(url, token = null)`).
-        val request = server.takeRequest()
-        assertEquals("/denuncias/categorias", request.path)
-        assertEquals("GET", request.method)
-        // El tokenProviderDel cliente siempre devuelve el token de test
-        // PERO el metodo listarCategoriasDenuncia invoca get() con
-        // token=null, ergo el interceptorAuth deberia AGREGAR el header
-        // (siempre que el interceptorAuth este activo). Verificamos
-        // eso - un finding potencial (?)
-        val authHeader = request.getHeader("Authorization")
-        // Esperable: el interceptorAuth ("siempre agrega si tokenProvider
-        //  no es null") agregua el header incluso en endpoints publicos.
-        // Este test EXPLICITA ese comportamiento: confirmamos que el
-        // interceptor esta activo para TODAS las calls del cliente, lo
-        // cual puede ser bug (F-10 potencial: el backend recibe el token
-        // en /denuncias/categorias, endpoint que no lo requiere).
-        assertNotNull(
-            "InterceptorAuth agrega Authorization a TODAS las requests " +
-                "incluidas las que toJSON al helper con token=null. " +
-                "Comportamiento a documentar / revisar.",
-            authHeader
-        )
-
-        assertEquals(1, resultado.size)
-        assertEquals("Phishing", resultado.first().nombre)
     }
 }

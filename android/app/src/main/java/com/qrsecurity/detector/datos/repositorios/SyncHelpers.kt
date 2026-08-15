@@ -8,9 +8,34 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.withContext
 
 /**
- * Helpers compartidos por los 3 repositorios sync (Escaneos, UrlsBloqueadas,
- * Denuncias). Extrae el patron keyset pagination + delta apply + cursor
- * "ts|id" + orphan cleanup que antes estaba copy-pasteado en 3 archivos.
+ * Constantes de paginacion compartidas por los repositorios sync.
+ *
+ * Audit fix (duplicacion): `MAX_PAGINAS_POR_RUN = 5` y `LIMITE_PAGINA = 200`
+ * estaban duplicados por repositorio — drift garantizado al ajustar uno
+ * y olvidar el otro.
+ */
+object PaginacionSync {
+    /**
+     * Cantidad de filas por pagina en las peticiones delta paginadas.
+     * El backend acepta limite hasta 200 — usamos el maximo para minimizar
+     * el numero de HTTP requests necesarios para datasets grandes.
+     */
+    const val LIMITE_PAGINA = 200
+
+    /**
+     * Maximo de paginas a traer por cada worker-run del SyncWorker.
+     *
+     * Con [LIMITE_PAGINA]=200 por pagina, esto permite hasta 1000 registros
+     * por worker-run. Si el servidor tiene mas, `masPorSincronizar=true` y
+     * el siguiente worker continuara trayendo desde el cursor persistido.
+     */
+    const val MAX_PAGINAS_POR_RUN = 5
+}
+
+/**
+ * Helpers compartidos por los repositorios sync (Escaneos, UrlsBloqueadas).
+ * Extrae el patron keyset pagination + delta apply + cursor "ts|id" +
+ * orphan cleanup que antes estaba copy-pasteado en los archivos.
  *
  * Bug H3 (mismo fix que Pipeline.kt:329): todos los [catch] hacen rethrow de
  * [kotlinx.coroutines.CancellationException] para no ejecutar side effects
@@ -76,10 +101,21 @@ internal suspend fun <T> fetchDeltas(
 
             val ultima = delta.last()
             val nuevoCursor = extraerCursor(ultima)
-            if (nuevoCursor != null) {
-                cursorTs = nuevoCursor.first
-                cursorId = nuevoCursor.second
+            if (nuevoCursor == null) {
+                // Audit fix (cursor congelado): página llena cuya última fila
+                // no trae `updatedAt` — sin cursor nuevo, la siguiente run
+                // re-fetchea LA MISMA página para siempre. Cortamos aquí sin
+                // marcar masPorSincronizar (terminal) y avisamos; los datos
+                // no se corrompen (REPLACE idempotente).
+                android.util.Log.w(
+                    "SyncHelpers",
+                    "fetchDeltas: página llena sin updatedAt en la última fila — " +
+                        "cursor no puede avanzar, sync detenido para esta tabla"
+                )
+                break
             }
+            cursorTs = nuevoCursor.first
+            cursorId = nuevoCursor.second
             if (pagina == maxPaginasPorRun) masPorSincronizar = true
         }
 
@@ -109,14 +145,14 @@ internal suspend fun <T> fetchDeltas(
  * para una tabla. Stream-based, O(0) orphan IDs en Kotlin — usa temp table
  * + `NOT EXISTS`.
  *
- * Extraido de los 3 `limpiarHuerfanos` originales. La version de Escaneos
+ * Extraido de los `limpiarHuerfanos` originales. La version de Escaneos
  * no la usa porque necesita recolectar `urlLimpia` afectadas ANTES del
  * DELETE para hacer reconciliacion de `urls_catalogo` despues —
  * ver [RepositorioEscaneosSync.limpiarHuerfanos].
  *
  * @param ioDispatcher dispatcher para withContext.
  * @param db instancia Room.
- * @param tabla nombre de la tabla (`urls_bloqueadas` o `denuncias`).
+ * @param tabla nombre de la tabla (`urls_bloqueadas`).
  * @param idsServidor lista de IDs vivos segun el backend.
  */
 internal suspend fun limpiarNoDirtyAusentesEn(

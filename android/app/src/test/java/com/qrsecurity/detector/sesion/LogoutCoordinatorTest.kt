@@ -140,8 +140,9 @@ class LogoutCoordinatorTest {
             ioDispatcher = testDispatcher
         )
         // Pipeline constructor (firma real): (context, db, backend, json,
-        // repoEscaneos, mediadorSync). `motorInferencia` es lazy — no carga
-        // el modelo en este test.
+        // repoEscaneos, repoUrlsBloqueadas, mediadorSync, motorInferencia).
+        // `motorInferencia` es MotorInferenciaFake (no carga TFLite).
+        com.qrsecurity.detector.ml.setupTestVocab()
         val pipeline = Pipeline(
             context = appContext,
             db = db,
@@ -149,7 +150,8 @@ class LogoutCoordinatorTest {
             json = json,
             repoEscaneos = repoEscaneos,
             repoUrlsBloqueadas = repoUrlsBloqueadas,
-            mediadorSync = mediador
+            mediadorSync = mediador,
+            motorInferencia = com.qrsecurity.detector.ml.MotorInferenciaFake()
         )
 
         sesionUsuario = FakeSesionUsuario(appContext)

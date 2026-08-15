@@ -29,8 +29,12 @@ class SessionViewModel @Inject constructor(
     private val logoutCoordinator: LogoutCoordinator
 ) : ViewModel() {
 
-    /** Estado de sesion reactivo — false cuando no hay sesion, true cuando la hay. */
-    val estadoSesion: StateFlow<Boolean> = sesionUsuario.estadoSesion
+    /**
+     * Estado de sesion reactivo tri-state — `null` mientras `precargar()`
+     * resuelve el estado del disco (la UI muestra splash), `false` sin
+     * sesion, `true` con sesion activa.
+     */
+    val estadoSesion: StateFlow<Boolean?> = sesionUsuario.estadoSesion
 
     /** True si hay token valido persistido en [SesionUsuario]. */
     fun estaLogueado(): Boolean = sesionUsuario.estaLogueado()

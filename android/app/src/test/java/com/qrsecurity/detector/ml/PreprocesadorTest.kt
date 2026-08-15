@@ -1,31 +1,78 @@
 package com.qrsecurity.detector.ml
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 
 /**
- * Pruebas JVM puras de [Preprocesador] (lógica de preprocesamiento de URL
- * para el modelo CANINE-S TFLite).
+ * Pruebas JVM puras de [Preprocesador] (logica de preprocesamiento de URL
+ * para el modelo LSTM char-level TFLite).
  *
  * Cobertura:
- *  - `limpiarUrl`: normalización de URL (quitar protocolo, www., trailing /,
+ *  - `limpiarUrl`: normalizacion de URL (quitar protocolo, www., trailing /,
  *    lowercase,trim). 12 casos edge.
- *  - `tokenizar`: mapeo de codepoints Unicode a IntArray de longitud MAX_LEN,
- *    padding, truncado, codepoints suplementarios (emoji, IDN).
+ *  - `tokenizar`: mapeo de caracteres a indices char2idx (no codepoints),
+ *    padding, truncado, caracteres fuera de vocabulario → UNK_IDX.
  *  - `tokenizarLote`: shape `[1][MAX_LEN]`.
  *
- * Sin Robolectric — `object Preprocesador` solo usa kotlin/jvm stdlib
- * (`String.codePointAt`, `Character.charCount`, `IntArray`) — 100% puro.
+ * Usa [Preprocesador.inicializarTest] para inyectar un vocabulario de prueba
+ * sin necesidad de AssetManager (tests JVM puros, sin Robolectric).
  *
- * Cubre bugs:
- *  - H5 (codepoints suplementarios): antes `urlLimpia[i].code` rompia
- *    suplementarios; ahora con `codePointAt + charCount` un emoji produce
- *    1 token, no 2 surrogate tokens.
- *  - NUL collision (codepoint 0): mapeado a PAD_IDX+1 para distinguir de pad.
+ * El vocabulario de prueba replica el orden del vocab.json real:
+ *  `<PAD>`=0, `<UNK>`=1, luego caracteres por frecuencia descendente.
  */
 class PreprocesadorTest {
+
+    // ── Vocabulario de prueba (subset del vocab.json real) ──
+    // Orden: <PAD>=0, <UNK>=1, e=2, o=3, a=4, c=5, i=6, .=7, r=8, t=9, s=10, ...
+    private val testVocab = mapOf(
+        "<PAD>" to 0,
+        "<UNK>" to 1,
+        "e" to 2,
+        "o" to 3,
+        "a" to 4,
+        "c" to 5,
+        "i" to 6,
+        "." to 7,
+        "r" to 8,
+        "t" to 9,
+        "s" to 10,
+        "n" to 11,
+        "l" to 12,
+        "m" to 13,
+        "d" to 14,
+        "p" to 15,
+        "/" to 16,
+        "-" to 17,
+        "u" to 18,
+        "b" to 19,
+        "g" to 20,
+        "h" to 21,
+        "f" to 22,
+        "x" to 23,
+    )
+
+    private val testMaxLen = 100
+    private val testPadIdx = 0
+    private val testUnkIdx = 1
+    private val testVocabSize = testVocab.size
+
+    @Before
+    fun setUp() {
+        // Resetear estado del singleton para cada test.
+        // inicializarTest es idempotente (si ya cargo, no hace nada),
+        // asi que forzamos reset() antes de cada test para que cada uno
+        // arranque limpio.
+        Preprocesador.reset()
+        Preprocesador.inicializarTest(
+            vocab = testVocab,
+            maxLen = testMaxLen,
+            padIdx = testPadIdx,
+            unkIdx = testUnkIdx,
+            vocabSize = testVocabSize
+        )
+    }
 
     // ──────────────────────────────────────────────────────────────
     // limpiarUrl
@@ -43,7 +90,6 @@ class PreprocesadorTest {
 
     @Test
     fun `limpiarUrl quita ftp`() {
-        // WAVE 12 fix: trailing slash preservado (contrato 1:1 con clean_url).
         assertEquals("files.example.com/", Preprocesador.limpiarUrl("ftp://files.example.com/"))
     }
 
@@ -62,19 +108,13 @@ class PreprocesadorTest {
         assertEquals("example.com/no_protocol", Preprocesador.limpiarUrl("example.com/no_protocol"))
     }
 
-    // ── WAVE 12 fix: `.lowercase()` y `.trimEnd('/')` removidos de limpiarUrl
-    // para alinear 1:1 con el `clean_url` de Python (training data). Los tests
-    // siguientes reflejan el nuevo contrato: case-sensitive, slash preservado.
-
     @Test
     fun `limpiarUrl mayusculas no se aplica lowercase - protocolo no se quita`() {
-        // HTTPS:// no coincide case-sensitive con "https://" → no se strip.
         assertEquals("HTTPS://WWW.EXAMPLE.COM", Preprocesador.limpiarUrl("HTTPS://WWW.EXAMPLE.COM"))
     }
 
     @Test
     fun `limpiarUrl case mixto no se aplica lowercase - protocolo no se quita`() {
-        // "Https://" != "https://" → no se strip; "WwW." != "www." → no se strip.
         assertEquals("Https://WwW.Example.Com", Preprocesador.limpiarUrl("Https://WwW.Example.Com"))
     }
 
@@ -85,14 +125,11 @@ class PreprocesadorTest {
 
     @Test
     fun `limpiarUrl preserva trailing slash`() {
-        // WAVE 12 fix: trailing slash es estructural (path vs root con slash
-        // final), el modelo lo vio asi en training; no se debe remover.
         assertEquals("example.com/", Preprocesador.limpiarUrl("https://example.com/"))
     }
 
     @Test
     fun `limpiarUrl preserva slash interno y trailing`() {
-        // Trailing slash del path tambien se preserva.
         assertEquals("example.com/path/", Preprocesador.limpiarUrl("https://example.com/path/"))
     }
 
@@ -108,7 +145,6 @@ class PreprocesadorTest {
 
     @Test
     fun `limpiarUrl protocolo desconocido no se quita`() {
-        // gopher:// no esta en PREFIJOS_PROTOCOLO — se conserva.
         assertEquals("gopher://example.com", Preprocesador.limpiarUrl("gopher://example.com"))
     }
 
@@ -123,21 +159,21 @@ class PreprocesadorTest {
     }
 
     // ──────────────────────────────────────────────────────────────
-    // tokenizar
+    // tokenizar (char2idx, no codepoints)
     // ──────────────────────────────────────────────────────────────
 
     @Test
-    fun `tokenizar URL simple empieza con codepoints ASCII`() {
+    fun `tokenizar URL simple mapea a indices char2idx`() {
         val url = "example.com"
         val tokens = Preprocesador.tokenizar(url)
         // Longitud fija MAX_LEN
         assertEquals(Preprocesador.MAX_LEN, tokens.size)
-        // 'e' = U+0065 = 101
-        assertEquals(101, tokens[0])
-        // 'x' = U+0078 = 120
-        assertEquals(120, tokens[1])
-        // 'a' = U+0061 = 97
-        assertEquals(97, tokens[2])
+        // 'e' → 2 (no codepoint 101)
+        assertEquals(2, tokens[0])
+        // 'x' → 23 (no codepoint 120)
+        assertEquals(23, tokens[1])
+        // 'a' → 4 (no codepoint 97)
+        assertEquals(4, tokens[2])
     }
 
     @Test
@@ -145,9 +181,9 @@ class PreprocesadorTest {
         val url = "ab"
         val tokens = Preprocesador.tokenizar(url)
         assertEquals(Preprocesador.MAX_LEN, tokens.size)
-        // 'a' y 'b' en posiciones 0 y 1
-        assertEquals(97, tokens[0])
-        assertEquals(98, tokens[1])
+        // 'a' → 4, 'b' → 19 en nuestro vocab de prueba
+        assertEquals(4, tokens[0])
+        assertEquals(19, tokens[1])
         // PAD_IDX desde posicion 2 hasta el final
         for (i in 2 until Preprocesador.MAX_LEN) {
             assertEquals(Preprocesador.PAD_IDX, tokens[i])
@@ -156,13 +192,12 @@ class PreprocesadorTest {
 
     @Test
     fun `tokenizar truncada a MAX_LEN si URL excede`() {
-        // URL de length 200 > MAX_LEN=150
-        val url = "a".repeat(200)
+        val url = "e".repeat(200)  // 'e' esta en el vocab
         val tokens = Preprocesador.tokenizar(url)
         assertEquals(Preprocesador.MAX_LEN, tokens.size)
-        // Todas las posiciones con 'a' = 97 (no padding)
+        // Todas las posiciones con 'e' → 2 (no padding)
         for (i in 0 until Preprocesador.MAX_LEN) {
-            assertEquals(97, tokens[i])
+            assertEquals(2, tokens[i])
         }
     }
 
@@ -176,62 +211,26 @@ class PreprocesadorTest {
     }
 
     @Test
-    fun `tokenizar codepoint NUL se mapea a PAD_IDX mas 1 para distinguir`() {
-        // Codepoint 0 (NUL) — improbable en URLs reales pero testeado por el
-        // guard del codigo: `if (cp == PAD_IDX) PAD_IDX + 1 else cp`.
-        val url = "a\u0000b"
+    fun `tokenizar caractere fuera de vocab se mapea a UNK_IDX`() {
+        // 'z' no esta en nuestro vocab de prueba → UNK_IDX=1
+        val url = "eza"
         val tokens = Preprocesador.tokenizar(url)
-        // tokens[0]='a'=97, tokens[1]=PAD_IDX+1=1, tokens[2]='b'=98
-        assertEquals(97, tokens[0])
-        assertEquals(Preprocesador.PAD_IDX + 1, tokens[1])
-        assertEquals(98, tokens[2])
+        assertEquals(2, tokens[0])   // 'e' → 2
+        assertEquals(1, tokens[1])   // 'z' → UNK_IDX
+        assertEquals(4, tokens[2])   // 'a' → 4
     }
 
     @Test
-    fun `tokenizar emoji produce 1 token no 2 surrogates (bug H5 fix)`() {
-        // 👍 = U+1F44D, 2 UTF-16 chars (surrogate pair).
-        // Antes del fix H5 `urlLimpia[i].code` devolvia 2 tokens surrogate
-        // errados; ahora `codePointAt + charCount` produce 1 token correcto.
-        val url = "a👍b"  // 4 UTF-16 code units, 3 codepoints
+    fun `tokenizar caracteres no-ASCII se mapea a UNK_IDX si no estan en vocab`() {
+        // 'ñ' (U+00F1) no esta en nuestro vocab de prueba → UNK_IDX
+        val url = "españa"
         val tokens = Preprocesador.tokenizar(url)
-        // 'a' = 97
-        assertEquals(97, tokens[0])
-        // 👍 = U+1F44D = 128077
-        assertEquals(128077, tokens[1])
-        // 'b' = 98 (en posicion 2, NO 3 — charCount avanza 2 positions)
-        assertEquals(98, tokens[2])
-    }
-
-    @Test
-    fun `tokenizar emoji largo no excede MAX_LEN`() {
-        // 200 emojis = 400 UTF-16 code units = 200 codepoints > MAX_LEN
-        val url = "👍".repeat(200)
-        val tokens = Preprocesador.tokenizar(url)
-        assertEquals(Preprocesador.MAX_LEN, tokens.size)
-        // Todas las posiciones contienen U+1F44D = 128077
-        for (i in 0 until Preprocesador.MAX_LEN) {
-            assertEquals(128077, tokens[i])
-        }
-    }
-
-    @Test
-    fun `tokenizar URL con IDN latino mezclado se mapea correctamente`() {
-        // 'ñ' = U+00F1 = 241 (BMP plan, 1 UTF-16 char).
-        val url = "españa.com"
-        val tokens = Preprocesador.tokenizar(url)
-        assertEquals(Preprocesador.MAX_LEN, tokens.size)
-        // 'e' = 101
-        assertEquals(101, tokens[0])
-        // 's' = 115
-        assertEquals(115, tokens[1])
-        // 'p' = 112
-        assertEquals(112, tokens[2])
-        // 'a' = 97
-        assertEquals(97, tokens[3])
-        // 'ñ' = 241
-        assertEquals(241, tokens[4])
-        // 'a' = 97
-        assertEquals(97, tokens[5])
+        assertEquals(2, tokens[0])   // 'e' → 2
+        assertEquals(10, tokens[1])  // 's' → 10
+        assertEquals(15, tokens[2])  // 'p' → 15
+        assertEquals(4, tokens[3])   // 'a' → 4
+        assertEquals(1, tokens[4])   // 'ñ' → UNK_IDX
+        assertEquals(4, tokens[5])   // 'a' → 4
     }
 
     // ──────────────────────────────────────────────────────────────
@@ -263,5 +262,29 @@ class PreprocesadorTest {
         for (i in 0 until Preprocesador.MAX_LEN) {
             assertEquals(Preprocesador.PAD_IDX, lote[0][i])
         }
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // inicializacion
+    // ──────────────────────────────────────────────────────────────
+
+    @Test
+    fun `estaInicializado es true despues de inicializarTest`() {
+        assertTrue(Preprocesador.estaInicializado)
+    }
+
+    @Test
+    fun `MAX_LEN coincide con el valor inyectado`() {
+        assertEquals(testMaxLen, Preprocesador.MAX_LEN)
+    }
+
+    @Test
+    fun `PAD_IDX coincide con el valor inyectado`() {
+        assertEquals(testPadIdx, Preprocesador.PAD_IDX)
+    }
+
+    @Test
+    fun `UNK_IDX coincide con el valor inyectado`() {
+        assertEquals(testUnkIdx, Preprocesador.UNK_IDX)
     }
 }

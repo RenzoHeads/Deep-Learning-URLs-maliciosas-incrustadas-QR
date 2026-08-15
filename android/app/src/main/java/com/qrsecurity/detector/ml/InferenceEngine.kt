@@ -2,135 +2,143 @@ package com.qrsecurity.detector.ml
 
 import android.content.Context
 import android.content.res.AssetManager
-import java.util.Random
-import kotlin.math.abs
+import android.os.Build
+import org.tensorflow.lite.Interpreter
+import org.tensorflow.lite.gpu.CompatibilityList
+import org.tensorflow.lite.gpu.GpuDelegate
+import java.io.File
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.nio.MappedByteBuffer
+import java.nio.channels.FileChannel
+import java.nio.file.StandardOpenOption
 
 /**
- * Motor de inferencia — implementacion aleatoria determinista por URL.
+ * Contrato del motor de inferencia para el detector de URLs maliciosas.
  *
- * **Esta version NO carga ningun modelo TFLite.** Sustituye la inferencia
- * CANINE-S on-device por una probabilidad aleatoria uniforme en [0, 1]
- * derivada de un seed estable (hash FNV-1a de la URL limpia).
+ * El [com.qrsecurity.detector.pipeline.Pipeline] depende de esta interfaz
+ * (no de la implementacion concreta) para permitir:
+ *  - **Produccion**: [MotorInferenciaReal] carga el modelo LSTM char-level
+ *    TFLite desde ``assets/ml/lstm_model.tflite`` y ejecuta inferencia
+ *    on-device 100% offline.
+ *  - **Tests JVM/Robolectric**: [MotorInferenciaFake] (en ``src/test``) sin
+ *    dependencias nativas (JNI/TFLite), determinista.
  *
- * Propiedades clave:
- *  - **No requiere assets ni hardware delegado** — la app arranca sin descargar
- *    un modelo de ~500 MB.
- *  - **Determinismo por URL**: el mismo codigo QR devuelve siempre la misma
- *    probabilidad (y por tanto el mismo [com.qrsecurity.detector.ml.ControladorAlerta.NivelAlerta])
- *    dentro de una misma ejecucion. El cache [com.qrsecurity.detector.cache.CacheResultados]
- *    sigue siendo util porque evita recalcular el mismo hash + Random state.
- *  - **Distribucion uniforme**: cada URL nueva recibe una probabilidad
- *    `Random.nextFloat()` U[0, 1], sin sesgo heuristico.
- *
- * El contrato publico (signature del metodo [inferir] y de [nombreDelegado])
- * coincide con el [MotorInferencia] previo basado en TFLite, de modo que
- * [com.qrsecurity.detector.pipeline.Pipeline] no necesita modificacion.
- *
- * Cuando el modelo real vuelva a estar disponible, basta con restaurar la
- * implementacion previa (Git history) — esta clase es un placeholder
- * deliberadamente sencillo.
- *
- * Infraestructura TFLite lista para la restauracion (A-16 / M-30):
- *  - [crearOpcionesInterpreter].encapsula la seleccion de delegado
- *    GPU -> NNAPI -> CPU, cada uno envuelto en `runCatching` para que un
- *    fallo aislado de un delegado nunca impida obtener un [Interpreter]
- *    funcional. NNAPI solo se intenta con `Build.VERSION.SDK_INT >= O_MR1`
- *    (API 27 = minimo oficial de NNAPI; si SDK < 27, se salta a CPU).
- *  - [resolverRutaModelo] recorre [AssetManager.list] de forma recursiva
- *    para localizar el primer `*.tflite` bajo `assets/`. La ruta
- *    descubierta se cachea en [rutaModeloCache], evitando re-traversal en
- *    llamadas subsiguientes. Si no hay modelo, devuelve `null` (placeholder)
- *    en lugar de crashear.
- *
- * @see crearOpcionesInterpreter
- * @see resolverRutaModelo
+ * El motor devuelve **logits crudos** (sin sigmoid) cuando [devuelveLogits] es
+ * ``true`` — el [com.qrsecurity.detector.pipeline.Pipeline] consulta esta bandera
+ * para invocar [ControladorAlerta.desdeLogits] que aplica sigmoid antes de clasificar.
  */
-class MotorInferencia private constructor(
-    private val seedProvider: (urlLimpia: String) -> Long,
-    private val assetManager: AssetManager?,
+interface MotorInferencia {
     /**
-     * `true` si [inferir] devuelve logits crudos (contrato del futuro motor
-     * TFLite CANINE-S); `false` si devuelve una probabilidad ya sigmoidada
-     * en [0, 1] (este placeholder).
-     *
-     * Bug C1 (fix): [com.qrsecurity.detector.pipeline.Pipeline] consulta esta
-     * bandera para decidir si invocar [ControladorAlerta.desdeLogits] (aplica
-     * sigmoid, camino logits) o [ControladorAlerta.clasificar] directo sobre
-     * la probabilidad (camino placeholder). Antes el Pipeline siempre llamaba
-     * `desdeLogits`, lo que aplicaba sigmoid **dos veces** sobre la salida del
-     * placeholder y comprimia el rango [0,1] a [0.5, 0.731] —— el umbral
-     * MALICIOSO (0.7) era casi inalcanzable.
-     *
-     * Valor por defecto `true` para preservar el contrato del futuro motor
-     * TFLite real. Al restaurar Git history del motor real, no hay que tocar
-     * esta bandera — basta con restaurar la implementacion previa.
-     *
-     * El constructor por defecto [MotorInferencia] (Context) lo sobrescribe a
-     * `false` para el placeholder actual.
+     * `true` si [inferir] devuelve logits crudos (contrato del motor TFLite
+     * LSTM); el [com.qrsecurity.detector.pipeline.Pipeline] consulta esta
+     * bandera para invocar [ControladorAlerta.desdeLogits] que aplica sigmoid.
      */
     val devuelveLogits: Boolean
-) {
+
+    /** Nombre del delegado usado — reportado a la UI como ``"GPU"``/``"NNAPI"``/``"CPU"``. */
+    val nombreDelegado: String
 
     /**
-     * Constructor por defecto — necesario porque [com.qrsecurity.detector.pipeline.Pipeline]
-     * lo construye como `MotorInferencia(context)` con un [Context].
-     * El contexto se guarda como [AssetManager] para que la futura
-     * restauracion TFLite pueda resolver el modelo en `assets/` sin
-     * re-abrir el contexto. Esta implementacion placeholder no carga
-     * activos ni delegados, pero la infraestructura ya esta lista.
+     * Ejecuta inferencia sobre la URL tokenizada.
      *
-     * Bug C1 (fix): este constructor fija `devuelveLogits = false` porque
-     * el placeholder devuelve una probabilidad U[0,1] (no logits). Cuando
-     * se restaure el motor TFLite real via Git, basta con cambiar este
-     * `false` a `true` — Pipeline detectara el cambio al consultar la
-     * bandera y usara [ControladorAlerta.desdeLogits] automaticamente.
+     * @param entradaTokenizada ``[1][MAX_LEN]`` IntArray de indices de vocabulario.
+     * @return array de un float con el **logit crudo** de la clase maliciosa
+     *  (aplicar sigmoid para obtener probabilidad [0, 1]).
+     */
+    fun inferir(entradaTokenizada: Array<IntArray>): FloatArray
+
+    /** Liberar recursos nativos. Llamar desde [com.qrsecurity.detector.pipeline.Pipeline.destruir]. */
+    fun cerrar()
+}
+
+/**
+ * Motor de inferencia TFLite real para el modelo LSTM char-level URL detector.
+ *
+ * Carga ``lstm_model.tflite`` desde ``assets/ml/`` y ejecuta inferencia on-device
+ * 100% offline. El modelo devuelve **logits crudos** (sin sigmoid) — [devuelveLogits]
+ * es ``true`` para que [com.qrsecurity.detector.pipeline.Pipeline] use
+ * [ControladorAlerta.desdeLogits] que aplica sigmoid antes de clasificar.
+ *
+ * Delegacion de hardware (orden de preferencia, cada uno envuelto en
+ * `runCatching` para que un fallo aislado nunca impida obtener un Interpreter):
+ *  1. **GPU** — via [GpuDelegate] (TFLite GPU delegate plugin). Mas rapido en
+ *     dispositivos con GPU soportada. Requisa CompatibilityList para validar.
+ *  2. **NNAPI** — via [Interpreter.Options.setUseNNAPI]. Aprovecha aceleradores
+ *     hardware (NPU/DSP). Solo se intenta con `Build.VERSION.SDK_INT >= 27`
+ *     (API 27 = minimo oficial de NNAPI).
+ *  3. **CPU** — fallback sin delegado. Siempre disponible.
+ *
+ * El [nombreDelegado] reporta cual delegado se uso efectivamente (``"GPU"``,
+ * ``"NNAPI"``, o ``"CPU"``) para fines de auditoria en el historial de escaneos.
+ *
+ * El modelo TFLite tiene:
+ *  - Entrada: tensor int32 shape [1, MAX_LEN] (indices de vocabulario char-level)
+ *  - Salida:  tensor float32 shape [1, 1] (logit crudo de clase maliciosa)
+ */
+class MotorInferenciaReal private constructor(
+    private val assetManager: AssetManager,
+    override val devuelveLogits: Boolean
+) : MotorInferencia {
+
+    /**
+     * Constructor por defecto — carga el modelo TFLite desde ``assets/ml/``.
+     *
+     * Si el modelo no existe (placeholder sin assets), lanza
+     * [IllegalStateException] — a diferencia de la version placeholder anterior
+     * que usaba random, esta version ES el motor real.
      */
     constructor(context: Context) : this(
-        seedProvider = { url -> hashFnv1a(url) },
         assetManager = context.assets,
-        devuelveLogits = false
+        devuelveLogits = true
     )
 
-    /** Nombre del delegado usado — reportado a la UI como "ALEATORIO". */
-    var nombreDelegado: String = "ALEATORIO"
+    override var nombreDelegado: String = "CPU"
         private set
 
-    /**
-     * Ejecuta una "inferencia" aleatoria determinista sobre la URL tokenizada.
-     *
-     * Como la tokenizacion preprocesa la URL a codepoints Unicode, para
-     * producir un seed estable necesitamos reconstruir la URL original.
-     * En lugar de invertir la tokenizacion, derivamos el seed directamente
-     * de los codepoints (decodificacion trivial a String UTF-16 via Char conversion).
-     *
-     * Bug C1 (fix): esta implementacion placeholder devuelve una **probabilidad
-     * U[0, 1]** (no logits). La propiedad [devuelveLogits] es `false` para
-     * indicar al [com.qrsecurity.detector.pipeline.Pipeline] que debe usar
-     * [ControladorAlerta.clasificar] directo sobre `salida[0]`, sin aplicar
-     * sigmoid de nuevo. Antes el Pipeline llamaba `desdeLogits` (que aplica
-     * sigmoid), comprimiendo el rango [0,1] a [0.5, 0.731] — el umbral
-     * MALICIOSO (0.7) era casi inalcanzable, dando siempre SOSPECHOSO.
-     *
-     * @param entradaTokenizada `[1][MAX_LEN]` IntArray de codepoints.
-     * @return array de un float con la probabilidad en [0, 1]
-     *  (NO logits en este placeholder; el futuro motor TFLite real
-     *  devolvera logits crudos y `devuelveLogits` sera `true`).
-     */
-    fun inferir(entradaTokenizada: Array<IntArray>): FloatArray {
-        val longitudReal = entradaTokenizada.firstOrNull()?.count { it != Preprocesador.PAD_IDX } ?: 0
-        val urlReconstruida = reconstructUrl(entradaTokenizada, longitudReal)
-        val seed = seedProvider(urlReconstruida)
-        val random = Random(seed)
-        // Distribucion uniforme: misma probabilidad para toda URL nueva.
-        val probabilidad = random.nextFloat()
-        return floatArrayOf(probabilidad)
+    /** Interpreter TFLite — creado lazy para no bloquear el inicio de la app. */
+    private var interpreter: Interpreter? = null
+
+    /** Buffer del modelo mapeado en memoria (mmap) — se retiene para evitar GC. */
+    private var modelBuffer: MappedByteBuffer? = null
+
+    /** ByteBuffer de entrada reutilizado para evitar allocs por inference. */
+    private var inputBuffer: ByteBuffer? = null
+
+    /** Array de salida reutilizado para evitar allocs por inference. Shape [1][1]. */
+    private var outputArray: Array<FloatArray>? = null
+
+    /** Tamano del tensor de entrada (MAX_LEN). */
+    private var inputMaxLen: Int = 0
+
+    override fun inferir(entradaTokenizada: Array<IntArray>): FloatArray {
+        val interp = ensureInterpreter()
+
+        // Construir ByteBuffer de entrada: int32 * MAX_LEN = 4 bytes * MAX_LEN
+        val maxLen = entradaTokenizada[0].size
+        val buf = inputBuffer ?: ByteBuffer.allocateDirect(maxLen * 4).also {
+            inputBuffer = it
+        }
+        buf.rewind()
+        buf.order(ByteOrder.nativeOrder())
+        for (i in 0 until maxLen) {
+            buf.putInt(entradaTokenizada[0][i])
+        }
+
+        // Array de salida: float32[1][1] — el modelo devuelve shape [1,1]
+        val out = outputArray ?: arrayOf(FloatArray(1)).also { outputArray = it }
+
+        interp.run(buf, out)
+
+        return floatArrayOf(out[0][0])
     }
 
-    /**
-     * Liberar recursos — sin-op en esta implementacion (no hay Interpreter).
-     */
-    fun cerrar() {
-        // Sin recursos nativos que liberar.
+    override fun cerrar() {
+        interpreter?.close()
+        interpreter = null
+        modelBuffer = null
+        inputBuffer = null
+        outputArray = null
     }
 
     // ─────────────────────────────────────────────────────────
@@ -138,48 +146,106 @@ class MotorInferencia private constructor(
     // ─────────────────────────────────────────────────────────
 
     /**
-     * Reconstruye la URL limpia desde su forma tokenizada a codepoints,
-     * truncando los PADDING y convirtiendo los codepoints a Char.
+     * Crear el Interpreter lazy — carga el modelo desde assets y selecciona
+     * el mejor delegado disponible (GPU → NNAPI → CPU).
      *
-     * Pero como [Preprocesador.tokenizar] mapea codepoint 0 PAD a 1 (PK_NOTE
-     * en el comentario), no podemos distinguir PAD real del caracter NUL.
-     * En la practica eso no importa — el punto clave es que el seed sea
-     * estable para una misma URL. Usamos los codepoints tal cual.
+     * Audit fix (thread-safety): `@Synchronized` — dos inferencias
+     * concurrentes (primer arranque en frío) podían crear dos Interpreters
+     * y filtrar uno. La primera inference paga el lock; las siguientes
+     * encuentran `interpreter != null` y retornan inmediato.
      */
-    private fun reconstructUrl(tokenized: Array<IntArray>, longitudReal: Int): String {
-        if (longitudReal == 0) return ""
-        val sb = StringBuilder(longitudReal)
-        for (i in 0 until longitudReal) {
-            val codePoint = tokenized[0][i]
-            // Convertir codepoint a Char (funciona para BMP) — suficiente
-            // para producir un seed estable, no necesitamos la URL exacta.
-            if (codePoint <= Char.MAX_VALUE.code) {
-                sb.append(codePoint.toChar())
-            } else {
-                // Para codepoints fuera del BMP, append del lower 16 bits como Char.
-                sb.append((codePoint and 0xFFFF).toChar())
+    @Synchronized
+    private fun ensureInterpreter(): Interpreter {
+        interpreter?.let { return it }
+
+        val modelFile = loadModelFromAssets()
+        FileChannel.open(
+            modelFile.toPath(),
+            StandardOpenOption.READ
+        ).use { channel ->
+            val buffer = channel.map(
+                FileChannel.MapMode.READ_ONLY,
+                0,
+                modelFile.length()
+            ).also { modelBuffer = it }
+
+            // Fallback secuencial: GPU → NNAPI → CPU.
+            // Cada etapa envuelve tanto la creacion del delegate como la del
+            // Interpreter, porque el error "internal error: Error applying delegate"
+            // se lanza al construir el Interpreter, no al crear el delegate.
+            val interp = tryGpu(buffer)
+                ?: tryNnapi(buffer)
+                ?: tryCpu(buffer)
+
+            nombreDelegado = when {
+                interp.first == "GPU" -> "GPU"
+                interp.first == "NNAPI" -> "NNAPI"
+                else -> "CPU"
+            }
+
+            val inputDetails = interp.second.getInputTensor(0)
+            inputMaxLen = inputDetails.shape()[inputDetails.shape().size - 1]
+
+            interpreter = interp.second
+        }
+
+        // Audit fix (temp file leak): cada re-init del interpreter (tras
+        // `cerrar()` — p.ej. rotación de Activity) copiaba el modelo a un
+        // temp file nuevo que nunca se borraba (~830 KB por ciclo). En
+        // Linux/Android el mmap sobrevive al unlink, así que podemos borrar
+        // el archivo en cuanto el canal está mapeado.
+        modelFile.delete()
+
+        return interpreter ?: error("Interpreter no inicializado tras ensureInterpreter()")
+    }
+
+    private fun tryGpu(buffer: MappedByteBuffer): Pair<String, Interpreter>? {
+        return try {
+            val compatList = CompatibilityList()
+            if (!compatList.isDelegateSupportedOnThisDevice) return null
+
+            val gpuDelegate = GpuDelegate(
+                org.tensorflow.lite.gpu.GpuDelegate.Options().also {
+                    it.setPrecisionLossAllowed(true)
+                }
+            )
+            val options = Interpreter.Options().addDelegate(gpuDelegate)
+            Pair("GPU", Interpreter(buffer, options))
+        } catch (e: Exception) {
+            // GPU delegate fallo al crear o al aplicarse durante Interpreter
+            null
+        }
+    }
+
+    private fun tryNnapi(buffer: MappedByteBuffer): Pair<String, Interpreter>? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O_MR1) return null
+        return try {
+            val options = Interpreter.Options().setUseNNAPI(true)
+            Pair("NNAPI", Interpreter(buffer, options))
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun tryCpu(buffer: MappedByteBuffer): Pair<String, Interpreter> {
+        // CPU siempre disponible — sin delegado
+        return Pair("CPU", Interpreter(buffer, Interpreter.Options()))
+    }
+
+    private fun loadModelFromAssets(): File {
+        val modelPath = "ml/lstm_model.tflite"
+        val tempFile = File.createTempFile("lstm_model", ".tflite")
+
+        assetManager.open(modelPath).use { input ->
+            tempFile.outputStream().use { output ->
+                input.copyTo(output)
             }
         }
-        return sb.toString()
+
+        return tempFile
     }
 
     companion object {
-        /**
-         * Hash FNV-1a 64-bit — algoritmo determinista, rapido y bien distribuido.
-         * Produce un [Long] estable para una misma entrada.
-         */
-        private fun hashFnv1a(entrada: String): Long {
-            var hash = FNV_OFFSET_BASIS_64
-            for (i in entrada.indices) {
-                hash = hash xor (entrada[i].code.toLong() and 0xFFL)
-                hash *= FNV_PRIME_64
-            }
-            return abs(hash)
-        }
-
-        private const val FNV_OFFSET_BASIS_64: Long = -3750763034362895579L // 0xCBF29CE484222325
-        private const val FNV_PRIME_64: Long = 1099511628211L
-
-        private const val TAG: String = "MotorInferencia"
+        private const val TAG: String = "MotorInferenciaReal"
     }
 }

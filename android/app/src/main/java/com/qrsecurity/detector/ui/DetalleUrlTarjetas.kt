@@ -127,15 +127,23 @@ internal fun ChipEstadoUrl(nivelAlerta: NivelAlerta, urlBloqueada: Boolean = fal
 }
 
 /**
- * Tarjeta de veredicto — gauge 140dp centrado + label de amenaza + subtitulo
- * pill, con border glow del color del veredicto. Toma [EscaneoEntity] para
+ * Tarjeta de veredicto — gauge 140dp centrado + label + subtitulo pill,
+ * con border glow del color del veredicto. Toma [EscaneoEntity] para
  * ser reutilizada por DetalleUrl y DetalleVersionAntigua sin un wrapper de
- * UiState. Color/etiqueta/subtitulo derivan de [EscaneoEntity.nivelAlertaEnum].
+ * UiState. Color/etiqueta/subitulo derivan de [EscaneoEntity.nivelAlertaEnum].
+ *
+ * Convencion del gauge — SIEMPRE muestra % de seguridad (100 - amenaza):
+ *  - SEGURO:    97% seguro  (arco verde casi lleno)  → "Sin amenazas"
+ *  - SOSPECHOSO: ~50% seguro (arco ambar medio)     → "Amenaza moderada"
+ *  - MALICIOSO: 3% seguro  (arco rojo casi vacio)   → "Amenaza alta"
+ *
+ * El numero SIEMPRE significa "% seguro" — mas alto = mas seguro.
+ * El color del arco indica el veredicto. Sin ambiguedad.
  */
 @Composable
 internal fun TarjetaVeredicto(escaneo: EscaneoEntity) {
     val nivel = escaneo.nivelAlertaEnum
-    val valorPct = probabilidadPct(escaneo.probabilidad)
+    val pctSeguridad = Math.round((1f - escaneo.probabilidad.coerceIn(0f, 1f)) * 100f)
 
     Column(
         modifier = Modifier
@@ -152,10 +160,10 @@ internal fun TarjetaVeredicto(escaneo: EscaneoEntity) {
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         MedidorGauge(
-            progreso = escaneo.probabilidad,
+            progreso = 1f - escaneo.probabilidad.coerceIn(0f, 1f),
             colorArco = nivel.color,
             colorTrack = CyberGlassBorde,
-            valorTexto = valorPct.toString(),
+            valorTexto = "$pctSeguridad%",
             colorTexto = CyberTextoPrincipal,
             modifier = Modifier.size(140.dp)
         )

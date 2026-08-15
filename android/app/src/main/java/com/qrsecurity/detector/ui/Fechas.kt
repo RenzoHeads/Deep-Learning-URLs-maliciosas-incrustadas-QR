@@ -30,9 +30,14 @@ import java.util.concurrent.TimeUnit
 /**
  * Formato de fecha del escaneo — "dd MMM yyyy, HH:mm" (ej: "11 ago 2026, 14:30").
  * Usado para distinguir visualmente entre versiones del mismo escaneo.
+ *
+ * Audit fix (locale): ambas funciones usan el locale del dispositivo —
+ * antes esta fijaba `Locale("es")` mientras [formatoHora] usaba el default,
+ * produciendo meses mezclados de idioma cuando el dispositivo no estaba
+ * en espanol.
  */
 internal fun formatoFechaEscaneo(creadoEnMillis: Long): String {
-    val formato = SimpleDateFormat("dd MMM yyyy, HH:mm", Locale("es"))
+    val formato = SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault())
     return formato.format(Date(creadoEnMillis))
 }
 

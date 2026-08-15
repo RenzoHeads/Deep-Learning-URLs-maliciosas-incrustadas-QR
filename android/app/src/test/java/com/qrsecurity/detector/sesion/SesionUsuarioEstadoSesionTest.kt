@@ -40,9 +40,20 @@ class SesionUsuarioEstadoSesionTest {
     }
 
     @Test
-    fun `estadoSesion inicia en false cuando no hay sesion`() {
+    fun `estadoSesion inicia en null (no resuelto) antes de precargar`() {
         assertEquals(
-            "estadoSesion debe ser false al inicio cuando no hay sesion",
+            "estadoSesion debe ser null al inicio (estado de disco aun no resuelto)",
+            null,
+            sesion.estadoSesion.value
+        )
+    }
+
+    @Test
+    fun `precargar resuelve el estado desde el disco`() {
+        sesion.precargar()
+
+        assertEquals(
+            "precargar() debe resolver el tri-state con estaLogueado()",
             false,
             sesion.estadoSesion.value
         )
@@ -103,6 +114,13 @@ private class FakeSesionUsuarioEstado(context: Context) : SesionUsuario(context)
 
     override fun estaLogueado(): Boolean = logueado && !token.isNullOrBlank()
     override fun obtenerToken(): String? = token
+
+    override fun precargar() {
+        // Sin prefs(): EncryptedSharedPreferences/Keystore no estan
+        // soportados en Robolectric. Solo resolvemos el tri-state desde
+        // el estado en memoria del fake.
+        _estadoSesion.value = estaLogueado()
+    }
 
     override fun guardarSesion(token: String, usuario: String, correo: String) {
         this.token = token

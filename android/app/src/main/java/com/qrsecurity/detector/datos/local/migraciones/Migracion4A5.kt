@@ -5,7 +5,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 /**
  * Migration 4 → 5 — añade la columna `notasAnalisis` a la tabla `escaneos`.
  *
- * Cambio aditivo (ALTER TABLE ADD COLUMN). SQLite soporta ADD COLUMN desde v3.35.
+ * Cambio aditivo (ALTER TABLE ADD COLUMN) — soportado desde siempre en SQLite;
+ * (v3.35 es el minimo para DROP COLUMN, que aqui no se usa).
  * Sin table rebuild. La columna es nullable (TEXT NULL) — los escaneos existentes
  * quedan con NULL; los nuevos escaneos sin nota también quedan NULL.
  *

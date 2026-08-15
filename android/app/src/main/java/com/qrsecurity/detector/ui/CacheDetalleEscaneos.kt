@@ -54,16 +54,19 @@ class CacheDetalleEscaneos @Inject constructor() {
      * Guarda (o actualiza si ya existia) el estado [estado] en el cache,
      * indexado por `estado.escaneo.id`.
      *
-     * BUG-M2 fix: eviccion LRU por orden de insercion. Antes el cache
+     * BUG-M2 fix: eviccion FIFO por orden de insercion. Antes el cache
      * crecia sin limite — cada id de escaneo visitado en la sesion
      * acumulaba una entrada en `[_cache]`, y en una sesion larga ( usuario
      * que navega muchos detalles) el mapa llegaba a cientos de entradas,
      * cada una reteniendo un [DetalleUrlUiState.Cargado] con sus flags
-     * derivados. Aunque cada entrada es pequena (~bytes), el conjunto no
-     * tenia techo y sobrevivia al scope de la pantalla (Singleton app-
-     * level). Ahora, tras cada insercion, si el tamano supera
+     * derivados. Ahora, tras cada insercion, si el tamano supera
      * [MAX_ENTRADAS], se elimina la entrada mas antigua (first key del
      * LinkedHashMap que produce el operador `+` sobre Map en Kotlin).
+     *
+     * Nota (audit): es FIFO, no LRU — re-insertar una key existente NO la
+     * reposiciona al final (el `+` conserva la posicion original de la key
+     * vieja). Suficiente para el proposito (acotar el tamano); si alguna
+     * vez importa la recencia, migrar a LinkedHashMap accessOrder.
      */
     fun guardar(estado: DetalleUrlUiState.Cargado) {
         _cache.update {
@@ -97,6 +100,22 @@ class CacheDetalleEscaneos @Inject constructor() {
                 } else estado
             }
             if (anyChange) nuevo else map
+        }
+    }
+
+    /**
+     * Elimina TODAS las entradas del cache cuya `escaneo.urlLimpia` coincide
+     * con [urlLimpia]. Usado por [DetalleUrlViewModel.eliminarUrl] cuando el
+     * borrado es en cascada (`eliminarLocalPorUrlLimpia` borra la ultima
+     * version Y todos los reescaneos): invalidar solo el id navegado dejaba
+     * los demas ids de la misma URL como [DetalleUrlUiState.Cargado] stale
+     * — al re-entrar desde AnalisisAnteriores se pintaba el detalle
+     * "fantasma" un frame antes del [DetalleUrlUiState.NoEncontrado]
+     * (audit fix B7).
+     */
+    fun invalidarPorUrlLimpia(urlLimpia: String) {
+        _cache.update { map ->
+            map.filterValues { it.escaneo.urlLimpia != urlLimpia }
         }
     }
 

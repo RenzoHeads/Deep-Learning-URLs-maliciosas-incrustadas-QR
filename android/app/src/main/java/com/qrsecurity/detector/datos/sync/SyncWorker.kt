@@ -10,8 +10,6 @@ import com.qrsecurity.detector.api.ClienteBackend
 import com.qrsecurity.detector.datos.local.BaseDatosSeguridad
 import com.qrsecurity.detector.datos.local.dao.PendingOpDao
 import com.qrsecurity.detector.datos.local.entidades.PendingOpEntity
-import com.qrsecurity.detector.datos.repositorios.RepositorioCategorias
-import com.qrsecurity.detector.datos.repositorios.RepositorioDenuncias
 import com.qrsecurity.detector.datos.repositorios.RepositorioEscaneos
 import com.qrsecurity.detector.datos.repositorios.RepositorioUrlsBloqueadas
 import com.qrsecurity.detector.datos.repositorios.procesarPendingOp
@@ -30,6 +28,10 @@ import kotlinx.coroutines.sync.Mutex
  *
  * Logica de PULL en [SyncWorkerPull.kt], PUSH en [SyncWorkerPush.kt],
  * decisiones y helpers puros en [SyncWorkerDecision.kt].
+ *
+ * Feature denuncias retirada (v9): el worker ya no hace PULL ni PUSH de
+ * `denuncias`/`categorias_denuncia` — la migracion 8→9 elimino las tablas y
+ * purgo el outbox de sus ops.
  */
 @HiltWorker
 class SyncWorker @AssistedInject constructor(
@@ -40,9 +42,7 @@ class SyncWorker @AssistedInject constructor(
     internal val db: BaseDatosSeguridad,
     private val backend: ClienteBackend,
     internal val repoEscaneos: RepositorioEscaneos,
-    internal val repoUrls: RepositorioUrlsBloqueadas,
-    internal val repoDenuncias: RepositorioDenuncias,
-    internal val repoCategorias: RepositorioCategorias
+    internal val repoUrls: RepositorioUrlsBloqueadas
 ) : CoroutineWorker(appContext, params) {
 
     /**
@@ -69,7 +69,7 @@ class SyncWorker @AssistedInject constructor(
 
         // ── Preflight: sesion activa ──
         val token = sesionUsuario.obtenerToken()
-        Log.d(TAG, "doWork() iniciado — token=${token?.take(8)} red=${monitorRed.estaOnlineAhora()}")
+        Log.d(TAG, "doWork() iniciado — hayToken=${token != null} red=${monitorRed.estaOnlineAhora()}")
         if (token.isNullOrBlank()) {
             Log.w(TAG, "doWork() aborta: token null/blank → Result.failure()")
             return Result.failure()
@@ -123,11 +123,9 @@ class SyncWorker @AssistedInject constructor(
         // ── 5. PUSH pending_ops (outbox) — despues del PULL ──
         val repoEscaneosFn: suspend (PendingOpEntity) -> Boolean = { op -> repoEscaneos.procesarPendingOp(op, token) }
         val repoUrlsFn: suspend (PendingOpEntity) -> Boolean = { op -> repoUrls.procesarPendingOp(op, token) }
-        val repoDenunciasFn: suspend (PendingOpEntity) -> Boolean = { op -> repoDenuncias.procesarPendingOp(op, token) }
         val repos = mapOf<String, suspend (PendingOpEntity) -> Boolean>(
             "escaneos" to repoEscaneosFn,
-            "urls_bloqueadas" to repoUrlsFn,
-            "denuncias" to repoDenunciasFn
+            "urls_bloqueadas" to repoUrlsFn
         )
         val errorPush = procesarPendingOps(pendingDao, repos, workerStartMs)
 

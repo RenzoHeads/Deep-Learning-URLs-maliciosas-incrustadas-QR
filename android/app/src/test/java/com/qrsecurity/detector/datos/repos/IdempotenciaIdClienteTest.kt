@@ -4,8 +4,6 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.qrsecurity.detector.api.ClienteBackend
 import com.qrsecurity.detector.datos.local.BaseDatosSeguridad
-import com.qrsecurity.detector.datos.local.entidades.CategoriaDenunciaEntity
-import com.qrsecurity.detector.datos.repositorios.RepositorioDenuncias
 import com.qrsecurity.detector.datos.repositorios.RepositorioEscaneos
 import com.qrsecurity.detector.datos.repositorios.RepositorioUrlsBloqueadas
 import com.qrsecurity.detector.datos.repositorios.*
@@ -29,7 +27,7 @@ import org.robolectric.annotation.Config
  * Bug A5 (fix aplicado) — TDD regression.
  *
  * El PUSH sync debe enviar la clave de idempotencia `id_cliente` (= idLocal
- * del pending op CREATE) en el body de los 3 POST de escritura. El backend
+ * del pending op CREATE) en el body de los POST de escritura. El backend
  * hace fetch-or-create por (id_usuario, id_cliente): si el proceso muere
  * entre un POST exitoso y el re-key local, el replay del mismo op devuelve
  * la fila existente (mismo id) en vez de insertar una duplicada (U-C).
@@ -124,32 +122,5 @@ class IdempotenciaIdClienteTest {
             assertTrue("el CREATE del bloqueo debe exitarse", exito)
 
             assertBodyContieneIdCliente("/urls-bloqueadas", idLocal)
-        }
-
-    @Test
-    fun `denuncias - POST incluye id_cliente igual al idLocal del op CREATE`() =
-        runTest(testDispatcher) {
-            val repo = RepositorioDenuncias(db = db, backend = backend(), json = json, ioDispatcher = testDispatcher)
-
-            // Die FK denuncias.idCategoria → categorias_denuncia.id (RESTRICT)
-            // exige que la categoria exista localmente antes de crearLocal.
-            db.categoriaDao().upsertAll(
-                listOf(CategoriaDenunciaEntity(id = 1, nombre = "Phishing", descripcion = null))
-            )
-
-            val idLocal = repo.crearLocal("https://scam.example.com/offer", 1, "estafa")
-            val opId = db.pendingOpDao().minPendingId()
-            assertNotNull(opId)
-            val op = db.pendingOpDao().getById(opId!!)
-            assertNotNull(op)
-            assertEquals("el idLocal del op debe ser el idLocal devuelto por crearLocal", idLocal, op!!.idLocal)
-
-            server.enqueue(MockResponse().setResponseCode(201).setBody(
-                """{"id":"uuid-servidor-B","url":"https://scam.example.com/offer","id_categoria":1,"nombre_categoria":"Phishing","descripcion":"estafa","estado":"PENDIENTE","creado_en":"2026-01-01T00:00:00Z"}"""
-            ))
-            val exito = repo.procesarPendingOp(op, "test-token")
-            assertTrue("el CREATE de la denuncia debe exitarse", exito)
-
-            assertBodyContieneIdCliente("/denuncias", idLocal)
         }
 }

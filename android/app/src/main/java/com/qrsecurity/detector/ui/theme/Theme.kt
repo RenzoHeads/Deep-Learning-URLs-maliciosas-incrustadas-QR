@@ -6,7 +6,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.platform.LocalContext
@@ -45,32 +44,10 @@ private val EsquemaCyberSentinel = darkColorScheme(
     onErrorContainer = md_onErrorContainer
 )
 
-// Esquema claro — mantenido por completitud pero la app siempre usa oscuro.
-private val ColoresClaros = lightColorScheme(
-    primary = md_primary,
-    onPrimary = md_onPrimary,
-    primaryContainer = md_primaryContainer,
-    onPrimaryContainer = md_onPrimaryContainer,
-    secondary = md_secondary,
-    onSecondary = md_onSecondary,
-    secondaryContainer = md_secondaryContainer,
-    onSecondaryContainer = md_onSecondaryContainer,
-    tertiary = md_tertiary,
-    onTertiary = md_onTertiary,
-    tertiaryContainer = md_tertiaryContainer,
-    onTertiaryContainer = md_onTertiaryContainer,
-    background = md_background,
-    onBackground = md_onBackground,
-    surface = md_surface,
-    onSurface = md_onSurface,
-    surfaceVariant = md_surfaceVariant,
-    onSurfaceVariant = md_onSurfaceVariant,
-    outline = md_outline,
-    error = md_error,
-    onError = md_onError,
-    errorContainer = md_errorContainer,
-    onErrorContainer = md_onErrorContainer
-)
+// Audit fix M8: se elimino `ColoresClaros` — era inalcanzable (ningun
+// caller pasa temaOscuro=false) y ademas replicaba EXACTAMENTE los mismos
+// valores del esquema oscuro (no era una paleta clara real). Si algun dia
+// se necesita modo claro, definir una paleta light genuina.
 
 /**
  * Tema Compose de la aplicacion — Cyber-Sentinel.
@@ -85,13 +62,13 @@ private val ColoresClaros = lightColorScheme(
  *
  * Ahora honramos los parametros:
  *  - `temaOscuro` = true (default)  → EsquemaCyberSentinel
- *  - `temaOscuro` = false          → ColoresClaros
+ *  - `temaOscuro` = false          → EsquemaCyberSentinel (no existe paleta
+ *    clara real — ver nota M8 arriba)
  *  - `colorDinamico` = true (API >= 31) → dynamicDark/LightColorScheme(LocalContext)
  *  - `colorDinamico` = false (default)  → paleta cyber-sentinel fija
  *
  * Nota: los callers actuales pasan defaults (oscuro, no dinamico), asi que
- * el comportamiento runtime de la app no cambia; el cambio hace que la
- * firma sea honesta y permite pruebas con esquema claro o Material You.
+ * el comportamiento runtime de la app no cambia.
  *
  * @param temaOscuro true → esquema oscuro (default, recomendado).
  * @param colorDinamico true → Material You dynamic colors (API >= 31).
@@ -109,8 +86,7 @@ fun TemaDetectorSeguridadQR(
             if (temaOscuro) dynamicDarkColorScheme(context)
             else dynamicLightColorScheme(context)
         }
-        temaOscuro -> EsquemaCyberSentinel
-        else -> ColoresClaros
+        else -> EsquemaCyberSentinel
     }
 
     val view = LocalView.current
@@ -120,8 +96,14 @@ fun TemaDetectorSeguridadQR(
             // que gestiona traslucidez de barras del sistema. Aqui solo ajustamos
             // la apariencia de los iconos de la status bar segun el modo activo.
             // No tocamos statusBarColor/navigationBarColor (deprecated en API 35+).
-            WindowCompat.getInsetsController((view.context as Activity).window, view)
-                .isAppearanceLightStatusBars = !temaOscuro
+            //
+            // Audit fix P8: cast seguro — el host puede no ser una Activity
+            // (p.ej. unos entornos de preview/ test); sin window no hay nada
+            // que ajustar.
+            (view.context as? Activity)?.window?.let { window ->
+                WindowCompat.getInsetsController(window, view)
+                    .isAppearanceLightStatusBars = !temaOscuro
+            }
         }
     }
 

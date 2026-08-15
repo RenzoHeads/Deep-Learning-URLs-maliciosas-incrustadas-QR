@@ -101,10 +101,12 @@ class LogoutCoordinatorCachesTest {
         val repoUrlsBloqueadas = RepositorioUrlsBloqueadas(
             db = db, backend = backend, json = json, ioDispatcher = testDispatcher
         )
+        com.qrsecurity.detector.ml.setupTestVocab()
         pipeline = Pipeline(
             context = appContext, db = db, backend = backend, json = json,
             repoEscaneos = repoEscaneos, repoUrlsBloqueadas = repoUrlsBloqueadas,
-            mediadorSync = mediador
+            mediadorSync = mediador,
+            motorInferencia = com.qrsecurity.detector.ml.MotorInferenciaFake()
         )
         cacheDetalle = CacheDetalleEscaneos()
         sesionUsuario = FakeSesionUsuarioCaches(appContext)

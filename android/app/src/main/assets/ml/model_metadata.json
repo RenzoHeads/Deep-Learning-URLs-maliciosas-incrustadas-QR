@@ -1,0 +1,24 @@
+{
+  "model_name": "LSTM_char_level_URL_detector",
+  "architecture": "Embedding -> LSTM -> Linear",
+  "pipeline": "A_regionalizado",
+  "max_len": 100,
+  "vocab_size": 124,
+  "pad_idx": 0,
+  "unk_idx": 1,
+  "emb_dim": 64,
+  "hidden_dim": 128,
+  "num_layers": 2,
+  "dropout": 0.5,
+  "output_type": "logits",
+  "output_note": "Aplicar sigmoid para obtener probabilidad [0, 1]",
+  "thresholds": {
+    "safe": 0.3,
+    "suspicious_min": 0.3,
+    "suspicious_max": 0.7,
+    "malicious": 0.7
+  },
+  "training": {
+    "seed": 42
+  }
+}

@@ -42,22 +42,11 @@ class RepositorioEscaneos(
 ) {
 
     /**
-     * Maximo de paginas a traer por cada worker-run del SyncWorker.
-     *
-     * Con [LIMITE_PAGINA]=200 por pagina, esto permite hasta 1000 registros
-     * por worker-run. Si el servidor tiene mas, masPorSincronizar=true y el
-     * siguiente worker continuara trayendo desde el cursor persistido
-     * (no desde el principio — el cursor avanza por batch dentro de la
-     * transaccion, garantizando progreso incluso con 1M+ filas).
+     * Constantes de paginacion — compartidas via [PaginacionSync]
+     * (audit fix: antes duplicadas por repositorio).
      */
-    internal val MAX_PAGINAS_POR_RUN = 5
-
-    /**
-     * Cantidad de filas por pagina en las peticiones delta paginadas.
-     * El backend acepta limite hasta 200 — usamos el maximo para minimizar
-     * el numero de HTTP requests necesarios para datasets grandes.
-     */
-    internal val LIMITE_PAGINA = 200
+    internal val MAX_PAGINAS_POR_RUN = PaginacionSync.MAX_PAGINAS_POR_RUN
+    internal val LIMITE_PAGINA = PaginacionSync.LIMITE_PAGINA
 
     // ── Observacion reactiva (UI usa estos Flows) ──
 
@@ -118,11 +107,6 @@ class RepositorioEscaneos(
      */
     fun observarPorId(id: String): Flow<EscaneoEntity?> =
         db.escaneoDao().observarPorId(id)
-
-    // Bug 3 fix: stats cuentan URLs unicas (DISTINCT urlLimpia), no filas.
-    fun observarTotal(): Flow<Int> = db.escaneoDao().observarTotalUnicos()
-
-    fun observarAmenazas(): Flow<Int> = db.escaneoDao().observarAmenazasUnicas()
 
     // ── Dedup: cache maestro urls_catalogo ──
 

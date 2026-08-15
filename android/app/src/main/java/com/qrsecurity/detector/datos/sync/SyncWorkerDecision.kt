@@ -1,6 +1,5 @@
 package com.qrsecurity.detector.datos.sync
 
-import com.qrsecurity.detector.datos.repositorios.ResultadoSync
 import kotlinx.coroutines.sync.Mutex
 
 /**
@@ -147,28 +146,6 @@ fun decidirResultadoPull(codigo: Int?, retryAfterSegundos: Long?): DecisionPull.
         // Otros codigos no deberian llegar aqui — tratarlos como transitorios.
         else -> DecisionPull.Decision.Retry(BACKOFF_MIN_SEGUNDOS_TOTAL)
     }
-}
-
-/**
- * Bug M5 fix — logica pura: debe saltarse el pull de denuncias este run?
- *
- * Si el pull de categorias fallo (transitorio no-auth, 5xx/429/sin-red), el
- * pull de denuncias NO debe ejecutarse: su `insertarTodos` fallaria por FK
- * RESTRICT (`idCategoria` sin fila local en `categorias_denuncia`) y el run
- * quedaria en retry infinito mientras categorias siga caida. URLs y escaneos
- * no dependen de la FK y si sincronizan.
- *
- * @return true si el pull de denuncias debe saltarse (categorias fallo
- *         transitorio → Retry), false si debe proceder.
- */
-fun debeSaltarPullDenuncias(resultadoCategorias: ResultadoSync): Boolean {
-    if (resultadoCategorias is ResultadoSync.Exitoso) return false
-    if (resultadoCategorias !is ResultadoSync.Fallido) return false
-    // 401/403 nunca llegan aqui (el caller hace early-return authError antes),
-    // pero por defensividad no se saltan denuncias por ellos.
-    if (resultadoCategorias.codigo == 401 || resultadoCategorias.codigo == 403) return false
-    val mapeo = decidirResultadoPull(resultadoCategorias.codigo, resultadoCategorias.retryAfterSegundos)
-    return mapeo is DecisionPull.Decision.Retry
 }
 
 /**

@@ -14,23 +14,28 @@ import android.net.Uri
 
 private val ESQUEMAS_PERMITIDOS = setOf("http", "https")
 
+/** Detecta cualquier prefijo de esquema URI (`ftp:`, `javascript:`, `intent://`, …). */
+private val PATRON_ESQUEMA = Regex("^[A-Za-z][A-Za-z0-9+.-]*:")
+
 /**
  * Devuelve la URL lista para abrir en navegador:
  *  - Prefiere [urlLimpia] (sanitizada) sobre [urlOriginal] (cruda del QR).
  *  - Si la elegida no tiene esquema, antepone `https://`.
  *  - Devuelve `null` si ambas están vacías o si el esquema no es permitido.
  *
- * Reemplaza el patrón inseguro `urlOriginal.ifBlank { urlLimpia }` (que
- * priorizaba la URL cruda sobre la sanitizada) en 5 sitios de las pantallas
- * DetalleUrl / UrlSegura.
+ * Audit fix (esquema mangling): una candidata con CUALQUIER esquema
+ * explícito que no sea `http(s)://` (`ftp://x`, `intent://x`,
+ * `javascript:alert(1)`, …) se RECHAZA — antes se le anteponía `https://`
+ * produciendo URLs deformadas (`https://ftp://x`) cuyo scheme parseado era
+ * https (permitido) y se abrían igual.
  */
 fun urlParaAbrir(urlOriginal: String, urlLimpia: String): String? {
     val candidata = urlLimpia.ifBlank { urlOriginal }.trim()
     if (candidata.isEmpty()) return null
-    val conEsquema = if (ESQUEMAS_PERMITIDOS.any { candidata.startsWith("$it://", ignoreCase = true) }) {
-        candidata
-    } else {
-        "https://$candidata"
+    val conEsquema = when {
+        ESQUEMAS_PERMITIDOS.any { candidata.startsWith("$it://", ignoreCase = true) } -> candidata
+        PATRON_ESQUEMA.containsMatchIn(candidata) -> return null
+        else -> "https://$candidata"
     }
     val esquema = Uri.parse(conEsquema).scheme?.lowercase()
     return if (esquema in ESQUEMAS_PERMITIDOS) conEsquema else null

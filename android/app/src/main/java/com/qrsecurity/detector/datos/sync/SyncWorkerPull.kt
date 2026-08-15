@@ -9,10 +9,13 @@ import com.qrsecurity.detector.datos.repositorios.sincronizarDelta
  * PULL incremental unificado para [SyncWorker].
  * Extraido a extension function para mantener SyncWorker.kt bajo 250 LOC.
  *
- * Ejecuta los PULLs en orden FK (categorias → urls → escaneos → denuncias).
- * Cada tabla usa el cursor persistido en `sync_state.ultimoCursorModificacion`.
- * Si el cursor es null/blank (primera vez o tras logout), se usa epoch
+ * Ejecuta los PULLs en orden (urls → escaneos). Cada tabla usa el cursor
+ * persistido en `sync_state.ultimoCursorModificacion`. Si el cursor es
+ * null/blank (primera vez o tras logout), se usa epoch
  * (1970-01-01T00:00:00Z) que equivale a un full pull paginado.
+ *
+ * Feature denuncias retirada (v9): los PULLs de `categorias_denuncia` y
+ * `denuncias` (y su guarda FK) se eliminaron junto con las tablas.
  *
  * Bug M2 fix: tras cada delta pull COMPLETO (pullCompleto=true) se invoca
  * `limpiarHuerfanos(idsServidor)` — limpia rows locales no dirty ausentes
@@ -24,30 +27,7 @@ import com.qrsecurity.detector.datos.repositorios.sincronizarDelta
 internal suspend fun SyncWorker.procesarDeltaPulls(token: String): EstadoPulls {
     var estado = EstadoPulls()
 
-    // 1. Categorias — siempre full pull (read-only, bajo volumen, sin updated_at).
-    // Bug M5 fix: si categorias falla (transitorio no-auth), NO corremos el
-    // pull de denuncias este run — su `insertarTodos` fallaria por FK
-    // RESTRICT (idCategoria inexistente local) y quedaria en retry infinito
-    // mientras categorias siga caida. URLs y escaneos no dependen de la FK
-    // y si sincronizan.
-    var categoriasOk = true
-    when (val r = repoCategorias.sincronizarDesdeBackend()) {
-        is ResultadoSync.Exitoso -> { /* ok */ }
-        is ResultadoSync.Fallido -> {
-            // WAVE 16 fix: 401/403 → auth error (logout), no falloPermanente silencioso.
-            if (r.codigo == 401 || r.codigo == 403) {
-                return EstadoPulls(authError = true)
-            }
-            // Bug M5 fix: logica extraida a [debeSaltarPullDenuncias]
-            // (funcion pura top-level, testeable sin SyncWorker/Hilt).
-            if (debeSaltarPullDenuncias(r)) {
-                estado = estado.copy(huboErrorTransitorio = true)
-                categoriasOk = false
-            }
-        }
-    }
-
-    // 2. URLs bloqueadas — delta pull incremental con cursor.
+    // 1. URLs bloqueadas — delta pull incremental con cursor.
     estado = procesarDeltaTabla(
         tabla = "urls_bloqueadas",
         pullDelta = { cursor -> repoUrls.sincronizarDelta(token, cursor) },
@@ -56,27 +36,13 @@ internal suspend fun SyncWorker.procesarDeltaPulls(token: String): EstadoPulls {
     )
     if (estado.authError) return estado
 
-    // 3. Escaneos — delta pull incremental con cursor.
+    // 2. Escaneos — delta pull incremental con cursor.
     estado = procesarDeltaTabla(
         tabla = "escaneos",
         pullDelta = { cursor -> repoEscaneos.sincronizarDelta(token, cursor) },
         estadoActual = estado,
         limpiarHuerfanos = repoEscaneos::limpiarHuerfanos
     )
-    if (estado.authError) return estado
-
-    // 4. Denuncias — delta pull incremental con cursor. Solo si categorias
-    //    estan OK (Bug M5 fix: FK idCategoria → categorias_denuncia).
-    if (categoriasOk) {
-        estado = procesarDeltaTabla(
-            tabla = "denuncias",
-            pullDelta = { cursor -> repoDenuncias.sincronizarDelta(token, cursor) },
-            estadoActual = estado,
-            limpiarHuerfanos = repoDenuncias::limpiarHuerfanos
-        )
-    } else {
-        Log.w(SyncWorker.TAG, "procesarDeltaPulls: categorias caidas → skip pull de denuncias (FK RESTRICT)")
-    }
 
     return estado
 }

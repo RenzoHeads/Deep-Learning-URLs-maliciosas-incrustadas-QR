@@ -67,15 +67,21 @@ enum class NivelAlerta(
     companion object {
         /**
          * Resuelve el [NivelAlerta] desde el string crudo almacenado en
-         * [EscaneoEntity.nivelAlerta]. Cae a [SEGURO] si el id no matchea
-         * ninguno (no deberia ocurrir — el backend solo emite los 3 ids)
-         * y emite [Log.w] para que el fallback sea observable en logcat
-         * en vez de silencioso.
+         * [EscaneoEntity.nivelAlerta]. Cae a [SOSPECHOSO] si el id no
+         * matchea ningun valor (no deberia ocurrir — el backend solo emite
+         * los 3 ids) y emite [Log.w] para que el fallback sea observable en
+         * logcat.
+         *
+         * Audit fix (fail-safe): antes caia a [SEGURO] ("Sin amenazas",
+         * verde) — la direccion de fallo INSEGURA para una app de seguridad:
+         * un id desconocido (backend nuevo con niveles extra, corrupcion)
+         * mostraba la URL como inofensiva. Fallar hacia SOSPECHOSO
+         * preserva la prudencia sin romper el UI.
          */
         fun de(id: String): NivelAlerta = entries.firstOrNull { it.id == id }
             ?: run {
-                Log.w("NivelAlerta", "ID desconocido '$id' — fallback a SEGURO")
-                SEGURO
+                Log.w("NivelAlerta", "ID desconocido '$id' — fallback a SOSPECHOSO")
+                SOSPECHOSO
             }
     }
 }

@@ -4,36 +4,34 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.qrsecurity.detector.datos.sync.MediadorSincronizacion
 import com.qrsecurity.detector.sesion.LogoutCoordinator
-import com.qrsecurity.detector.sesion.SesionUsuario
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
- * UiState para la pantalla de Ajustes — patron NowInAndroid.
+ * UiState para la pantalla de Ajustes.
  *
- * F2.6: nueva pantalla que reemplaza a la antigua "Acerca de" para el
- * cierre de sesion, y anade informacion del usuario + estado de sync.
+ * Audit fix M4: se eliminaron `nombreUsuario`/`correo` — la UI nunca los
+ * leia (AjustesScreen solo consume `syncEnCurso`) y forzaban inyectar
+ * [com.qrsecurity.detector.sesion.SesionUsuario] solo para alimentarlos.
  */
 data class AjustesUiState(
-    val nombreUsuario: String? = null,
-    val correo: String? = null,
     val syncEnCurso: Boolean = false
 )
 
 /**
  * Acciones que la UI puede despachar (Unidirectional Data Flow).
+ *
+ * Audit fix M3: se elimino `DispararSync` — nunca se despacho desde la UI.
  */
 sealed interface AjustesAction {
     data object CerrarSesion : AjustesAction
-    data object DispararSync : AjustesAction
 }
 
 /**
@@ -50,69 +48,38 @@ sealed interface AjustesEvento {
 /**
  * ViewModel para la pantalla de Ajustes.
  *
- * F2.6: nueva. Muesta la informacion del usuario (nombre + correo desde
- * [SesionUsuario]) y el estado de sync (desde [MediadorSincronizacion]).
- * Permite cerrar sesion y disparar sync manual.
- *
- * Adaptacion vs plan: el plan usaba `mediadorSincronizacion.syncEnCurso`
- * (propiedad) — el metodo real es `observarSyncEnCurso()` (funcion que
- * retorna un Flow). Tambien, el plan asumia que [SesionUsuario] tenia
- * `obtenerNombreUsuario()` y `obtenerCorreo()` — se anadieron en F2.6.
+ * Muestra el estado de sync (desde [MediadorSincronizacion]) y permite
+ * cerrar sesion (limpieza completa via [LogoutCoordinator]).
  */
 @HiltViewModel
 class AjustesViewModel @Inject constructor(
-    private val sesionUsuario: SesionUsuario,
     private val mediadorSincronizacion: MediadorSincronizacion,
     private val logoutCoordinator: LogoutCoordinator
 ) : ViewModel() {
-
-    private val _infoUsuario = MutableStateFlow(AjustesUiState())
 
     private val _eventos = Channel<AjustesEvento>(Channel.BUFFERED)
     val eventos = _eventos.receiveAsFlow()
 
     /**
-     * Estado de UI combinado: info del usuario (snapshot) + sync (reactivo).
+     * Estado de UI: indicador reactivo de sync en curso (solo durante el
+     * sync inicial — ver [MediadorSincronizacion.observarSyncEnCurso]).
      *
-     * La info del usuario se lee una sola vez en init (no es reactiva —
-     * no cambia durante la vida del VM). El estado de sync si es reactivo
-     * via `observarSyncEnCurso()`.
+     * Audit fix: WhileSubscribed en vez de Eagerly — la coleccion solo
+     * corre mientras Ajustes esta en primer plano (la pantalla que la
+     * consume), no durante toda la vida del VM.
      */
-    val uiState: StateFlow<AjustesUiState> = combineInfo()
-
-    init {
-        cargarInfoUsuario()
-    }
-
-    private fun combineInfo(): StateFlow<AjustesUiState> {
-        // Info del usuario es un snapshot (no cambia). Sync es reactivo.
-        // Combinamos ambos en un solo StateFlow para la UI.
-        val syncFlow = mediadorSincronizacion.observarSyncEnCurso()
-            .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-
-        return kotlinx.coroutines.flow.combine(
-            _infoUsuario,
-            syncFlow
-        ) { info, syncEnCurso ->
-            info.copy(syncEnCurso = syncEnCurso)
-        }.stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.Eagerly,
-            initialValue = AjustesUiState()
-        )
-    }
-
-    private fun cargarInfoUsuario() {
-        _infoUsuario.value = _infoUsuario.value.copy(
-            nombreUsuario = sesionUsuario.obtenerNombreUsuario(),
-            correo = sesionUsuario.obtenerCorreo()
-        )
-    }
+    val uiState: StateFlow<AjustesUiState> =
+        mediadorSincronizacion.observarSyncEnCurso()
+            .map { syncEnCurso -> AjustesUiState(syncEnCurso = syncEnCurso) }
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5_000),
+                initialValue = AjustesUiState()
+            )
 
     fun onAction(action: AjustesAction) {
         when (action) {
             AjustesAction.CerrarSesion -> cerrarSesion()
-            AjustesAction.DispararSync -> dispararSync()
         }
     }
 
@@ -131,12 +98,6 @@ class AjustesViewModel @Inject constructor(
             // avanzados que hacian que el backend respondiera "no hay cambios".
             logoutCoordinator.logout()
             _eventos.send(AjustesEvento.LogoutCompletado)
-        }
-    }
-
-    private fun dispararSync() {
-        viewModelScope.launch {
-            mediadorSincronizacion.dispararSyncUnica()
         }
     }
 }

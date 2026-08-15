@@ -32,7 +32,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -57,7 +56,6 @@ import androidx.lifecycle.repeatOnLifecycle
 import com.qrsecurity.detector.ui.theme.CyberCyan
 import com.qrsecurity.detector.ui.theme.CyberFondo
 import com.qrsecurity.detector.ui.theme.CyberGlass
-import com.qrsecurity.detector.ui.theme.CyberGlassVariant
 import com.qrsecurity.detector.ui.theme.CyberTextoPrincipal
 import com.qrsecurity.detector.ui.theme.CyberTextoSecundario
 import com.qrsecurity.detector.ui.theme.Elevacion
@@ -110,8 +108,10 @@ fun PantallaRegistro(
 
     var correo by rememberSaveable { mutableStateOf("") }
     var usuario by rememberSaveable { mutableStateOf("") }
-    var password by rememberSaveable { mutableStateOf("") }
-    var confirmarPassword by rememberSaveable { mutableStateOf("") }
+    // Audit fix S3: las contraseñas con `remember` (NO rememberSaveable) —
+    // no viajan al Bundle de instancia ni sobreviven process death en claro.
+    var password by remember { mutableStateOf("") }
+    var confirmarPassword by remember { mutableStateOf("") }
     var mostrarPassword by remember { mutableStateOf(false) }
     var mostrarConfirmarPassword by remember { mutableStateOf(false) }
 
@@ -198,7 +198,7 @@ fun PantallaRegistro(
                     singleLine = true,
                     shape = RoundedCornerShape(RadioBorde.md),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-                    colors = fieldColors()
+                    colors = coloresCampoTexto()
                 )
 
                 // Usuario
@@ -217,7 +217,7 @@ fun PantallaRegistro(
                     singleLine = true,
                     shape = RoundedCornerShape(RadioBorde.md),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
-                    colors = fieldColors()
+                    colors = coloresCampoTexto()
                 )
 
                 // Contrasena
@@ -246,7 +246,7 @@ fun PantallaRegistro(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                     singleLine = true,
                     shape = RoundedCornerShape(RadioBorde.md),
-                    colors = fieldColors()
+                    colors = coloresCampoTexto()
                 )
 
                 // Confirmar contrasena
@@ -275,7 +275,7 @@ fun PantallaRegistro(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                     singleLine = true,
                     shape = RoundedCornerShape(RadioBorde.md),
-                    colors = fieldColors()
+                    colors = coloresCampoTexto()
                 )
             }
         }
@@ -343,18 +343,3 @@ fun PantallaRegistro(
         }
     }
 }
-
-/**
- * Colores del [OutlinedTextField] en el formulario de registro.
- * superficie oscura (CyberGlassVariant), borde cyan al enfocar, cursor cyan.
- */
-@Composable
-private fun fieldColors() = OutlinedTextFieldDefaults.colors(
-    focusedContainerColor = CyberGlassVariant,
-    unfocusedContainerColor = CyberGlassVariant,
-    focusedBorderColor = CyberCyan,
-    unfocusedBorderColor = MaterialTheme.colorScheme.outline,
-    cursorColor = CyberCyan,
-    focusedTextColor = CyberTextoPrincipal,
-    unfocusedTextColor = CyberTextoPrincipal
-)

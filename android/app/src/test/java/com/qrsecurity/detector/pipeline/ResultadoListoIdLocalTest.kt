@@ -83,7 +83,8 @@ class ResultadoListoIdLocalTest {
         val repo = RepositorioEscaneos(db, backend, json, testDispatcher)
         val repoUrlsBloqueadas = RepositorioUrlsBloqueadas(db, backend, json, testDispatcher)
         val mediadorSync = MediadorSincronizacion(app)
-        val pipeline = Pipeline(app, db, backend, json, repo, repoUrlsBloqueadas, mediadorSync)
+        com.qrsecurity.detector.ml.setupTestVocab()
+        val pipeline = Pipeline(app, db, backend, json, repo, repoUrlsBloqueadas, mediadorSync, com.qrsecurity.detector.ml.MotorInferenciaFake())
         vm = PipelineViewModel(pipeline, SavedStateHandle())
     }
 

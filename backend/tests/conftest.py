@@ -80,6 +80,20 @@ def usuario_aleatorio() -> dict[str, str]:
     }
 
 
+@pytest.fixture(autouse=True)
+def _reset_rate_limit():
+    """Resetea los contadores del rate limiter entre tests.
+
+    El middleware mantiene estado en memoria keyeado por (ip, clase). Sin
+    reset, la suite completa (77+ tests desde 127.0.0.1 en pocos segundos)
+    agota LIMITE_AUTH=10 y LIMITE_API=120, y los archivos que ejecutan al
+    final fallan con 429 dependiendo del orden de ejecucion.
+    """
+    from app import rate_limit
+
+    rate_limit._contadores.clear()
+
+
 @pytest.fixture
 def client(monkeypatch, fake_pool, store) -> TestClient:
     """TestClient con pool mock + auth bypass.

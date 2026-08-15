@@ -17,6 +17,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -28,6 +29,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import com.qrsecurity.detector.ui.theme.CyberFondo
+import com.qrsecurity.detector.ui.theme.CyberRojo
 import com.qrsecurity.detector.ui.theme.CyberTextoPrincipal
 import com.qrsecurity.detector.ui.theme.Espaciado
 
@@ -75,6 +77,8 @@ sealed interface ModalDetalleUrl {
     data object OkDesbloqueo : ModalDetalleUrl
     data object ConfirmarBloqueo : ModalDetalleUrl
     data object EliminarUrl : ModalDetalleUrl
+    /** Audit fix S1: confirmación antes de abrir una URL no-SEGURO desbloqueada. */
+    data object ConfirmarAbrirEnlace : ModalDetalleUrl
 }
 
 @Composable
@@ -89,11 +93,36 @@ fun PantallaDetalleUrl(
     val lifecycleOwner = LocalLifecycleOwner.current
     val contexto = LocalContext.current
 
+    // P1: estado del modal en un solo state tipado. Solo un modal activo por
+    // vez. rememberSaveable (audit fix P1): sobrevive rotacion/process death
+    // — antes un `remember` cerraba el modal abierto al rotar.
+    var modalActiva by rememberSaveable { mutableStateOf<ModalDetalleUrl>(ModalDetalleUrl.Ninguno) }
+
+    // Audit fix B5: bandera del desbloqueo pendiente. El modal de exito
+    // (OkDesbloqueo) ya NO se muestra optimista al confirmar — se muestra
+    // solo cuando el VM emite el mensaje EXITO de desbloqueo. Antes, si
+    // desbloquearUrl fallaba, convivian el modal "URL desbloqueada" y el
+    // snackbar "Error al desbloquear URL".
+    var desbloqueoPendiente by remember { mutableStateOf(false) }
+
     LaunchedEffect(id) { viewModel.cargarEscaneo(id) }
 
     LaunchedEffect(viewModel) {
         lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
-            viewModel.mensaje.collect { mensaje -> onMensaje(mensaje.tipo, mensaje.texto) }
+            viewModel.mensaje.collect { mensaje ->
+                // Audit fix B5: el modal de exito del desbloqueo se abre
+                // SOLO cuando el VM confirma el EXITO (no al confirmar el
+                // dialogo). Cualquier ERROR reinicia la bandera.
+                if (desbloqueoPendiente) {
+                    if (mensaje.tipo == TipoMensaje.EXITO) {
+                        desbloqueoPendiente = false
+                        modalActiva = ModalDetalleUrl.OkDesbloqueo
+                    } else if (mensaje.tipo == TipoMensaje.ERROR) {
+                        desbloqueoPendiente = false
+                    }
+                }
+                onMensaje(mensaje.tipo, mensaje.texto)
+            }
         }
     }
 
@@ -103,10 +132,9 @@ fun PantallaDetalleUrl(
         }
     }
 
-    BackHandler(onBack = onBack)
-
-    // P1: estado del modal en un solo state tipado. Solo un modal activo por vez.
-    var modalActiva by remember { mutableStateOf<ModalDetalleUrl>(ModalDetalleUrl.Ninguno) }
+    // Audit fix B4: back del sistema desactivado mientras hay un modal
+    // abierto — cierra el modal, no la pantalla entera.
+    BackHandler(enabled = modalActiva == ModalDetalleUrl.Ninguno, onBack = onBack)
 
     // P2: hoist del urlLimpia una sola vez por recomposicion. Invariant:
     // si un modal esta activo, uiState DEBE ser Cargado (los modales solo
@@ -132,6 +160,19 @@ fun PantallaDetalleUrl(
                 onSolicitarDesbloqueo = { modalActiva = ModalDetalleUrl.ConfirmarDesbloqueo },
                 onSolicitarBloqueo = { modalActiva = ModalDetalleUrl.ConfirmarBloqueo },
                 onSolicitarEliminar = { modalActiva = ModalDetalleUrl.EliminarUrl },
+                onAbrirEnlace = { onInvalida ->
+                    // Audit fix S1: nivel SEGURO → abre directo. Cualquier
+                    // otro nivel (SOSPECHOSO/MALICIOSO desbloqueada) pide
+                    // confirmación explícita ANTES de abrir el navegador —
+                    // antes el botón abría sin advertencia en el momento del
+                    // tap.
+                    if (estado.escaneo.nivelAlertaEnum == NivelAlerta.SEGURO) {
+                        val url = urlParaAbrir(estado.escaneo.urlOriginal, estado.escaneo.urlLimpia)
+                        if (url == null) onInvalida() else abrirEnNavegador(contexto, url)
+                    } else {
+                        modalActiva = ModalDetalleUrl.ConfirmarAbrirEnlace
+                    }
+                },
                 onMensaje = onMensaje
             )
         }
@@ -143,8 +184,14 @@ fun PantallaDetalleUrl(
         ModalDetalleUrl.Ninguno -> Unit
         ModalDetalleUrl.ConfirmarDesbloqueo -> ModalDesbloqueoConfirmar(
             onConfirmar = {
-                modalActiva = ModalDetalleUrl.OkDesbloqueo
-                urlLimpiaActual?.let { viewModel.onAction(DetalleUrlAction.DesbloquearUrl(it)) }
+                // Audit fix B5: cerrar el dialogo y marcar pendiente — el
+                // modal OkDesbloqueo lo abre el colector de mensajes cuando
+                // el VM confirma el exito real del desbloqueo.
+                modalActiva = ModalDetalleUrl.Ninguno
+                if (urlLimpiaActual != null) {
+                    desbloqueoPendiente = true
+                    viewModel.onAction(DetalleUrlAction.DesbloquearUrl(urlLimpiaActual))
+                }
             },
             onCancelar = { modalActiva = ModalDetalleUrl.Ninguno }
         )
@@ -167,6 +214,36 @@ fun PantallaDetalleUrl(
             },
             onCancelar = { modalActiva = ModalDetalleUrl.Ninguno }
         )
+        ModalDetalleUrl.ConfirmarAbrirEnlace -> {
+            // Audit fix S1: advertencia en el momento de abrir una URL que
+            // NO fue clasificada como SEGURO (y está desbloqueada).
+            PlantillaModalConfirmacion(
+                titulo = "Abrir enlace de riesgo",
+                cuerpo = "Este enlace fue clasificado como " +
+                    ((uiState as? DetalleUrlUiState.Cargado)?.escaneo?.nivelAlertaEnum
+                        ?: NivelAlerta.SOSPECHOSO).etiquetaAmenaza.lowercase() +
+                    ". Ábrelo solo si confías en la fuente.",
+                consecuencias = listOf(
+                    "El contenido puede ser phishing o fraude",
+                    "Podría intentar robarte credenciales o datos personales"
+                ),
+                textoBoton = "Abrir de todas formas",
+                colorBoton = CyberRojo,
+                onConfirmar = {
+                    modalActiva = ModalDetalleUrl.Ninguno
+                    val cargado = uiState as? DetalleUrlUiState.Cargado
+                    val url = cargado?.let {
+                        urlParaAbrir(it.escaneo.urlOriginal, it.escaneo.urlLimpia)
+                    }
+                    if (url == null) {
+                        onMensaje(TipoMensaje.ERROR, "Enlace con esquema no permitido")
+                    } else {
+                        abrirEnNavegador(contexto, url)
+                    }
+                },
+                onCancelar = { modalActiva = ModalDetalleUrl.Ninguno }
+            )
+        }
     }
 }
 
@@ -179,6 +256,7 @@ private fun ContenidoDetalle(
     onSolicitarDesbloqueo: () -> Unit,
     onSolicitarBloqueo: () -> Unit,
     onSolicitarEliminar: () -> Unit,
+    onAbrirEnlace: (onInvalida: () -> Unit) -> Unit,
     onMensaje: (TipoMensaje, String) -> Unit
 ) {
     val escaneo = estado.escaneo
@@ -214,6 +292,7 @@ private fun ContenidoDetalle(
                 onSolicitarDesbloqueo = onSolicitarDesbloqueo,
                 onSolicitarBloqueo = onSolicitarBloqueo,
                 onSolicitarEliminar = onSolicitarEliminar,
+                onAbrirEnlace = onAbrirEnlace,
                 onMensaje = onMensaje
             )
         }

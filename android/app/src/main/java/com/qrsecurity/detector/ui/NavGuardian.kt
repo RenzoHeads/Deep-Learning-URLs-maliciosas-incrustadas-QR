@@ -5,6 +5,7 @@ import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -15,6 +16,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -29,6 +31,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -134,14 +137,20 @@ fun NavGuardian() {
     val detalleVersionAntiguaViewModel: DetalleVersionAntiguaViewModel = hiltViewModel()
     val sessionViewModel: SessionViewModel = hiltViewModel()
 
-    // Bug 3 (pieza a): logueado reactivo — antes era
-    // `remember { sessionViewModel.estaLogueado() }` (snapshot no reactivo).
-    // Tras logout, `logueado` seguia true (stale) y NavGuardian no
-    // reaccionaba. Ahora `estadoSesion` es un StateFlow<Boolean> que
-    // SesionUsuario actualiza en guardarSesion()/cerrarSesion(); al
-    // recolectarlo con collectAsStateWithLifecycle, Compose recompondra
-    // NavGuardian automaticamente cuando el estado cambie.
-    val logueado by sessionViewModel.estadoSesion.collectAsStateWithLifecycle()
+    // Bug 3 (pieza a) + audit race-fix: logueado reactivo TRI-STATE. Antes
+    // `remember { calcularDestinoInicial(logueado) }` congelaba el destino
+    // inicial con el valor del primer frame; como `precargar()` corre async
+    // en Dispatchers.IO, un usuario con sesion valida podia quedarse en
+    // LOGIN en un arranque en frio. Ahora `estadoSesion` arranca en `null`
+    // (splash) y el NavHost solo se compone cuando el estado esta resuelto —
+    // el destino inicial siempre refleja el disco.
+    val estadoSesion by sessionViewModel.estadoSesion.collectAsStateWithLifecycle()
+
+    if (estadoSesion == null) {
+        SplashCargaSesion()
+        return
+    }
+    val logueado = estadoSesion!!
     val destinoInicial = remember { calcularDestinoInicial(logueado = logueado) }
 
     // Bug 3 (pieza b): resetear PipelineViewModel cuando la sesion pasa a
@@ -266,12 +275,14 @@ private fun NavGuardianRutas(
                 },
                 onMensaje = contexto.mostrarMensaje,
                 pipelineViewModel = viewModels.pipelineViewModel,
+                datosViewModel = viewModels.datosViewModel,
             )
         }
         composable(Rutas.HOME) {
             PantallaHome(
                 onEscanear = { navController.navigate(Rutas.ANALISIS) },
                 pipelineViewModel = viewModels.pipelineViewModel,
+                onMensaje = contexto.mostrarMensaje,
             )
         }
         composable(Rutas.HISTORIAL) {
@@ -391,6 +402,23 @@ private fun NavGuardianRutas(
 internal fun calcularDestinoInicial(logueado: Boolean): String = when {
     !logueado -> Rutas.LOGIN
     else -> Rutas.HOME
+}
+
+/**
+ * Splash de arranque — se muestra mientras `SesionUsuario.precargar()`
+ * resuelve el estado de sesion desde el disco (EncryptedSharedPreferences;
+ * tipicamente 10-50 ms). Evita que el NavHost se construya con un destino
+ * inicial potencialmente erróneo (audit race-fix: usuario con sesion valida
+ * atrapado en LOGIN en arranque en frio).
+ */
+@Composable
+private fun SplashCargaSesion() {
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center,
+    ) {
+        CircularProgressIndicator(color = CyberCyan)
+    }
 }
 
 // ──────────────────────────────────────────────────────────────────
