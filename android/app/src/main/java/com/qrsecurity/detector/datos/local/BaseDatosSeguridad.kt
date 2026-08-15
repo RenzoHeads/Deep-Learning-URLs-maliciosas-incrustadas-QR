@@ -293,7 +293,7 @@ abstract class BaseDatosSeguridad : RoomDatabase() {
          *
          *  1. `idx_escaneos_dedup` sobre `escaneos(urlLimpia, creadoEnMillis, id)`.
          *     Las queries [EscaneoDao.observarTodosUnicos] /
-         *     `observarSegurosUnicos` / `observarMaliciososUnicos` fueron
+         *     `observarSegurosUnicos` fueron
          *     reescritas a subquery escalar `ORDER BY creadoEnMillis DESC, id
          *     DESC LIMIT 1`; este índice permite a SQLite reverse-scanear
          *     indexado para encontrar la última versión de cada URL en

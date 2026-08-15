@@ -116,7 +116,6 @@ class ClienteBackend(
         val probabilidad: Float,
         @SerialName("nivel_alerta") val nivelAlerta: String,
         val delegado: String? = null,
-        @SerialName("notas_analisis") val notasAnalisis: String? = null,
         @SerialName("es_malicioso") val esMalicioso: Boolean,
         @SerialName("creado_en") val creadoEn: String,
         @SerialName("updated_at") val updatedAt: String? = null,

@@ -620,7 +620,7 @@ class Pipeline @Inject constructor(
             try {
                 repoUrlsBloqueadas.bloquearLocal(
                     url = urlLimpia,
-                    razon = "Detectada como maliciosa"
+                    razon = RepositorioUrlsBloqueadas.RAZON_MALICIOSA
                 )
                 // No disparamos otra sync: la de arriba ya encola y procesa
                 // ambos pending_ops (CREATE escaneo + CREATE url_bloqueada)

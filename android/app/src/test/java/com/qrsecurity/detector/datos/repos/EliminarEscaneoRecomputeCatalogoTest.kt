@@ -191,10 +191,8 @@ class EliminarEscaneoRecomputeCatalogoTest {
             )
 
             // Buscar el más reciente por creadoEnMillis (no por orden de lista)
-            val todos = db.escaneoDao().idsPorUrlLimpia(urlLimpia)
-            val masRecienteId = todos.maxByOrNull { id ->
-                db.escaneoDao().obtenerPorId(id)?.creadoEnMillis ?: 0
-            }!!
+            val masRecienteId = db.escaneoDao().todosPorUrlLimpia(urlLimpia)
+                .maxByOrNull { it.creadoEnMillis }!!.id
             repo.eliminarLocal(masRecienteId)
 
             val catalogo = repo.buscarUrlCatalogo(urlLimpia)
@@ -223,7 +221,7 @@ class EliminarEscaneoRecomputeCatalogoTest {
         )
 
         // Buscar el ID del escaneo de URL A por urlLimpia (no por orden de lista)
-        val idA = db.escaneoDao().idsPorUrlLimpia("e.com/a").first()
+        val idA = db.escaneoDao().todosPorUrlLimpia("e.com/a").first().id
         repo.eliminarLocal(idA)
 
         assertNull(repo.buscarUrlCatalogo("e.com/a"))

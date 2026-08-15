@@ -28,8 +28,8 @@ import kotlinx.serialization.Serializable
  *     cross-check). BUG #4 audit fix — sin este indice, un SELECT ... WHERE
  *     urlLimpia = ? sobre miles de filas hace full table scan.
  *   - (urlLimpia, creadoEnMillis, id) compuesto: D-2 audit fix — las queries
- *     de deduplicacion `observarTodosUnicos / observarSegurosUnicos /
- *     observarMaliciososUnicos` buscan la ultima version de cada URL via
+ *     de deduplicacion `observarTodosUnicos / observarSegurosUnicos`
+ *     buscan la ultima version de cada URL via
  *     subquery escalar ORDER BY creadoEnMillis DESC, id DESC LIMIT 1. Sin
  *     indice compuesto, SQLite solo puede usar idx_escaneos_urlLimpia para
  *     localizar la particion, pero debe escanear todas sus filas (hasta K
@@ -64,5 +64,5 @@ data class EscaneoEntity(
     val creadoEnMillis: Long,
     val dirty: Boolean = false,
     val syncedAtMillis: Long? = null,
-    val notasAnalisis: String? = null  // Pencil "Note vN" — nullable, set manually from AnalisisAnteriores
+    val notasAnalisis: String? = null  // columna v5 reservada — sin path de escritura en la app
 )

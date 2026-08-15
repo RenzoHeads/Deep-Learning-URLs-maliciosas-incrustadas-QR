@@ -157,7 +157,6 @@ dependencies {
 
     // ─── Debug / Preview ───
     debugImplementation(libs.androidx.compose.ui.tooling)
-    debugImplementation(libs.androidx.compose.ui.test.manifest)
 
     // ─── Testing ───
     testImplementation(libs.junit)
@@ -171,10 +170,10 @@ dependencies {
     testImplementation(libs.androidx.work.testing)
     testImplementation(libs.okhttp.mockwebserver)
     testImplementation(platform(libs.androidx.compose.bom))
-    testImplementation(libs.androidx.compose.ui.test.junit4)
     testImplementation(libs.androidx.compose.material3)
 
-    // Audit fix: eliminadas las 4 androidTestImplementation — no existe
-    // src/androidTest (config muerta). Re-añadirlas junto con tests
-    // instrumentados reales.
+    // Audit fix: eliminadas las 4 androidTestImplementation y las deps
+    // compose-ui-test (junit4 + manifest) — no existe src/androidTest ni
+    // ningun test de Compose (config muerta). Re-añadirlas junto con tests
+    // instrumentados/Compose reales.
 }

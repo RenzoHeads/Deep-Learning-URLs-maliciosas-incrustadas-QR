@@ -15,7 +15,7 @@ import kotlinx.coroutines.flow.StateFlow
  * alcanzable via `Companion.instancia()`).
  *
  * Ahora NavGuardian obtiene una instancia de este VM via `hiltViewModel()`
- * y recolecta [estadoSesion] / llama a [logout] sin tocar el companion de nadie.
+ * y recolecta [estadoSesion] sin tocar el companion de nadie.
  *
  * Bug 3 (pieza a): [estadoSesion] es un [StateFlow] reactivo que NavGuardian
  * consume via `collectAsStateWithLifecycle()`. Cuando `cerrarSesion()` o
@@ -25,8 +25,7 @@ import kotlinx.coroutines.flow.StateFlow
  */
 @HiltViewModel
 class SessionViewModel @Inject constructor(
-    private val sesionUsuario: SesionUsuario,
-    private val logoutCoordinator: LogoutCoordinator
+    sesionUsuario: SesionUsuario
 ) : ViewModel() {
 
     /**
@@ -35,10 +34,4 @@ class SessionViewModel @Inject constructor(
      * sesion, `true` con sesion activa.
      */
     val estadoSesion: StateFlow<Boolean?> = sesionUsuario.estadoSesion
-
-    /** True si hay token valido persistido en [SesionUsuario]. */
-    fun estaLogueado(): Boolean = sesionUsuario.estaLogueado()
-
-    /** Cierra sesion y vacia estado persistido (Room + token + WorkManager). */
-    suspend fun logout() = logoutCoordinator.logout()
 }

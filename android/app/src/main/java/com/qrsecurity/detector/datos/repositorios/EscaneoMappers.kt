@@ -33,7 +33,6 @@ internal fun ClienteBackend.Escaneo.aEntidad(syncedAt: Long): EscaneoEntity {
         esMalicioso = esMalicioso,
         creadoEnMillis = creadoMillis,
         dirty = false,
-        syncedAtMillis = syncedAt,
-        notasAnalisis = notasAnalisis
+        syncedAtMillis = syncedAt
     )
 }

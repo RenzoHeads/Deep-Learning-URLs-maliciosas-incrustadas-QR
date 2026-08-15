@@ -77,10 +77,13 @@ import javax.inject.Singleton
  * fisica del telefono y debe sobrevivir a cierres de sesion para que el
  * mismo dispositivo re-registre con el mismo UUID ante el backend.
  *
- * Uso desde Compose:
+ * Uso (como hace AjustesViewModel):
  * ```
- * val sessionViewModel: SessionViewModel = hiltViewModel()
- * scope.launch { sessionViewModel.logout() }
+ * class AjustesViewModel @Inject constructor(
+ *     private val logoutCoordinator: LogoutCoordinator
+ * ) : ViewModel() {
+ *     fun cerrarSesion() = viewModelScope.launch { logoutCoordinator.logout() }
+ * }
  * ```
  */
 @Singleton

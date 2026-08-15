@@ -30,7 +30,7 @@ import org.robolectric.annotation.Config
  *  2. procesarCreate(C1) → POST → backend resurrect → 201 id=UUID-B → reKey(C1→B)
  *  3. desbloquearLocal(B) → eliminarPorId(B), encola DELETE(B)
  *  4. bloquearLocal("evil.com") → inserta UUID-C2, dirty=true, encola CREATE
- *  5. sincronizarDesdeBackend → PULL: GET trae UUID-B (aun viva) → insertarTodos([B])
+ *  5. sincronizarDelta(epoch) → PULL: GET trae UUID-B (aun viva) → insertarTodos([B])
  *     Tabla local ahora tiene: [B(dirty=false), C2(dirty=true)]
  *  6. procesarDelete(B) → DELETE → 204 → eliminarPorId(B)
  *     Tabla local: [C2(dirty=true)]
@@ -128,7 +128,7 @@ class RebloqueoResurrectTest {
             server.enqueue(MockResponse().setResponseCode(200).setBody(
                 """[{"id":"$idServidor","url":"$url","razon":"test","creado_en":"2026-01-01T00:00:00Z"}]"""
             ))
-            val pullResult = repo.sincronizarDesdeBackend("test-token")
+            val pullResult = repo.sincronizarDelta("test-token", "1970-01-01T00:00:00Z")
             assertTrue("PULL debe ser exitoso", pullResult is com.qrsecurity.detector.datos.repositorios.ResultadoSync.Exitoso)
 
             // Despues del PULL: la tabla tiene [uuid-servidor-B (dirty=false), idLocal2 (dirty=true)]
@@ -216,7 +216,7 @@ class RebloqueoResurrectTest {
 
             // 4. PULL: GET → backend filtra deleted_at IS NULL → no trae nada
             server.enqueue(MockResponse().setResponseCode(200).setBody("[]"))
-            val pullResult = repo.sincronizarDesdeBackend("test-token")
+            val pullResult = repo.sincronizarDelta("test-token", "1970-01-01T00:00:00Z")
             assertTrue(pullResult is com.qrsecurity.detector.datos.repositorios.ResultadoSync.Exitoso)
 
             // orphan cleanup: idLocal2 tiene dirty=true → no se borra
@@ -288,7 +288,7 @@ class RebloqueoResurrectTest {
             server.enqueue(MockResponse().setResponseCode(200).setBody(
                 """[{"id":"$idServidor","url":"$url","razon":"test","creado_en":"2026-01-01T00:00:00Z"}]"""
             ))
-            repo.sincronizarDesdeBackend("test-token")
+            repo.sincronizarDelta("test-token", "1970-01-01T00:00:00Z")
             repo.limpiarHuerfanos(listOf(idServidor)) // B esta en servidor → no orphan
 
             val idsTrasPull = db.urlBloqueadaDao().todosLosIds()

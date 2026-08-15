@@ -11,9 +11,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
  *
  * **D-2 — Indice compuesto de deduplicación (CRÍTICO).**
  *
- * Las tres queries de observación deduplicadas
+ * Las queries de observación deduplicadas
  * ([com.qrsecurity.detector.datos.local.dao.EscaneoDao.observarTodosUnicos],
- * `observarSegurosUnicos`, `observarMaliciososUnicos`) buscan la versión más
+ * `observarSegurosUnicos`) buscan la versión más
  * reciente de cada `urlLimpia` para mostrar una sola fila por URL en el
  * historial. Hasta v6/v7 estas queries usaban un patrón `NOT EXISTS`
  * correlacionado:

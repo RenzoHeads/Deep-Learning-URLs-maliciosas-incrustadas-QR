@@ -75,7 +75,6 @@ private suspend fun RepositorioEscaneos.procesarCreate(
             probabilidad = entidadLocal.probabilidad,
             nivelAlerta = entidadLocal.nivelAlerta,
             delegado = entidadLocal.delegado,
-            notasAnalisis = entidadLocal.notasAnalisis,
             // Bug A5 fix: idempotencia server-side
             idCliente = op.idLocal
         )

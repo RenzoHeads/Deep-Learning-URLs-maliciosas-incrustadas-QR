@@ -28,6 +28,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
+import com.qrsecurity.detector.datos.repositorios.RepositorioUrlsBloqueadas
 import com.qrsecurity.detector.ui.theme.CyberFondo
 import com.qrsecurity.detector.ui.theme.CyberRojo
 import com.qrsecurity.detector.ui.theme.CyberTextoPrincipal
@@ -202,7 +203,7 @@ fun PantallaDetalleUrl(
             onConfirmar = {
                 modalActiva = ModalDetalleUrl.Ninguno
                 urlLimpiaActual?.let {
-                    viewModel.onAction(DetalleUrlAction.BloquearUrl(it, "Detectada como maliciosa"))
+                    viewModel.onAction(DetalleUrlAction.BloquearUrl(it, RepositorioUrlsBloqueadas.RAZON_MALICIOSA))
                 }
             },
             onCancelar = { modalActiva = ModalDetalleUrl.Ninguno }

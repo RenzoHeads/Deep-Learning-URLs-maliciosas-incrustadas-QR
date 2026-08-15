@@ -11,13 +11,6 @@ import kotlinx.coroutines.withContext
  */
 
 /**
- * PULL legacy — delega a [sincronizarDelta] con epoch cursor.
- */
-suspend fun RepositorioUrlsBloqueadas.sincronizarDesdeBackend(
-    token: String
-): ResultadoSync = sincronizarDelta(token, "1970-01-01T00:00:00Z")
-
-/**
  * PULL incremental unificado. Bug A1 fix (keyset pagination).
  */
 suspend fun RepositorioUrlsBloqueadas.sincronizarDelta(

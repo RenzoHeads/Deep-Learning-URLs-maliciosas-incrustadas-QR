@@ -31,8 +31,7 @@ suspend fun RepositorioEscaneos.registrarLocal(
     urlLimpia: String,
     probabilidad: Float,
     nivelAlerta: String,
-    delegado: String? = null,
-    notasAnalisis: String? = null
+    delegado: String? = null
 ): String = withContext(ioDispatcher) {
     val idLocal = UUID.randomUUID().toString()
     val ahora = System.currentTimeMillis()
@@ -48,8 +47,7 @@ suspend fun RepositorioEscaneos.registrarLocal(
         esMalicioso = esMalicioso,
         creadoEnMillis = ahora,
         dirty = true,
-        syncedAtMillis = null,
-        notasAnalisis = notasAnalisis
+        syncedAtMillis = null
     )
 
     val payloadJson = json.encodeToString(EscaneoEntity.serializer(), entidad)

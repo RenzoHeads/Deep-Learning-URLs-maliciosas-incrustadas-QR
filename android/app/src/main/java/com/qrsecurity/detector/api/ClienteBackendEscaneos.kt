@@ -22,7 +22,6 @@ suspend fun ClienteBackend.registrarEscaneo(
     probabilidad: Float,
     nivelAlerta: String,
     delegado: String? = null,
-    notasAnalisis: String? = null,
     idCliente: String? = null
 ): ClienteBackend.Escaneo = withContext(Dispatchers.IO) {
     val body = buildJsonObject {
@@ -31,7 +30,6 @@ suspend fun ClienteBackend.registrarEscaneo(
         put("probabilidad", JsonPrimitive(probabilidad))
         put("nivel_alerta", JsonPrimitive(nivelAlerta))
         if (!delegado.isNullOrBlank()) put("delegado", JsonPrimitive(delegado))
-        if (!notasAnalisis.isNullOrBlank()) put("notas_analisis", JsonPrimitive(notasAnalisis))
         if (!idCliente.isNullOrBlank()) put("id_cliente", JsonPrimitive(idCliente))
     }
     val respuesta = post("$base/escaneos", body.toString(), token)

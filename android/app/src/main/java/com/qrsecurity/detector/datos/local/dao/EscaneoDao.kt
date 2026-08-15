@@ -14,8 +14,8 @@ import kotlinx.coroutines.flow.Flow
  * Writes son `suspend` y se ejecutan en transaccion.
  *
  * ── Bug 2 fix (dedup en historial) ──
- * Las consultas `observarTodosUnicos / observarSegurosUnicos /
- * observarMaliciososUnicos` devuelven **una sola fila por `urlLimpia`**
+ * Las consultas `observarTodosUnicos / observarSegurosUnicos`
+ * devuelven **una sola fila por `urlLimpia`**
  * (la version mas reciente del escaneo), con tie-break por `id DESC`
  * para determinismo. Las versiones
  * anteriores (reescaneos) siguen en la tabla `escaneos` (log append-only) y
@@ -103,23 +103,6 @@ interface EscaneoDao {
     )
     fun observarSegurosUnicos(): Flow<List<EscaneoEntity>>
 
-    /** Historial deduplicado: ultima version de cada URL (solo las que la
-     *  ultima version es maliciosa).
-     *
-     *  D-1 rewrite: espejo de [observarSegurosUnicos] con `esMalicioso = 1`. */
-    @Query(
-        "SELECT e.* FROM escaneos e WHERE e.esMalicioso = 1 AND e.id = (" +
-                "SELECT e2.id FROM escaneos e2 " +
-                "WHERE e2.urlLimpia = e.urlLimpia " +
-                "AND e2.id NOT IN (" +
-                    "SELECT idLocal FROM pending_ops " +
-                    "WHERE tabla = 'escaneos' AND tipoOperacion = 'DELETE' AND fallida = 0" +
-                ") " +
-                "ORDER BY e2.creadoEnMillis DESC, e2.id DESC LIMIT 1" +
-            ") ORDER BY e.creadoEnMillis DESC, e.id DESC"
-    )
-    fun observarMaliciososUnicos(): Flow<List<EscaneoEntity>>
-
     /**
      * Reescaneos de una URL (versiones anteriores) — TODOS, sin paginar.
      *
@@ -185,24 +168,15 @@ interface EscaneoDao {
      * al eliminar la version mas reciente de una URL, se eliminan todos
      * sus reescaneos tambien).
      */
-    @Query(
-        "SELECT id FROM escaneos WHERE urlLimpia = :urlLimpia " +
-            "AND id NOT IN (" +
-                "SELECT idLocal FROM pending_ops " +
-                "WHERE tabla = 'escaneos' AND tipoOperacion = 'DELETE' AND fallida = 0" +
-            ")"
-    )
-    suspend fun idsPorUrlLimpia(urlLimpia: String): List<String>
-
     /**
      * BUG-C3 fix: carga todas las filas de una misma `urlLimpia` en un
      * solo query (antes `eliminarLocalPorUrlLimpia` hacia N+1 queries:
-     * `idsPorUrlLimpia` + `obtenerPorId` por cada id). Devuelve la lista
+     * un query de ids + `obtenerPorId` por cada id). Devuelve la lista
      * de entidades para que el caller haga el dirty/synced branch en
      * memoria sin mas queries de lectura.
      *
-     * Excluye filas con DELETE pendiente en pending_ops (igual que
-     * [idsPorUrlLimpia]) — esas filas ya estan "logicamente borradas".
+     * Excluye filas con DELETE pendiente en pending_ops — esas filas
+     * ya estan "logicamente borradas".
      */
     @Query(
         "SELECT * FROM escaneos WHERE urlLimpia = :urlLimpia " +

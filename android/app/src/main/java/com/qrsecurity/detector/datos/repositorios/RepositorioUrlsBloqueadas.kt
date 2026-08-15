@@ -28,6 +28,12 @@ class RepositorioUrlsBloqueadas(
     internal val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) {
 
+    companion object {
+        /** Razon estandar al bloquear una URL clasificada MALICIOSO
+         *  (auto-bloqueo del Pipeline y bloqueo manual de DetalleUrl). */
+        const val RAZON_MALICIOSA = "Detectada como maliciosa"
+    }
+
     /**
      * Constantes de paginacion — compartidas via [PaginacionSync]
      * (audit fix: antes duplicadas por repositorio).

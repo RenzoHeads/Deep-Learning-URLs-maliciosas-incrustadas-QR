@@ -178,24 +178,6 @@ internal fun EntradaLineaTiempo(
                     style = MaterialTheme.typography.labelSmall,
                     color = CyberTextoSecundario
                 )
-
-                // Row 4: Note (notasAnalisis si no es null ni vacio)
-                val nota = escaneo.notasAnalisis
-                if (!nota.isNullOrEmpty()) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(RadioBorde.sm))
-                            .background(CyberGlassAlto)
-                            .padding(Espaciado.md)
-                    ) {
-                        Text(
-                            text = nota,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = CyberTextoSecundario
-                        )
-                    }
-                }
             }
         }
     }
