@@ -1,8 +1,7 @@
 """Servicio de URLs bloqueadas.
 
 Capa de negocio separada del router ``app.routers.bloqueadas``. No conoce
-``HTTPException`` ni FastAPI — lanza excepciones de dominio que el router
-traduce a codigos HTTP.
+FastAPI — devuelve modelos Pydantic y lanza excepciones de [app.errores].
 
 Operaciones:
   - Listar URLs bloqueadas (modo normal + delta-sync con keyset pagination)
@@ -13,26 +12,25 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any
 
 import asyncpg
 
+from app.consulta_listado import (
+    construir_consulta_listado,
+    eliminar_logico,
+    fila_viva_por_id_cliente,
+)
+from app.errores import UrlBloqueadaNoEncontrada, UrlYaBloqueada
+from app.modelos import UrlBloqueadaRespuesta, fila_a_url_bloqueada
 
-# ============================================================================
-# Excepciones de dominio — el router las traduce a codigos HTTP
-# ============================================================================
-class UrlYaBloqueada(Exception):
-    """La URL ya esta bloqueada (409)."""
+# Re-export para compatibilidad de imports existentes.
+from app.errores import UrlYaBloqueada as UrlYaBloqueadaError  # noqa: F401
 
 
-# ============================================================================
-# Constantes SQL — unico punto de cambio para el SELECT de URLs bloqueadas
-# ============================================================================
 _SQL_SELECT_BLOQUEADA = (
     "SELECT id, url, razon, creado_en, updated_at, deleted_at "
     "FROM urls_bloqueadas"
 )
-_OP_AND = " AND "
 
 
 # ============================================================================
@@ -46,63 +44,23 @@ async def listar_urls_bloqueadas(
     offset: int = 0,
     modificados_desde: datetime | None = None,
     cursor_id: str | None = None,
-) -> list[dict[str, Any]]:
+) -> list[UrlBloqueadaRespuesta]:
     """Lista las URLs bloqueadas del usuario (delta sync).
 
-    Modo delta (con ``modificados_desde``): devuelve todas las URLs
-    modificadas desde esa fecha (updated_at >= modificados_desde),
-    incluyendo tombstones (filas con deleted_at != null).
-
-    Keyset pagination (con ``cursor_id``): paginacion por llave compuesta
-    (updated_at, id) con comparacion estricta > — evita el refetch infinito
-    de la fila limite y la perdida de filas por inserts concurrentes entre
-    batches (Bug A1 fix).
-
-    Modo normal (sin ``modificados_desde``): devuelve solo las URLs activas
-    (deleted_at IS NULL) ordenadas por creado_en DESC.
+    Modos normal/delta/keyset: ver [app.consulta_listado.
+    construir_consulta_listado] — la semantica vive en un unico lugar.
     """
-    condiciones = ["id_usuario = $1"]
-    params: list[Any] = [id_usuario]
-
-    if modificados_desde is not None:
-        if cursor_id is not None:
-            condiciones.append(
-                "(updated_at > $2 OR (updated_at = $2 AND id::text > $3))"
-            )
-            params.extend([modificados_desde, cursor_id])
-            where = _OP_AND.join(condiciones)
-            query = (
-                f"{_SQL_SELECT_BLOQUEADA} WHERE {where} "
-                f"ORDER BY updated_at ASC, id ASC "
-                f"LIMIT ${len(params) + 1}"
-            )
-            params.append(limite)
-        else:
-            condiciones.append("updated_at >= $2")
-            params.append(modificados_desde)
-            where = _OP_AND.join(condiciones)
-            query = (
-                f"{_SQL_SELECT_BLOQUEADA} WHERE {where} "
-                f"ORDER BY updated_at ASC "
-                f"LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
-            )
-            params.append(limite)
-            params.append(offset)
-    else:
-        condiciones.append("deleted_at IS NULL")
-        where = _OP_AND.join(condiciones)
-        query = (
-            f"{_SQL_SELECT_BLOQUEADA} WHERE {where} "
-            f"ORDER BY creado_en DESC "
-            f"LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
-        )
-        params.append(limite)
-        params.append(offset)
-
+    query, params = construir_consulta_listado(
+        _SQL_SELECT_BLOQUEADA,
+        id_usuario,
+        limite=limite,
+        offset=offset,
+        modificados_desde=modificados_desde,
+        cursor_id=cursor_id,
+    )
     async with pool.acquire() as conexion:
         filas = await conexion.fetch(query, *params)
-
-    return [dict(f) for f in filas]
+    return [fila_a_url_bloqueada(dict(f)) for f in filas]
 
 
 # ============================================================================
@@ -115,7 +73,7 @@ async def bloquear_url(
     url: str,
     razon: str | None,
     id_cliente: str | None,
-) -> dict[str, Any]:
+) -> UrlBloqueadaRespuesta:
     """Bloquea una URL para el usuario.
 
     Flujo:
@@ -127,32 +85,19 @@ async def bloquear_url(
       3. INSERT nuevo con ON CONFLICT DO NOTHING — elimina la ventana TOCTOU.
       4. ON CONFLICT fired — ya existe una fila viva → 409.
 
-    Returns:
-        ``dict`` con las columnas de la URL bloqueada.
-
     Raises:
         UrlYaBloqueada: la URL ya esta bloqueada (409).
     """
     async with pool.acquire() as conexion:
         async with conexion.transaction():
-            # Idempotencia: si el cliente reenvia el mismo op CREATE tras un
-            # crash post-POST, devolvemos la fila existente en vez de crear
-            # una duplicada (fila fantasma U-B).
             if id_cliente is not None:
-                fila_existente = await conexion.fetchrow(
-                    f"""
-                    {_SQL_SELECT_BLOQUEADA}
-                    WHERE id_usuario = $1 AND id_cliente = $2
-                          AND deleted_at IS NULL
-                    """,
-                    id_usuario,
-                    id_cliente,
+                existente = await fila_viva_por_id_cliente(
+                    conexion, _SQL_SELECT_BLOQUEADA, id_usuario, id_cliente
                 )
-                if fila_existente is not None:
-                    return dict(fila_existente)
+                if existente is not None:
+                    return fila_a_url_bloqueada(existente)
 
-            # 1. Resurrect atomico: si existe una fila soft-deleted (tombstone)
-            #    para este (id_usuario, url), actualizarla in-place.
+            # 1. Resurrect atomico de tombstone.
             fila = await conexion.fetchrow(
                 """
                 UPDATE urls_bloqueadas
@@ -165,7 +110,7 @@ async def bloquear_url(
                 razon,
             )
             if fila is not None:
-                return dict(fila)
+                return fila_a_url_bloqueada(dict(fila))
 
             # 2. No hay tombstone. INSERT nuevo con ON CONFLICT DO NOTHING.
             fila = await conexion.fetchrow(
@@ -181,7 +126,7 @@ async def bloquear_url(
                 id_cliente,
             )
             if fila is not None:
-                return dict(fila)
+                return fila_a_url_bloqueada(dict(fila))
 
             # 3. ON CONFLICT fired — ya existe una fila viva.
             raise UrlYaBloqueada()
@@ -194,19 +139,11 @@ async def desbloquear_url(
     pool: asyncpg.Pool,
     url_id: uuid.UUID,
     id_usuario: str,
-) -> bool:
+) -> None:
     """Desbloquea (soft-delete) una URL de la lista de bloqueadas.
 
-    Returns:
-        ``True`` si la URL fue desbloqueada, ``False`` si no se encontro
-        o ya estaba eliminada (404).
+    Raises:
+        UrlBloqueadaNoEncontrada: no se encontro o ya estaba eliminada (404).
     """
-    async with pool.acquire() as conexion:
-        resultado = await conexion.execute(
-            "UPDATE urls_bloqueadas "
-            "SET deleted_at = now(), updated_at = now() "
-            "WHERE id = $1 AND id_usuario = $2 AND deleted_at IS NULL",
-            url_id,
-            id_usuario,
-        )
-    return resultado != "UPDATE 0"
+    if not await eliminar_logico(pool, "urls_bloqueadas", url_id, id_usuario):
+        raise UrlBloqueadaNoEncontrada()

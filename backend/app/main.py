@@ -15,12 +15,14 @@ Documentacion interactiva:
 from contextlib import asynccontextmanager
 import logging
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.base_datos import cerrar_pool
 from app.config import obtener_ajustes
+from app.dependencias import Pool
+from app.errores import ErrorDominio
 from app.rate_limit import RateLimitMiddleware
 from app.routers import auth, historial, bloqueadas, denuncias
 
@@ -47,6 +49,18 @@ app = FastAPI(
     version=VERSION_API,
     lifespan=lifespan,
 )
+
+
+# Traduccion centralizada de excepciones de dominio → HTTP. Cada servicio
+# lanza subclases de [app.errores.ErrorDominio] con su (status, detail);
+# este handler es el unico punto que conoce FastAPI.
+@app.exception_handler(ErrorDominio)
+async def handler_error_dominio(request: Request, exc: ErrorDominio) -> JSONResponse:
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+        headers=exc.headers,
+    )
 
 # Bug B7 fix: CORS middleware. Combos `allow_methods=["*"]` + `allow_credentials=True`
 # son invalidos segun la spec CORS (los navegadores rechazan `*` para methods/headers
@@ -88,7 +102,7 @@ async def raiz():
 
 
 @app.get("/salud", tags=["inicio"])
-async def salud():
+async def salud(pool: Pool):
     """Healthcheck — verifica la conexion a la base de datos Neon.
 
     Bug B10 fix: antes devolvia 200 incluso cuando la BD estaba caida
@@ -97,16 +111,13 @@ async def salud():
       - 200 OK   -> BD responde.
       - 503      -> BD no responde (los monitores pueden retroceder).
     """
-    from app.base_datos import obtener_pool
     try:
-        pool = await obtener_pool()
         async with pool.acquire() as conexion:
             valor = await conexion.fetchval("SELECT 1")
         return {"estado": "ok" if valor == 1 else "error", "base_datos": "qr_guardian"}
     except Exception:
-        # Bug B8 fix: antes ``str(e)`` podia exponer la URL de conexion a Neon
+        # Bug B8 fix: mensaje generico sin exponer la URL de conexion a Neon
         # (que incluye el password) si asyncpg la incluyera en el mensaje.
-        # Ahora devolvemos un mensaje generico sin exponer detalles internos.
         return JSONResponse(
             status_code=503,
             content={"estado": "degradado", "detalle": "No se puede conectar a la base de datos"},

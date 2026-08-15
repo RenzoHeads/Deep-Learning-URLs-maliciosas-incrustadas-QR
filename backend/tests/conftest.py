@@ -95,33 +95,23 @@ def _reset_rate_limit():
 
 
 @pytest.fixture
-def client(monkeypatch, fake_pool, store) -> TestClient:
+def client(fake_pool, store) -> TestClient:
     """TestClient con pool mock + auth bypass.
 
-    - Reemplaza ``app.base_datos.obtener_pool`` por una corutina que
-      devuelve ``fake_pool``.
-    - Tambien reemplaza la referencia importada en cada router.
-    - Override de la dependencia ``verificar_token`` para retornar
-      ``ID_USUARIO_TEST`` sin ir a la BD.
+    - ``app.dependency_overrides[obtener_pool]`` → fake_pool (todos los
+      handlers reciben el pool via la dependencia [app.dependencias.Pool],
+      incluido /salud).
+    - ``app.dependency_overrides[verificar_token]`` → ID_USUARIO_TEST sin
+      ir a la BD (la cobertura de la dependencia real vive en
+      test_verificar_token.py).
     """
-    from app import base_datos
+    from app.base_datos import obtener_pool
+    from app.dependencias import verificar_token
     from app.main import app
-    from app.routers import auth as auth_module
-    from app.routers import historial, bloqueadas, denuncias
-    from app.routers.auth import verificar_token
 
     _seed_usuarios(store)
 
-    async def _fake_obtener_pool():
-        return fake_pool
-
-    # Patch ALL references: ``from app.base_datos import obtener_pool`` en cada
-    # modulo crea su propio binding. Hay que patchear cada uno.
-    monkeypatch.setattr(base_datos, "obtener_pool", _fake_obtener_pool)
-    for mod in (auth_module, historial, bloqueadas, denuncias):
-        if hasattr(mod, "obtener_pool"):
-            monkeypatch.setattr(mod, "obtener_pool", _fake_obtener_pool)
-
+    app.dependency_overrides[obtener_pool] = lambda: fake_pool
     app.dependency_overrides[verificar_token] = lambda: ID_USUARIO_TEST
 
     with TestClient(app) as c:

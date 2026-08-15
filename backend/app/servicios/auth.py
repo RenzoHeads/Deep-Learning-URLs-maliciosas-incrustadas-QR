@@ -1,15 +1,12 @@
 """Servicio de autenticacion.
 
 Capa de negocio separada del router ``app.routers.auth``. No conoce
-``HTTPException`` ni FastAPI — lanza excepciones de dominio que el router
-traduce a codigos HTTP.
+FastAPI — devuelve filas y lanza excepciones de [app.errores].
 
 Operaciones:
   - Registrar usuario (nombre_usuario + password + correo)
   - Login por nombre_usuario + password
-
-``verificar_token`` permanece en el router porque es una dependencia
-FastAPI (``Depends``) que necesita el objeto ``Request``.
+  - Resolver token_api → id_usuario (para la dependencia verificar_token)
 """
 from __future__ import annotations
 
@@ -22,16 +19,16 @@ from typing import Any
 import asyncpg
 import bcrypt
 
+from app.errores import CredencialesInvalidas, TokenInvalido, UsuarioYaExiste
 
-# ============================================================================
-# Excepciones de dominio — el router las traduce a codigos HTTP
-# ============================================================================
-class UsuarioYaExiste(Exception):
-    """El nombre de usuario ya esta en uso (409)."""
-
-
-class CredencialesInvalidas(Exception):
-    """Usuario o password incorrectos (401)."""
+# Re-export para compatibilidad de imports existentes.
+__all__ = [
+    "CredencialesInvalidas",
+    "UsuarioYaExiste",
+    "registrar_usuario",
+    "login_usuario",
+    "obtener_id_usuario_por_token",
+]
 
 
 # ============================================================================
@@ -161,3 +158,28 @@ async def login_usuario(
         raise CredencialesInvalidas()
 
     return dict(fila)
+
+
+# ============================================================================
+# Dependencia verificar_token — token_api → id_usuario
+# ============================================================================
+async def obtener_id_usuario_por_token(
+    pool: asyncpg.Pool,
+    token_api: str,
+) -> str:
+    """Devuelve el ``id`` (UUID como string) del dueno del ``token_api``.
+
+    Bug B13 fix: la comparacion es SQL directa (bind parameters asyncpg);
+    ver historico en git para el analisis de compare_digest.
+
+    Raises:
+        TokenInvalido: el token no corresponde a ningun usuario (401).
+    """
+    async with pool.acquire() as conexion:
+        fila = await conexion.fetchrow(
+            "SELECT id FROM usuarios WHERE token_api = $1",
+            token_api,
+        )
+    if fila is None:
+        raise TokenInvalido()
+    return str(fila["id"])

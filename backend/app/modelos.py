@@ -142,6 +142,11 @@ class UrlBloqueadaRespuesta(BaseModel):
     deleted_at: datetime | None = None
 
 
+class ConteoRespuesta(BaseModel):
+    """Respuesta de ``GET /escaneos/count`` — ``{"total": int}``."""
+    total: int
+
+
 # ============================================================================
 # Denuncias
 # ============================================================================
@@ -165,6 +170,23 @@ class DenunciaRespuesta(BaseModel):
     creado_en: datetime
     updated_at: datetime | None = None
     deleted_at: datetime | None = None
+
+
+class CategoriaDenunciaRespuesta(BaseModel):
+    """Categoria de denuncia disponible (``GET /denuncias/categorias``)."""
+    id: int
+    nombre: str
+    descripcion: str | None = None
+
+
+def fila_a_respuesta_auth(fila: asyncpg.Record) -> RespuestaAuth:
+    return RespuestaAuth(
+        id_usuario=fila["id"],
+        token_api=fila["token_api"],
+        nombre_usuario=fila["nombre_usuario"],
+        correo=fila["correo"],
+        creado_en=fila["creado_en"],
+    )
 
 
 def fila_a_escaneo(fila: asyncpg.Record) -> EscaneoRespuesta:

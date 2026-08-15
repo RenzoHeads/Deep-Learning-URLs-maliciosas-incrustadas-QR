@@ -28,7 +28,7 @@ from fastapi.testclient import TestClient
 
 
 @pytest.fixture
-def client_sin_bypass(monkeypatch, fake_pool, store) -> TestClient:
+def client_sin_bypass(fake_pool, store) -> TestClient:
     """TestClient con pool mock y SIN dependency_overrides de auth.
 
     Replica el fixture ``client`` de conftest.py menos el override de
@@ -36,10 +36,8 @@ def client_sin_bypass(monkeypatch, fake_pool, store) -> TestClient:
     escaneo propio para poder verificar que la dependencia resuelve el
     id_usuario correcto.
     """
-    from app import base_datos
+    from app.base_datos import obtener_pool
     from app.main import app
-    from app.routers import auth as auth_module
-    from app.routers import historial, bloqueadas, denuncias
 
     user_id = uuid.uuid4()
     store.setdefault("usuarios", []).append(
@@ -71,18 +69,11 @@ def client_sin_bypass(monkeypatch, fake_pool, store) -> TestClient:
         }
     )
 
-    async def _fake_obtener_pool():
-        return fake_pool
-
-    # Patch ALL references (mismo patron que conftest): cada modulo importa
-    # ``obtener_pool`` creando su propio binding.
-    monkeypatch.setattr(base_datos, "obtener_pool", _fake_obtener_pool)
-    for mod in (auth_module, historial, bloqueadas, denuncias):
-        if hasattr(mod, "obtener_pool"):
-            monkeypatch.setattr(mod, "obtener_pool", _fake_obtener_pool)
-
-    # Defensa: ningun override residual de otros tests debe contaminarnos.
+    # Solo el pool como override — la dependencia verificar_token corre
+    # REAL contra la BD fake. Defensa: ningun override residual de otros
+    # tests debe contaminarnos.
     app.dependency_overrides.clear()
+    app.dependency_overrides[obtener_pool] = lambda: fake_pool
 
     with TestClient(app) as c:
         yield c
