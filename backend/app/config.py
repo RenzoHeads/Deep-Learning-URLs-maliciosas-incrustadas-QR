@@ -16,6 +16,15 @@ class Ajustes(BaseSettings):
     # desde localhost y para origins web futuros.
     ALLOWED_ORIGINS: str = "https://qr-guardian-api.vercel.app"
 
+    # Rate limiting fixed-window (ver app/rate_limit.py).
+    RATE_LIMIT_VENTANA_SEGUNDOS: int = 60
+    RATE_LIMIT_AUTH: int = 10   # /auth/registrar + /auth/login
+    RATE_LIMIT_API: int = 120   # resto de endpoints CRUD/sync
+
+    # Pool asyncpg (ver app/base_datos.py).
+    POOL_MIN_SIZE: int = 0      # 0: sin conexion eager (Vercel cold-start)
+    POOL_MAX_SIZE: int = 20
+
     # S1845 fix: renombrar property para evitar clash con el campo
     # DATABASE_URL. Pydantic v2 trata `database_url` y `DATABASE_URL`
     # como la misma clave de env var, causando ambiguedad.

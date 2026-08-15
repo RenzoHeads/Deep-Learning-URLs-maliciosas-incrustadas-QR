@@ -90,7 +90,7 @@ async def obtener_pool() -> asyncpg.Pool:
                 # puede provocar 504. Con ``min_size=0`` asyncpg no abre ninguna
                 # conexion hasta el primer ``acquire()``, repartiendo la latencia
                 # entre los requests reales.
-                min_size=0,
+                min_size=ajustes.POOL_MIN_SIZE,
                 # BUG #10 audit fix: max_size 5->20. Con miles de usuarios
                 # concurrentes haciendo delta-syncs paginados (5 paginas x
                 # 200 filas = 1000 filas por worker-run, 3 tablas), el pool
@@ -98,7 +98,7 @@ async def obtener_pool() -> asyncpg.Pool:
                 # serializaban esperando acquire() bajo carga. 20 conexiones
                 # permite paralelismo real sin agotar el limite de conexiones
                 # de Neon (500 por defecto, escalable).
-                max_size=20,
+                max_size=ajustes.POOL_MAX_SIZE,
                 # BUG #11 audit fix: timezone consistency. Pinnea cada
                 # conexion del pool a UTC via el callback ``init`` de asyncpg
                 # (corutina que se ejecuta UNA vez por conexion al crearse,

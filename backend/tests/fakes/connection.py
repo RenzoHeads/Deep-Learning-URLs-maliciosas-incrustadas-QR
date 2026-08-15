@@ -83,11 +83,12 @@ class FakeConnection:
     async def _select(self, sql: str, params: list) -> list[FakeRecord]:
         table = self._table(sql)
         rows = self._store.get(table, [])
-        eq_conds, ge_conds, keyset_conds = parse_conditions(sql, params)
+        eq_conds, ge_conds, keyset_conds, bool_conds = parse_conditions(sql, params)
         is_null, is_not_null = parse_is_null(sql)
         matched = [
             r for r in rows
-            if matches(r, eq_conds, ge_conds, keyset_conds, is_null, is_not_null)
+            if matches(r, eq_conds, ge_conds, keyset_conds, is_null, is_not_null,
+                       bool_conds)
         ]
 
         if "COUNT" in sql.upper():
@@ -118,12 +119,21 @@ class FakeConnection:
                 return ce or datetime.min.replace(tzinfo=timezone.utc)
             matched_sorted = sorted(matched, key=_key, reverse=True)
 
-        # LIMIT
+        # LIMIT + OFFSET (OFFSET se aplica antes del slice de LIMIT,
+        # igual que PostgreSQL).
         m_lim = re.search(r"LIMIT\s+\$(\d+)", sql, flags=re.IGNORECASE)
+        m_off = re.search(r"OFFSET\s+\$(\d+)", sql, flags=re.IGNORECASE)
+        offset = 0
+        if m_off:
+            idx = int(m_off.group(1))
+            if 1 <= idx <= len(params):
+                offset = int(params[idx - 1])
         if m_lim:
             idx = int(m_lim.group(1))
             if 1 <= idx <= len(params):
-                lim = params[idx - 1]
-                matched_sorted = matched_sorted[:lim]
+                lim = int(params[idx - 1])
+                matched_sorted = matched_sorted[offset:offset + lim]
+        elif offset:
+            matched_sorted = matched_sorted[offset:]
 
         return [FakeRecord(r) for r in matched_sorted]

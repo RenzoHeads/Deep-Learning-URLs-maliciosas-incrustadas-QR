@@ -21,11 +21,9 @@ ataques desde un cliente Android comprometido vienen de una sola IP
 y un Vercel reroute_tipicamente reutiliza la misma instancia caliente
 para conexiones cercanas en el tiempo.
 
-Limites (constantes de modulo):
-  - AUTH:  10 req / 60 s por IP  (registrar + login: brute-force lento)
-  - API:   120 req / 60 s por IP (sync + CRUD: cliente normal hace ~5
-                                   req por sync; un bucle haga 120/s es
-                                   claramente anomalo)
+Limites (configurables via env — ver ``app.config.Ajustes``):
+  - AUTH:  RATE_LIMIT_AUTH=10  req / RATE_LIMIT_VENTANA_SEGUNDOS=60 s por IP
+  - API:   RATE_LIMIT_API=120  req / RATE_LIMIT_VENTANA_SEGUNDOS=60 s por IP
   - Salud: exento (monitores de uptime necesitan probing continuo)
 
 Respuesta 429 incluye header `Retry-After` (segundos restantes en la
@@ -42,12 +40,15 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
+from app.config import obtener_ajustes
 
-# ── Configuracion (vacia por defecto → usa defaults) ──
 
-VENTANA_SEGUNDOS = 60
-LIMITE_AUTH = 10   # /auth/registrar + /auth/login: brute-force protection
-LIMITE_API = 120   # resto de endpoints CRUD/sync
+# ── Configuracion (leida de Ajustes al importar; los tests la
+#    monkeypatchean directamente sobre el modulo) ──
+
+VENTANA_SEGUNDOS = obtener_ajustes().RATE_LIMIT_VENTANA_SEGUNDOS
+LIMITE_AUTH = obtener_ajustes().RATE_LIMIT_AUTH   # /auth/registrar + /auth/login
+LIMITE_API = obtener_ajustes().RATE_LIMIT_API     # resto de endpoints CRUD/sync
 
 
 # ── Estado en memoria ──

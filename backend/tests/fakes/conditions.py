@@ -23,6 +23,7 @@ def matches(
     keyset_conds: list[tuple[str, Any, str, Any]] | None = None,
     is_null: list[str] | None = None,
     is_not_null: list[str] | None = None,
+    bool_conds: list[tuple[str, bool]] | None = None,
 ) -> bool:
     """Verifica si una row cumple todas las condiciones del WHERE."""
     eq_conds = eq_conds or []
@@ -30,6 +31,12 @@ def matches(
     keyset_conds = keyset_conds or []
     is_null = is_null or []
     is_not_null = is_not_null or []
+    bool_conds = bool_conds or []
+
+    # Condiciones literales booleanas (``es_malicioso = false``).
+    for col, val in bool_conds:
+        if bool(row.get(col)) is not val:
+            return False
 
     for col, val in eq_conds:
         rv = row.get(col)
@@ -105,6 +112,7 @@ def parse_conditions(
     list[tuple[str, Any]],
     list[tuple[str, str, Any]],
     list[tuple[str, Any, str, Any]],
+    list[tuple[str, bool]],
 ]:
     """Extrae condiciones del WHERE.
 
@@ -113,10 +121,13 @@ def parse_conditions(
         ge_conds: lista de (col, ">=", val) para condiciones >= (delta sync).
         keyset_conds: lista de (ts_col, ts_val, id_col, id_val) para la
             condicion keyset (Bug A1 fix).
+        bool_conds: lista de (col, val) para literales booleanos
+            (``es_malicioso = false`` / ``= true``).
     """
     eq_conds: list[tuple[str, Any]] = []
     ge_conds: list[tuple[str, str, Any]] = []
     keyset_conds: list[tuple[str, Any, str, Any]] = []
+    bool_conds: list[tuple[str, bool]] = []
 
     # Strip SET clause from UPDATE so `col = $N` in SET is not mistaken
     # for a WHERE equality condition.
@@ -151,7 +162,10 @@ def parse_conditions(
         col, idx = m.group(1), int(m.group(2))
         if 1 <= idx <= len(params):
             ge_conds.append((col, ">=", params[idx - 1]))
-    return eq_conds, ge_conds, keyset_conds
+    # Literales booleanos — excluye placeholders ``= $N``.
+    for m in re.finditer(r"([\w_]+)\s*=\s*(true|false)\b", sql, flags=re.IGNORECASE):
+        bool_conds.append((m.group(1), m.group(2).lower() == "true"))
+    return eq_conds, ge_conds, keyset_conds, bool_conds
 
 
 def parse_is_null(sql: str) -> tuple[list[str], list[str]]:

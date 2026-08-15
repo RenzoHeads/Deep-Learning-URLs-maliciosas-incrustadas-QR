@@ -55,7 +55,11 @@ def delete(sql: str, params: list, store: dict[str, list[dict]], table: str) -> 
     rows = store.get(table, [])
     conds = parse_conditions(sql, params)[0]
     is_null, is_not_null = parse_is_null(sql)
-    kept = [r for r in rows if not matches(r, conds, [], [], is_null, is_not_null)]
+    bool_conds = parse_conditions(sql, params)[3]
+    kept = [
+        r for r in rows
+        if not matches(r, conds, [], [], is_null, is_not_null, bool_conds)
+    ]
     removed = len(rows) - len(kept)
     store[table] = kept
     return f"DELETE {removed}"
@@ -67,11 +71,12 @@ def update(sql: str, params: list, store: dict[str, list[dict]], table: str) -> 
     Aplica el cambio a las rows que matcheen el WHERE.
     """
     rows = store.get(table, [])
-    eq_conds, ge_conds, keyset_conds = parse_conditions(sql, params)
+    eq_conds, ge_conds, keyset_conds, bool_conds = parse_conditions(sql, params)
     is_null, is_not_null = parse_is_null(sql)
     updated = 0
     for r in rows:
-        if matches(r, eq_conds, ge_conds, keyset_conds, is_null, is_not_null):
+        if matches(r, eq_conds, ge_conds, keyset_conds, is_null, is_not_null,
+                   bool_conds):
             if _is_soft_delete(sql):
                 r["deleted_at"] = datetime.now(timezone.utc)
                 r["updated_at"] = datetime.now(timezone.utc)
