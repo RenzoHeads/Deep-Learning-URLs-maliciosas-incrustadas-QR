@@ -27,12 +27,16 @@ jobs:
       - name: Sync DATABASE_URL env var to Vercel (production)
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          VERCEL_PROJECT_ID: prj_cfwX1wu6WtGLQ7lFDikST33Blfjh
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
           VERCEL_DATABASE_URL: ${{ secrets.VERCEL_DATABASE_URL }}
         run: |
           set -euo pipefail
           if [ -z "${VERCEL_DATABASE_URL:-}" ]; then
             echo "::error::GitHub Secret VERCEL_DATABASE_URL is not set. Create it in repo Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+          if [ -z "${VERCEL_PROJECT_ID:-}" ]; then
+            echo "::error::GitHub Secret VERCEL_PROJECT_ID is not set. Create it in repo Settings > Secrets and variables > Actions."
             exit 1
           fi
           echo "Listing existing DATABASE_URL env vars in Vercel project..."
@@ -58,7 +62,13 @@ jobs:
 
       - name: Deploy to Vercel (production)
         working-directory: backend
-        run: vercel deploy --prod --yes --token=${{ secrets.VERCEL_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${VERCEL_ORG_ID:-}" ] || [ -z "${VERCEL_PROJECT_ID:-}" ]; then
+            echo "::error::GitHub Secrets VERCEL_ORG_ID or VERCEL_PROJECT_ID are not set. Create them in repo Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+          vercel deploy --prod --yes --token=${{ secrets.VERCEL_TOKEN }}
         env:
-          VERCEL_ORG_ID: team_vjlqmi70MHBHMFrbNz9B5A5w
-          VERCEL_PROJECT_ID: prj_cfwX1wu6WtGLQ7lFDikST33Blfjh
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}

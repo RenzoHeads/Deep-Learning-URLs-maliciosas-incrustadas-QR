@@ -28,7 +28,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
@@ -64,12 +64,9 @@ jobs:
           fi
           export PATH="$SCANNER_DIR/bin:$PATH"
 
-          sonar-scanner \
-            -Dsonar.organization=renzoheads \
-            -Dsonar.projectKey=RenzoHeads_Deep-Learning-URLs-maliciosas-incrustadas-QR \
-            -Dsonar.sources=android/app/src/main/java,backend/app \
-            -Dsonar.tests=android/app/src/test/java,backend/tests \
-            -Dsonar.exclusions=**/build/**,**/*.json,**/*.xml,**/*.pro,backend/api/**,*.ipynb,**/*.ipynb,master_generico/**,master_regionalizado/**,prueba_generica/**,prueba_latam/** \
-            -Dsonar.sourceEncoding=UTF-8 \
-            -Dsonar.python.version=3.11 \
-            -Dsonar.coverage.exclusions=**/*
+          # sonar-project.properties es la unica fuente de verdad (org, projectKey,
+          # sources, tests, exclusions, encoding, python.version=3.12). Los -D inline
+          # fueron removidos para evitar drift con el properties auditado y para no
+          # reintroducir `sonar.coverage.exclusions=**/*` que el audit fix elimino
+          # deliberadamente (270+ tests JVM y 70+ Python dependen de que NO este).
+          sonar-scanner

@@ -28,7 +28,6 @@ Salida:
 """
 
 import os
-import re
 import sys
 import json
 import time
@@ -54,7 +53,16 @@ from sklearn.metrics import (
     classification_report, roc_curve,
 )
 
-from transformers import CanineModel, CanineTokenizer
+from transformers import CanineTokenizer
+
+# Asegurar que el directorio raiz del proyecto este en sys.path para que
+# los imports `from ml_comun...` funcionen sea cual sea el CWD.
+_PROYECTO_RAIZ = os.path.dirname(os.path.abspath(__file__))
+if _PROYECTO_RAIZ not in sys.path:
+    sys.path.insert(0, _PROYECTO_RAIZ)
+
+from ml_comun.url import limpiar_url
+from ml_comun.modelo import RoBERTaModel
 
 warnings.filterwarnings("ignore")
 
@@ -96,18 +104,6 @@ DISPOSITIVO = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # ============================================================================
 # UTILIDADES
 # ============================================================================
-_RE_PROTOCOLO = re.compile(r'^(?:https?|ftps?)://', re.IGNORECASE)
-_RE_WWW = re.compile(r'^www\.', re.IGNORECASE)
-
-
-def limpiar_url(url: str) -> str:
-    """Quitar protocolo http/https/ftp/ftps y www. inicial."""
-    url = str(url).strip()
-    url = _RE_PROTOCOLO.sub('', url)
-    url = _RE_WWW.sub('', url)
-    return url
-
-
 def cargar_y_preprocesar(config: dict) -> pd.DataFrame:
     """Cargar, limpiar y combinar URLs benignas + phishing."""
     print("\n" + "=" * 70)
@@ -181,64 +177,11 @@ class DatasetURLs(Dataset):
 # ============================================================================
 # MODELO
 # ============================================================================
-class RoBERTaModel(nn.Module):
-    """
-    Clase envoltorio que implementa la arquitectura CANINE-S preentrenada.
-
-    Mantiene el nombre 'RoBERTaModel' por compatibilidad con los scripts
-    de exportacion (export_onnx.py, export_tflite.py).
-
-    Arquitectura:
-        - CANINE-S (google/canine-s) → (B, L, 768)
-        - Media enmascarada + Max enmascarado → (B, 1536)
-        - LayerNorm(1536) + Dropout + Linear(1536, 1) → logits (B,)
-    """
-
-    def __init__(self, dropout: float = 0.3, pad_idx: int = PAD_IDX):
-        super().__init__()
-        self.pad_idx = pad_idx
-
-        # CANINE-S preentrenado
-        self.canine = CanineModel.from_pretrained("google/canine-s")
-        hidden = self.canine.config.hidden_size  # 768
-
-        # Cabezal de clasificacion — el nombre `classifier` DEBE coincidir
-        # con export_onnx.py / export_tflite.py para que los checkpoints
-        # carguen con las claves de state_dict correctas.
-        self.layer_norm = nn.LayerNorm(hidden * 2)
-        self.dropout = nn.Dropout(dropout)
-        self.classifier = nn.Linear(hidden * 2, 1)
-
-    def forward(self, x):
-        # x: (B, L) — indices de caracteres
-        mascara_atencion = (x != self.pad_idx).long()
-
-        # CANINE forward
-        salidas = self.canine(input_ids=x, attention_mask=mascara_atencion)
-        salida = salidas.last_hidden_state  # (B, L, 768)
-
-        # Mascaras de padding
-        mascara_pad = (x == self.pad_idx)  # (B, L)
-        mascara_no_pad = ~mascara_pad
-        mascara = mascara_no_pad.unsqueeze(-1).to(salida.dtype)  # (B, L, 1)
-
-        # Media enmascarada (Masked Mean Pooling)
-        suma_embeddings = torch.sum(salida * mascara, dim=1)
-        suma_mascara = torch.clamp(mascara.sum(dim=1), min=1e-9)
-        media_agrupada = suma_embeddings / suma_mascara  # (B, 768)
-
-        # Max enmascarado (Masked Max Pooling)
-        salida_enmascarada = salida.masked_fill(mascara_pad.unsqueeze(-1), -1e9)
-        max_agrupado = salida_enmascarada.max(dim=1).values  # (B, 768)
-
-        # Concatenar
-        salida_cls = torch.cat([media_agrupada, max_agrupado], dim=1)  # (B, 1536)
-
-        # Cabezal
-        salida_cls = self.layer_norm(salida_cls)
-        salida_cls = self.dropout(salida_cls)
-        logits = self.classifier(salida_cls).squeeze(1)  # (B,)
-        return logits
+# La clase `RoBERTaModel` se importa desde `ml_comun.modelo` (ver imports
+# arriba). La firma unificada acepta (nombre_modelo, dropout, pad_idx) con
+# defaults ("google/canine-s", 0.1, 0). Para preservar el comportamiento de
+# train_canine_s (backbone google/canine-s, dropout configurable, pad_idx
+# del tokenizer), el callsite pasa dropout y pad_idx explicitos.
 
 
 # ============================================================================
@@ -282,7 +225,9 @@ def ejecutar_epoca(cargador, modelo, criterio, optimizador, entrenar: bool):
 
             # Precision mixta BF16 (A100)
             with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
-                logits = modelo(lote_x)
+                # El modelo unificado retorna logits [B, 1]; el loss y las
+                # metricas esperan [B]. Squeeze la ultima dim.
+                logits = modelo(lote_x).squeeze(-1)
                 perdida = criterio(logits, lote_y)
 
             if entrenar:
@@ -310,7 +255,9 @@ def evaluar_en_test(modelo, cargador_test):
         for lote_x, lote_y in cargador_test:
             lote_x = lote_x.to(DISPOSITIVO, non_blocking=True)
             with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
-                logits = modelo(lote_x)
+                # El modelo unificado retorna logits [B, 1]; squeeze a [B]
+                # para compatibilidad con torch.sigmoid y comparaciones.
+                logits = modelo(lote_x).squeeze(-1)
             probs = torch.sigmoid(logits).cpu().numpy()
             predicciones = (probs >= 0.5).astype(int)
             todas_predicciones.extend(predicciones)
@@ -462,7 +409,7 @@ def main():
     print("\n" + "=" * 70)
     print("ETAPA 6 — Modelo CANINE-S")
     print("=" * 70)
-    modelo = RoBERTaModel(dropout=args.dropout).to(DISPOSITIVO)
+    modelo = RoBERTaModel(dropout=args.dropout, pad_idx=PAD_IDX).to(DISPOSITIVO)
 
     total_params = sum(p.numel() for p in modelo.parameters())
     params_entrenables = sum(p.numel() for p in modelo.parameters() if p.requires_grad)

@@ -33,86 +33,17 @@ import tempfile
 
 import numpy as np
 import torch
-import torch.nn as nn
-from transformers import CanineModel
 
-# ---------------------------------------------------------------------------
-# Definición del modelo — duplicada de export_onnx.py para ser autocontenido
-# ---------------------------------------------------------------------------
+# Asegurar que el directorio raiz del proyecto este en sys.path para que
+# los imports `from ml_comun...` funcionen sea cual sea el CWD.
+_PROYECTO_RAIZ = os.path.dirname(os.path.abspath(__file__))
+if _PROYECTO_RAIZ not in sys.path:
+    sys.path.insert(0, _PROYECTO_RAIZ)
+
+from ml_comun.modelo import RoBERTaModel
+from ml_comun.loaders import cargar_modelo
 
 PAD_IDX = 0
-
-class RoBERTaModel(nn.Module):
-    def __init__(
-        self,
-        nombre_modelo: str = "google/canine-s",
-        dropout: float = 0.1,
-    ) -> None:
-        super().__init__()
-        self.canine = CanineModel.from_pretrained(nombre_modelo)
-        hidden = self.canine.config.hidden_size            # 768
-        self.layer_norm = nn.LayerNorm(hidden * 2)
-        self.dropout = nn.Dropout(dropout)
-        self.classifier = nn.Linear(hidden * 2, 1)
-
-    @staticmethod
-    def _masked_mean(tensor, mask, dim=1):
-        mask = mask.unsqueeze(-1).float()
-        summed = (tensor * mask).sum(dim=dim)
-        counts = mask.sum(dim=dim).clamp(min=1.0)
-        return summed / counts
-
-    @staticmethod
-    def _masked_max(tensor, mask, dim=1):
-        mask = mask.unsqueeze(-1).float()
-        masked = tensor.masked_fill(mask == 0, -1e9)
-        row_all_masked = (mask.sum(dim=dim) == 0)
-        maxed, _ = masked.max(dim=dim)
-        maxed = maxed.masked_fill(row_all_masked, 0.0)
-        return maxed
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        attention_mask = (x != PAD_IDX).long()
-        outputs = self.canine(input_ids=x, attention_mask=attention_mask)
-        last_hidden = outputs.last_hidden_state
-
-        mean = self._masked_mean(last_hidden, attention_mask, dim=1)
-        mx   = self._masked_max(last_hidden, attention_mask, dim=1)
-        pooled = torch.cat([mean, mx], dim=-1)
-
-        pooled = self.layer_norm(pooled)
-        pooled = self.dropout(pooled)
-        return self.classifier(pooled)
-
-
-def cargar_modelo(ruta_modelo: str, nombre_modelo: str = "google/canine-s") -> RoBERTaModel:
-    model = RoBERTaModel(nombre_modelo=nombre_modelo)
-    if not os.path.isfile(ruta_modelo):
-        raise FileNotFoundError(f"Checkpoint del modelo no encontrado: {ruta_modelo}")
-    state = torch.load(ruta_modelo, map_location="cpu", weights_only=False)
-    if isinstance(state, dict) and not any(k.startswith("canine.") for k in state.keys()):
-        for key in ("model", "state_dict", "module", "model_state_dict"):
-            if key in state:
-                state = state[key]
-                break
-    missing, unexpected = model.load_state_dict(state, strict=False)
-
-    # Abortar si la cabeza clasificadora no viene en el checkpoint — ver
-    # comentario identico en export_onnx.py::cargar_modelo.
-    cabeza_faltante = [k for k in missing if k.startswith(("layer_norm.", "classifier."))]
-    if cabeza_faltante:
-        raise RuntimeError(
-            f"El checkpoint no contiene los pesos de la cabeza clasificadora "
-            f"({len(cabeza_faltante)} claves, ej. {cabeza_faltante[:3]})."
-        )
-    if any(k.startswith("clasificador.") for k in unexpected):
-        raise RuntimeError(
-            "El checkpoint usa el nombre de head 'clasificador' pero este "
-            "script espera 'classifier'. Reentrenar con train_canine_s.py actual."
-        )
-    model.eval()
-    return model
-
 
 # ---------------------------------------------------------------------------
 # Funciones auxiliares de cuantización
@@ -397,7 +328,8 @@ def main() -> None:
     if not args.force_onnx:
         print("[INFO] Cargando modelo PyTorch para la ruta ai-edge-torch ...")
         try:
-            model = cargar_modelo(args.ruta_modelo, nombre_modelo=args.nombre_modelo)
+            modelo_base = RoBERTaModel(nombre_modelo=args.nombre_modelo)
+            model = cargar_modelo(args.ruta_modelo, modelo_base)
             success = convert_with_ai_edge_torch(
                 model, args.ruta_salida, args.max_len, args.quantize
             )
