@@ -59,7 +59,13 @@ interface PendingOpDao {
      * atomicidad ha sido provista por el ``withTransaction`` del Repo en
      * C-04.
      */
-    @Query("SELECT id FROM pending_ops WHERE fallida = 0 ORDER BY creadoEnMillis ASC LIMIT 1")
+    // SUS-5 fix: desempate por id — si el reloj retrocede (NTP) entre el
+    // CREATE y el DELETE de la misma fila, el DELETE quedaba primero por
+    // creadoEnMillis y resucitaba la fila server-side tras el CREATE.
+    @Query(
+        "SELECT id FROM pending_ops WHERE fallida = 0 " +
+            "ORDER BY creadoEnMillis ASC, id ASC LIMIT 1"
+    )
     suspend fun minPendingId(): Long?
 
     /**

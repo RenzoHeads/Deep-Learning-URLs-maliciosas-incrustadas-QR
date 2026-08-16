@@ -83,7 +83,9 @@ class RepositorioEscaneos(
      * `urlLimpia`. Usado por [DetalleUrlViewModel].
      */
     suspend fun esUltimaVersion(id: String): Boolean = withContext(ioDispatcher) {
-        val escaneo = db.escaneoDao().obtenerPorId(id) ?: return@withContext true
+        // SUS-6 fix: fila inexistente devolvia true y habilitaba acciones
+        // (re-escanear/abrir) sobre un escaneo ya eliminado por sync.
+        val escaneo = db.escaneoDao().obtenerPorId(id) ?: return@withContext false
         db.escaneoDao().esUltimaVersion(escaneo.urlLimpia, escaneo.creadoEnMillis, id)
     }
 

@@ -12,11 +12,15 @@ import com.qrsecurity.detector.datos.local.dao.PendingOpDao
 import com.qrsecurity.detector.datos.local.entidades.PendingOpEntity
 import com.qrsecurity.detector.datos.repositorios.RepositorioEscaneos
 import com.qrsecurity.detector.datos.repositorios.RepositorioUrlsBloqueadas
+import com.qrsecurity.detector.datos.repositorios.ExcepcionAuthPush
 import com.qrsecurity.detector.datos.repositorios.procesarPendingOp
+import com.qrsecurity.detector.sesion.LogoutCoordinator
 import com.qrsecurity.detector.sesion.SesionUsuario
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.withContext
 
 /**
  * Worker que ejecuta una ronda completa de sincronizacion offline-first.
@@ -42,7 +46,8 @@ class SyncWorker @AssistedInject constructor(
     internal val db: BaseDatosSeguridad,
     private val backend: ClienteBackend,
     internal val repoEscaneos: RepositorioEscaneos,
-    internal val repoUrls: RepositorioUrlsBloqueadas
+    internal val repoUrls: RepositorioUrlsBloqueadas,
+    private val logoutCoordinator: LogoutCoordinator
 ) : CoroutineWorker(appContext, params) {
 
     /**
@@ -87,7 +92,10 @@ class SyncWorker @AssistedInject constructor(
         val hayPendingOps = pendingDao.minPendingId() != null
         val ultimoSyncMs = syncPrefs.getLong(KEY_ULTIMO_SYNC, 0L)
         val syncReciente = (System.currentTimeMillis() - ultimoSyncMs) / 1000L < MIN_INTERVALO_SEGUNDOS
-        val modoSync = decidirModoSync(hayPendingOps, initialSyncCompleted, syncReciente)
+        // S5 fix: ventana larga que gobierna SOLO_PUSH — si el ultimo sync
+        // es mas viejo que esto, los pending_ops NO justifican omitir el PULL.
+        val pullReciente = (System.currentTimeMillis() - ultimoSyncMs) / 1000L < VENTANA_SOLO_PUSH_SEGUNDOS
+        val modoSync = decidirModoSync(hayPendingOps, initialSyncCompleted, syncReciente, pullReciente)
 
         if (modoSync == SyncMode.OMITIR) {
             Log.d(TAG, "doWork() skip: sin pending ops y sync reciente → Result.success()")
@@ -105,12 +113,20 @@ class SyncWorker @AssistedInject constructor(
             // a un full pull paginado. Subsequent syncs usan el cursor persistido.
             val estado = procesarDeltaPulls(token)
             if (estado is EstadoPulls.ErrorAuth) {
-                // WAVE 16 fix (S5 CRITICAL): 401/403 en PULL → token expirado/invalido.
-                // Cerrar sesion (limpia token; preserva pending_ops en Room para que
-                // el re-login los empuje) y devolver Result.failure() para frenar
-                // el worker.
-                Log.w(TAG, "doWork() 401/403 en PULL → cerrarSesion + Result.failure()")
-                sesionUsuario.cerrarSesion()
+                // WAVE 16 fix (S5 CRITICAL) + S3 fix: 401/403 en PULL → token
+                // expirado/invalido. Logout COMPLETO via [LogoutCoordinator.logout]
+                // (cancela workers, clearAllTables, resetea prefs de sync, limpia
+                // caches, cierra sesion) — el logout debil (solo token) dejaba la
+                // DB y los pending_ops del usuario A intactos y el SyncWorker los
+                // pusheaba a la cuenta del usuario B tras el re-login (cruce de
+                // identidad, Bug H7). Los pending_ops se PURGAN deliberadamente:
+                // la proteccion de identidad prima sobre conservar los writes.
+                // NonCancellable: logout cancela el propio worker (cancelarTodo);
+                // sin esto la corutina abortaria a mitad del logout.
+                Log.w(TAG, "doWork() 401/403 en PULL → logout completo + Result.failure()")
+                withContext(NonCancellable) {
+                    logoutCoordinator.logout()
+                }
                 return Result.failure()
             }
             if (isStopped) {
@@ -120,6 +136,17 @@ class SyncWorker @AssistedInject constructor(
             estado
         }
 
+        // S1 fix: PULL con error permanente (4xx!=401/403/429, 3xx) → NO
+        // escribir ninguna pref de sync (ni KEY_ULTIMO_SYNC ni
+        // KEY_INITIAL_SYNC_COMPLETED) y abortar con Result.failure() sin
+        // ejecutar el PUSH. Antes el estado quedaba en Ok y el worker marcaba
+        // initial_sync_completed=true con el pull fallido — la app nunca
+        // volvia a intentar pull (los runs posteriores repitian el flujo).
+        if (estadoPulls is EstadoPulls.ErrorPermanente) {
+            Log.w(TAG, "doWork() PULL con error permanente → sin escribir prefs + Result.failure()")
+            return Result.failure()
+        }
+
         // ── 5. PUSH pending_ops (outbox) — despues del PULL ──
         val repoEscaneosFn: suspend (PendingOpEntity) -> Boolean = { op -> repoEscaneos.procesarPendingOp(op, token) }
         val repoUrlsFn: suspend (PendingOpEntity) -> Boolean = { op -> repoUrls.procesarPendingOp(op, token) }
@@ -127,7 +154,21 @@ class SyncWorker @AssistedInject constructor(
             PendingOpEntity.TABLA_ESCANEOS to repoEscaneosFn,
             PendingOpEntity.TABLA_URLS_BLOQUEADAS to repoUrlsFn
         )
-        val errorPush = procesarPendingOps(pendingDao, repos, workerStartMs)
+        // S7 fix: un 401/403 en el PUSH (token expirado, tipico en modo
+        // SOLO_PUSH donde el PULL no corre y no detecta el 401 antes) sube
+        // como [ExcepcionAuthPush] desde ProcesadorPendingOps. Logout completo
+        // (mismo LogoutCoordinator del S3) + Result.failure() — antes caia en
+        // Retry, reintentaba 10 veces y marcarFallida descartaba los writes
+        // del usuario silenciosamente sin re-auth. El op NO se marca fallida.
+        val errorPush = try {
+            procesarPendingOps(pendingDao, repos, workerStartMs)
+        } catch (e: ExcepcionAuthPush) {
+            Log.w(TAG, "doWork() ${e.codigo} en PUSH → logout completo + Result.failure()")
+            withContext(NonCancellable) {
+                logoutCoordinator.logout()
+            }
+            return Result.failure()
+        }
 
         if (estadoPulls is EstadoPulls.ErrorTransitorio || errorPush) {
             Log.w(TAG, "doWork() error transitorio o push fallido → Result.retry()")
@@ -188,6 +229,15 @@ class SyncWorker @AssistedInject constructor(
          * (bloquear, desbloquear, navegar) sin generar 4 GETs por cada una.
          */
         private const val MIN_INTERVALO_SEGUNDOS = 30L
+
+        /**
+         * S5 fix (SOLO_PUSH starvation) — maximo de segundos desde el ultimo
+         * sync para seguir omitiendo el PULL cuando SOLO hay pending_ops.
+         * Pasados 5 min, el modo baja a PULL_Y_PUSH aunque haya ops: sin esta
+         * ventana, un flujo continuo de writes (o un op que reintenta tras
+         * error transitorio) privaba el PULL por tiempo indefinido.
+         */
+        internal const val VENTANA_SOLO_PUSH_SEGUNDOS = 300L
 
         /**
          * Fix #4 — Bandera que indica si el primer full pull ya se completo.

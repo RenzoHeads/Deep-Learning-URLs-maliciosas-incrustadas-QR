@@ -15,6 +15,14 @@ import java.util.UUID
  * Bloquea una URL localmente. NO llama al backend.
  * Bug A3 fix: dedup por contenido (URL) en lugar de idLocal (UUID fresh).
  *
+ * S6 fix: el early-return por fila existente solo aplica cuando NO hay un
+ * DELETE pendiente para esa fila. Si el usuario desbloqueo X (DELETE encolado)
+ * y el PULL resucito la fila (dirty=0, DELETE aun en cola), el bloqueo nuevo
+ * debe CANCELAR ese DELETE y re-encolar un CREATE (fila dirty=1) — si no, el
+ * push dispararia el DELETE y el bloqueo del usuario se perderia en ambos
+ * lados (obtenerPorUrl no excluye filas con DELETE pendiente, a diferencia
+ * de observarTodos).
+ *
  * @return el id local (nuevo o existente si ya estaba bloqueada).
  */
 suspend fun RepositorioUrlsBloqueadas.bloquearLocal(
@@ -24,6 +32,38 @@ suspend fun RepositorioUrlsBloqueadas.bloquearLocal(
     db.withTransaction {
         val filaExistente = db.urlBloqueadaDao().obtenerPorUrl(url)
         if (filaExistente != null) {
+            // S6 fix: cancelar el DELETE pendiente (si hay) y re-encolar un
+            // CREATE con la fila revivida (dirty=1) — el push re-crea el
+            // bloqueo en el servidor en vez de borrarlo.
+            val opDelete = db.pendingOpDao().findExisting(
+                tabla = PendingOpEntity.TABLA_URLS_BLOQUEADAS,
+                idLocal = filaExistente.id,
+                tipoOperacion = PendingOpEntity.OP_DELETE
+            )
+            if (opDelete == null) {
+                return@withTransaction filaExistente.id
+            }
+            db.pendingOpDao().borrarPorId(opDelete.id)
+
+            val ahora = System.currentTimeMillis()
+            val revivida = filaExistente.copy(
+                razon = razon ?: filaExistente.razon,
+                dirty = true,
+                syncedAtMillis = null
+            )
+            val payloadRevivida = json.encodeToString(
+                UrlBloqueadaEntity.serializer(), revivida
+            )
+            db.urlBloqueadaDao().insertar(revivida)
+            db.pendingOpDao().insertar(
+                PendingOpEntity(
+                    tabla = PendingOpEntity.TABLA_URLS_BLOQUEADAS,
+                    tipoOperacion = PendingOpEntity.OP_CREATE,
+                    idLocal = filaExistente.id,
+                    payloadJson = payloadRevivida,
+                    creadoEnMillis = ahora
+                )
+            )
             return@withTransaction filaExistente.id
         }
 

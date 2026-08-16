@@ -32,6 +32,9 @@ internal suspend fun SyncWorker.procesarDeltaPulls(token: String): EstadoPulls {
         limpiarHuerfanos = repoUrls::limpiarHuerfanos
     )
     if (estadoUrls is EstadoPulls.ErrorAuth) return estadoUrls
+    // S1 fix: error permanente en la primera tabla aborta antes de tirar el
+    // segundo PULL (no tiene sentido seguir con el backend rechazando).
+    if (estadoUrls is EstadoPulls.ErrorPermanente) return estadoUrls
 
     // 2. Escaneos — delta pull incremental con cursor.
     return procesarDeltaTabla(
@@ -107,9 +110,19 @@ private suspend fun SyncWorker.procesarDeltaTabla(
                 db.syncStateDao().resetCursor(tabla)
                 return EstadoPulls.ErrorTransitorio
             }
-            val mapeo = decidirResultadoPull(resultado.codigo, resultado.retryAfterSegundos)
-            if (mapeo is DecisionPull.Decision.Retry) {
-                estado = EstadoPulls.ErrorTransitorio
+            // S1 fix: cuando decidirResultadoPull devuelve Failure (4xx!=401/
+            // 403/429 y 3xx — ej. 400/404 fijo del backend), el estado debe
+            // pasar a ErrorPermanente. Antes quedaba en el Ok entrante y
+            // doWorkInternal escribia initial_sync_completed/ultimo_sync con
+            // el pull fallido — la app nunca volvia a intentar pull.
+            when (decidirResultadoPull(resultado.codigo, resultado.retryAfterSegundos)) {
+                is DecisionPull.Decision.Retry -> estado = EstadoPulls.ErrorTransitorio
+                is DecisionPull.Decision.Failure -> estado = EstadoPulls.ErrorPermanente
+                is DecisionPull.Decision.Success -> {
+                    // Caso teorico (2xx no-200): el repositorio ya habria
+                    // devuelto Exitoso — no cambia el estado.
+                    Log.d(SyncWorker.TAG, "procesarDeltaTabla($tabla): decision Success inesperada en Fallido")
+                }
             }
         }
     }

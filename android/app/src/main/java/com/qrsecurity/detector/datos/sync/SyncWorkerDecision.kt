@@ -19,22 +19,32 @@ internal enum class SyncMode {
  * ([SyncWorker.doWorkInternal]) haga match exhaustivo en vez de combinar 3
  * booleanos sueltos.
  *
- * - [ErrorAuth]: WAVE 16 fix (S5 CRITICAL) — 401/403 detectado en cualquier
- *   PULL → cerrar sesion (token invalido/expirado) y devolver
- *   `Result.failure()`. Los pending_ops se conservan en Room (no se purgan)
- *   para que el re-login los empuje con el token nuevo.
+ * - [ErrorAuth]: WAVE 16 fix (S5 CRITICAL) + S3 fix — 401/403 detectado en
+ *   cualquier PULL → logout completo via [LogoutCoordinator.logout] (token
+ *   invalido/expirado; clearAllTables + reset de prefs para evitar el cruce
+ *   de identidad del Bug H7) y `Result.failure()`. Los pending_ops se purgan
+ *   deliberadamente: la proteccion de identidad prima sobre conservar writes.
  * - [ErrorTransitorio]: error transitorio (5xx/429/sin-red) → `Result.retry()`.
+ * - [ErrorPermanente]: S1 fix — 4xx!=401/403/429 y 3xx (decidirResultadoPull
+ *   = Failure; ej. 400/404 fijo del backend) → el worker NO escribe ninguna
+ *   pref de sync (ni ultimo_sync ni initial_sync_completed) y devuelve
+ *   `Result.failure()`. Antes el estado quedaba en Ok entrante y el worker
+ *   marcaba initial_sync_completed=true con el pull fallido — la app nunca
+ *   volvia a intentar pull.
  * - [Ok]: pulls exitosos; [Ok.masPorSincronizar] true si alguna tabla aun
  *   tiene paginas pendientes — el SyncWorker NO marca
  *   initial_sync_completed=true mientras sea true.
  */
 internal sealed class EstadoPulls {
 
-    /** 401/403 — cerrar sesion y abortar con Result.failure(). */
+    /** 401/403 — logout completo y abort con Result.failure(). */
     object ErrorAuth : EstadoPulls()
 
     /** 5xx/429/sin red — Result.retry() con backoff. */
     object ErrorTransitorio : EstadoPulls()
+
+    /** S1 fix — 4xx!=401/403/429 y 3xx: permanente, sin escribir prefs. */
+    object ErrorPermanente : EstadoPulls()
 
     /** Pulls exitosos. */
     data class Ok(val masPorSincronizar: Boolean = false) : EstadoPulls()
@@ -42,9 +52,10 @@ internal sealed class EstadoPulls {
 
 /**
  * Combina el estado acumulado de un PULL de tabla con el resultado de la
- * siguiente: [ErrorAuth] y [ErrorTransitorio] son terminales (el consumer
- * aborta/reintenta antes de leer `masPorSincronizar`); [Ok] acumula el OR
- * de las banderas de paginacion pendiente.
+ * siguiente: [ErrorAuth], [ErrorTransitorio] y [ErrorPermanente] son
+ * terminales (el consumer aborta/reintenta antes de leer
+ * `masPorSincronizar`); [Ok] acumula el OR de las banderas de paginacion
+ * pendiente.
  */
 internal fun combinarEstadoPulls(
     actual: EstadoPulls,
@@ -52,15 +63,30 @@ internal fun combinarEstadoPulls(
 ): EstadoPulls = when (actual) {
     is EstadoPulls.ErrorAuth -> actual
     is EstadoPulls.ErrorTransitorio -> actual
+    is EstadoPulls.ErrorPermanente -> actual
     is EstadoPulls.Ok -> EstadoPulls.Ok(actual.masPorSincronizar || masPorSincronizar)
 }
 
+/**
+ * Decide el modo de sync del worker-run.
+ *
+ * S5 fix (SOLO_PUSH starvation): antes, `hayPendingOps && initialSyncCompleted`
+ * omitia el PULL SIEMPRE que hubiera ops — un flujo continuo de writes (o un
+ * op que reintenta tras error transitorio) privaba el PULL por tiempo
+ * indefinido. Ahora SOLO_PUSH exige ademas [pullReciente] (ultimo sync dentro
+ * de [SyncWorker.VENTANA_SOLO_PUSH_SEGUNDOS], 5 min); fuera de esa ventana se
+ * baja a PULL_Y_PUSH para refrescar el delta del servidor.
+ *
+ * [syncReciente] (ventana corta de [SyncWorker.MIN_INTERVALO_SEGUNDOS], 30s)
+ * solo gobierna OMITIR: sin ops y con sync muy reciente no hay nada que hacer.
+ */
 internal fun decidirModoSync(
     hayPendingOps: Boolean,
     initialSyncCompleted: Boolean,
-    syncReciente: Boolean
+    syncReciente: Boolean,
+    pullReciente: Boolean
 ): SyncMode = when {
-    hayPendingOps && initialSyncCompleted -> SyncMode.SOLO_PUSH
+    hayPendingOps && initialSyncCompleted && pullReciente -> SyncMode.SOLO_PUSH
     !hayPendingOps && syncReciente -> SyncMode.OMITIR
     else -> SyncMode.PULL_Y_PUSH
 }
@@ -196,7 +222,16 @@ object DecisionPush {
         object Success : Decision()
         /** Request invalido permanente (400) — marcar fallida para sacarlo de la cola. */
         object Failure : Decision()
-        /** Error transitorio (401/403/429/5xx/IOException) — reintentar con backoff. */
+        /**
+         * S7 fix — 401/403 (token expirado/invalido): el caller debe subir
+         * [ExcepcionAuthPush] para que el SyncWorker haga logout completo y
+         * devuelva Result.failure(). Antes caia en Retry: en modo SOLO_PUSH
+         * (pull omitido) un token expirado reintentaba 10 veces y los writes
+         * del usuario se descartaban silenciosamente (marcarFallida) sin
+         * re-auth.
+         */
+        object AuthError : Decision()
+        /** Error transitorio (429/5xx/IOException) — reintentar con backoff. */
         object Retry : Decision()
     }
 }
@@ -211,7 +246,10 @@ object DecisionPush {
  *    malformado, id_categoria inexistente, etc.) →
  *    [DecisionPush.Decision.Failure]. El caller debe marcar el op como
  *    `fallida` para sacarlo de la cola (sino entra en retry infinito).
- *  - **Otros** (401/403/404/429/5xx/IOException con `codigo=null`):
+ *  - **401 / 403 (auth)**: S7 fix → [DecisionPush.Decision.AuthError]. El
+ *    caller sube [ExcepcionAuthPush] y el SyncWorker responde con logout
+ *    completo + Result.failure() (no reintenta, no marca fallida).
+ *  - **Otros** (404/429/5xx/IOException con `codigo=null`):
  *    transitorio → [DecisionPush.Decision.Retry]. El caller devuelve
  *    `false` y el SyncWorker reintenta con backoff exponencial.
  *
@@ -227,6 +265,7 @@ fun decidirResultadoPushCreate(codigo: Int?): DecisionPush.Decision {
     return when (codigo) {
         409 -> DecisionPush.Decision.Success
         400 -> DecisionPush.Decision.Failure
+        401, 403 -> DecisionPush.Decision.AuthError
         else -> DecisionPush.Decision.Retry
     }
 }
@@ -237,7 +276,9 @@ fun decidirResultadoPushCreate(codigo: Int?): DecisionPush.Decision {
  *  - **404 (Not Found)**: servidor ya no tiene la fila → idempotente,
  *    [DecisionPush.Decision.Success]. El caller debe eliminar la fila local
  *    (pudo haber sido borrado por otro dispositivo) y sacar el op de la cola.
- *  - **Otros** (401/403/409/429/5xx/IOException con `codigo=null`):
+ *  - **401 / 403 (auth)**: S7 fix → [DecisionPush.Decision.AuthError] (mismo
+ *    tratamiento que en CREATE: logout completo en el SyncWorker).
+ *  - **Otros** (409/429/5xx/IOException con `codigo=null`):
  *    transitorio → [DecisionPush.Decision.Retry]. Reintenta con backoff.
  *
  * Notar que DELETE no tiene caso permanente (no `Failure`): un 400 en DELETE
@@ -251,6 +292,7 @@ fun decidirResultadoPushCreate(codigo: Int?): DecisionPush.Decision {
 fun decidirResultadoPushDelete(codigo: Int?): DecisionPush.Decision {
     return when (codigo) {
         404 -> DecisionPush.Decision.Success
+        401, 403 -> DecisionPush.Decision.AuthError
         else -> DecisionPush.Decision.Retry
     }
 }

@@ -75,4 +75,20 @@ private class TablaEscaneosOutbox(
 
     override suspend fun eliminarPorId(id: String) =
         db.escaneoDao().eliminarPorId(id)
+
+    /**
+     * R3 fix — espejo de [RepositorioEscaneosEscritura.eliminarLocal]: leer
+     * la fila ANTES del DELETE para obtener `urlLimpia` y reconciliar
+     * `urls_catalogo` en la misma transaccion del caller. Sin esto, la
+     * entrada del catalogo queda huerfana tras un 409/PK-collision y el
+     * dedup responde "URL ya escaneada" con historial vacio hasta el
+     * proximo PULL.
+     */
+    override suspend fun eliminarLocalConReconciliacion(id: String) {
+        val fila = db.escaneoDao().obtenerPorId(id)
+        db.escaneoDao().eliminarPorId(id)
+        if (fila != null) {
+            db.reconciliarUrlsCatalogo(fila.urlLimpia)
+        }
+    }
 }

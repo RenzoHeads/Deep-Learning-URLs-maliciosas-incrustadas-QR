@@ -17,6 +17,21 @@ import kotlinx.serialization.json.Json
 class RespuestaPushCreate(val id: String)
 
 /**
+ * S7 fix — 401/403 durante el PUSH de un pending_op: token expirado/invalido.
+ *
+ * La sube [ProcesadorPendingOps] cuando [decidirResultadoPushCreate] /
+ * [decidirResultadoPushDelete] devuelven [DecisionPush.Decision.AuthError];
+ * se propaga hasta [SyncWorker.doWorkInternal], que la traduce en logout
+ * completo (LogoutCoordinator) + Result.failure(). El op queda reclamado
+ * (intentos+1) pero NO marcado `fallida`.
+ *
+ * No es [kotlin.coroutines.cancellation.CancellationException] a proposito:
+ * el catch-all de Bug H3 rethrow-ea las de cancelacion y atraparia el resto.
+ */
+class ExcepcionAuthPush(val codigo: Int) :
+    RuntimeException("PUSH rechazado con $codigo (auth: token expirado o invalido)")
+
+/**
  * Fachada de una tabla sobre el outbox `pending_ops`.
  *
  * Captura TODO lo especifico de cada tabla (DAO, endpoint remoto,
@@ -44,6 +59,21 @@ internal interface TablaOutbox<E : Any> {
     suspend fun reKey(idViejo: String, idNuevo: String, ahora: Long): Int
     suspend fun marcarSincronizado(id: String, ahora: Long): Int
     suspend fun eliminarPorId(id: String)
+
+    /**
+     * R3 fix — elimina la fila local ejecutando la reconciliacion derivada
+     * que la tabla necesite (escaneos: `urls_catalogo`). Se usa cuando el
+     * PUSH elimina una fila VIVA local (409 en CREATE idempotente, o re-key
+     * con PK collision) — el DELETE offline normal reconcilia en su propio
+     * camino (ver [RepositorioEscaneosEscritura.eliminarLocal]).
+     *
+     * Debe llamarse DENTRO de la `db.withTransaction { }` del caller para
+     * que fila + reconciliacion sean atomicas. Default sin reconciliacion
+     * (tablas sin catalogo derivado, como urls_bloqueadas).
+     */
+    suspend fun eliminarLocalConReconciliacion(id: String) {
+        eliminarPorId(id)
+    }
 }
 
 /**
@@ -139,9 +169,10 @@ internal class ProcesadorPendingOps<E : Any>(
                 DecisionPush.Decision.Success -> {
                     // Bug A2 fix: el servidor ya tiene el row (bajo otro id);
                     // eliminar la fila local — el siguiente PULL hara
-                    // INSERT OR REPLACE.
+                    // INSERT OR REPLACE. R3 fix: via eliminarLocalConReconciliacion
+                    // para reconciliar urls_catalogo en la misma tx.
                     db.withTransaction {
-                        tabla.eliminarPorId(op.idLocal)
+                        tabla.eliminarLocalConReconciliacion(op.idLocal)
                         db.pendingOpDao().borrarPorId(op.id)
                     }
                     true
@@ -151,6 +182,11 @@ internal class ProcesadorPendingOps<E : Any>(
                     db.pendingOpDao().marcarFallida(op.id)
                     true
                 }
+                DecisionPush.Decision.AuthError -> {
+                    // S7 fix: 401/403 — subir al SyncWorker para logout
+                    // completo + Result.failure(). El op NO se marca fallida.
+                    throw ExcepcionAuthPush(e.codigo)
+                }
                 DecisionPush.Decision.Retry -> false
             }
         } catch (e: android.database.sqlite.SQLiteConstraintException) {
@@ -159,9 +195,10 @@ internal class ProcesadorPendingOps<E : Any>(
             // terminara). El UPDATE `reKey` viola la PK en vez de afectar 0
             // filas. Resolucion: eliminar la fila local (client UUID) y
             // borrar el op — el PULL ya inserto/reemplazara la fila con el
-            // id del servidor.
+            // id del servidor. R3 fix: via eliminarLocalConReconciliacion
+            // para reconciliar urls_catalogo en la misma tx.
             db.withTransaction {
-                tabla.eliminarPorId(op.idLocal)
+                tabla.eliminarLocalConReconciliacion(op.idLocal)
                 db.pendingOpDao().borrarPorId(op.id)
             }
             true
@@ -194,6 +231,11 @@ internal class ProcesadorPendingOps<E : Any>(
                 }
                 // DELETE no tiene caso permanente.
                 DecisionPush.Decision.Failure, DecisionPush.Decision.Retry -> false
+                DecisionPush.Decision.AuthError -> {
+                    // S7 fix: 401/403 — subir al SyncWorker para logout
+                    // completo + Result.failure(). El op NO se marca fallida.
+                    throw ExcepcionAuthPush(e.codigo)
+                }
             }
         } catch (e: Exception) {
             if (e is kotlinx.coroutines.CancellationException) throw e

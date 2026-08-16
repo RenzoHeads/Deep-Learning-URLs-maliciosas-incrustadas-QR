@@ -91,13 +91,17 @@ interface EscaneoDao {
     /** Historial deduplicado: ultima version de cada URL (solo las que la
      *  ultima version es segura).
      *
-     *  D-1 rewrite: subquery escalar indexada; filtro `esMalicioso = 0` solo
-     *  en outer — la "última" fila por urlLimpia se determina sin importar
-     *  su nivelAlerta (igual que v7) y luego se aplica el filter. URLs cuya
+     *  D-1 rewrite: subquery escalar indexada; filtro en outer — la
+     *  "última" fila por urlLimpia se determina sin importar su
+     *  nivelAlerta (igual que v7) y luego se aplica el filter. URLs cuya
      *  última versión fue MALICIOSA se excluyen por completo del historial
-     *  de "seguras". */
+     *  de "seguras".
+     *  SUS-4 fix: filtra por `nivelAlerta = 'SEGURO'` (antes
+     *  `esMalicioso = 0`) — un nivelAlerta desconocido llegado del backend
+     *  dejaba esMalicioso=0 y la fila aparecia en la lista de "seguras"
+     *  pintada como SOSPECHOSA (fallback de UI). */
     @Query(
-        "SELECT e.* FROM escaneos e WHERE e.esMalicioso = 0 AND e.id = (" +
+        "SELECT e.* FROM escaneos e WHERE e.nivelAlerta = 'SEGURO' AND e.id = (" +
                 "SELECT e2.id FROM escaneos e2 " +
                 "WHERE e2.urlLimpia = e.urlLimpia " +
                 "AND e2.id NOT IN $IDS_SIN_DELETE_PENDIENTE" +

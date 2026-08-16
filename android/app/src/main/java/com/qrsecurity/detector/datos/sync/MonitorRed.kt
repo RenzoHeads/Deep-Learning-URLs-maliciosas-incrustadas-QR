@@ -12,8 +12,14 @@ import android.net.NetworkCapabilities
  * de operaciones de red.
  *
  * API 24+ (minSdk de la app). No usa Deprecated NETWORK_STATE_CHANGED_ACTION.
+ *
+ * `open` + [estaOnlineAhora] `open` — patron de testabilidad ya usado por
+ * [com.qrsecurity.detector.sesion.SesionUsuario] y [MediadorSincronizacion]:
+ * los tests del SyncWorker necesitan un fake que reporte red online porque
+ * Robolectric no provisiona una red VALIDATED y el preflight del worker
+ * abortaria con Result.retry() antes de ejercitar el flujo bajo test.
  */
-class MonitorRed(private val context: Context) {
+open class MonitorRed(private val context: Context) {
 
     private val connectivityManager: ConnectivityManager? =
         context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
@@ -30,7 +36,7 @@ class MonitorRed(private val context: Context) {
      * `estaOnlineAhora()` devuelve false → SyncWorker hace `Result.retry()`
      * (no dispara PUSH a un portal que devolveria 302/HTML-as-JSON).
      */
-    fun estaOnlineAhora(): Boolean {
+    open fun estaOnlineAhora(): Boolean {
         val cm = connectivityManager ?: return false
         val redActiva = cm.activeNetwork ?: return false
         val capabilities = cm.getNetworkCapabilities(redActiva) ?: return false

@@ -122,14 +122,21 @@ internal suspend fun <T> fetchDeltas(
             if (nuevoCursor == null) {
                 // Audit fix (cursor congelado): página llena cuya última fila
                 // no trae `updatedAt` — sin cursor nuevo, la siguiente run
-                // re-fetchea LA MISMA página para siempre. Cortamos aquí sin
-                // marcar masPorSincronizar (terminal) y avisamos; los datos
-                // no se corrompen (REPLACE idempotente).
+                // re-fetchea LA MISMA página para siempre. Cortamos aquí y
+                // avisamos; los datos no se corrompen (REPLACE idempotente).
+                //
+                // S4 fix: además marcamos masPorSincronizar=true para que
+                // `pullCompleto=false` — con la marca en false, SyncWorker
+                // NO ejecuta limpiarHuerfanos con los idsServidor PARCIALES
+                // de las páginas ya fetcheadas (borraría filas locales
+                // dirty=0 que viven en páginas nunca traídas).
                 android.util.Log.w(
                     "SyncHelpers",
                     "fetchDeltas: página llena sin updatedAt en la última fila — " +
-                        "cursor no puede avanzar, sync detenido para esta tabla"
+                        "cursor no puede avanzar, sync detenido para esta tabla " +
+                        "(pullCompleto=false, quedan páginas sin sincronizar)"
                 )
+                masPorSincronizar = true
                 break
             }
             cursorActual = nuevoCursor
@@ -256,14 +263,25 @@ internal suspend fun BaseDatosSeguridad.eliminarFilaDirty(
         if (opCreate != null) pendingOpDao().borrarPorId(opCreate.id)
         eliminarRow()
     } else {
-        val op = PendingOpEntity(
-            tabla = tabla,
-            tipoOperacion = PendingOpEntity.OP_DELETE,
-            idLocal = idLocal,
-            payloadJson = null,
-            creadoEnMillis = System.currentTimeMillis()
+        // S8 fix: dedup del DELETE — si ya hay un op DELETE identico en la
+        // cola (dos callers eliminaron la misma fila synced antes de que el
+        // primero la borrara, o cascada + delete manual en la misma tx), no
+        // insertar un segundo. Sin esto el SyncWorker pushea el DELETE dos
+        // veces al backend.
+        val opDeleteExistente = pendingOpDao().findExisting(
+            tabla = tabla, idLocal = idLocal, tipoOperacion = PendingOpEntity.OP_DELETE
         )
         eliminarRow()
-        pendingOpDao().insertar(op)
+        if (opDeleteExistente == null) {
+            pendingOpDao().insertar(
+                PendingOpEntity(
+                    tabla = tabla,
+                    tipoOperacion = PendingOpEntity.OP_DELETE,
+                    idLocal = idLocal,
+                    payloadJson = null,
+                    creadoEnMillis = System.currentTimeMillis()
+                )
+            )
+        }
     }
 }
