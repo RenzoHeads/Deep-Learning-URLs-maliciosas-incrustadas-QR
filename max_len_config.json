@@ -1,0 +1,13 @@
+{
+  "MAX_LEN_regionalizado": 150,
+  "MAX_LEN_generico": 150,
+  "percentil_95_regionalizado": 101,
+  "percentil_95_combinado": 101,
+  "percentil_99_combinado": 220,
+  "longitud_max_absoluta": 3977,
+  "percentil_usado": 95,
+  "minimo_fijo": 150,
+  "maximo_techo": 1024,
+  "note": "Referencia del pipeline Transformer (notebooks). El modelo on-device real es el LSTM char-level (android/app/src/main/assets/ml/model_metadata.json, max_len=100).",
+  "notebook_reference": "Transformer v2.ipynb cell 4: MAX_LEN = int(np.percentile(lengths, 95)), max(MAX_LEN, 150), min(MAX_LEN, 1024)"
+}

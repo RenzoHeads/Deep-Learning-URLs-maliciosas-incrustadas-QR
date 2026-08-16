@@ -1,0 +1,29 @@
+# Requirements para el pipeline de entrenamiento y exportacion
+# Instalar en Google Colab con GPU A100 80GB
+
+# Core ML
+torch>=2.1.0
+transformers>=4.36.0
+optuna>=3.5.0
+
+# Data & Metrics
+pandas>=2.0.0
+numpy>=1.24.0
+scikit-learn>=1.3.0
+matplotlib>=3.8.0
+
+# Export PyTorch -> ONNX -> TFLite
+onnx>=1.15.0
+onnxruntime>=1.16.0
+ai-edge-torch>=0.1.0          # Google's PyTorch -> TFLite (preferido)
+# Alternativa si ai-edge-torch falla:
+# onnx2tf>=1.7.0
+# tf2onnx>=1.14.0
+# tensorflow>=2.14.0
+
+# TFLite (para validacion local)
+# tflite-runtime>=2.14.0      # Instalado via pip en Colab
+
+# Utility
+tqdm>=4.66.0
+seaborn>=0.12.0

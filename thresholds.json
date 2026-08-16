@@ -1,0 +1,11 @@
+{
+  "threshold_low": 0.3,
+  "threshold_high": 0.7,
+  "mapping": {
+    "prob < 0.3": "SEGURO (verde)",
+    "0.3 <= prob < 0.7": "SOSPECHOSO (amarillo)",
+    "prob >= 0.7": "MALICIOSO (rojo)"
+  },
+  "note": "Valores iniciales. Deben calibrarse en Fase 6 con el set de validacion usando calibrate_thresholds.py. Objetivo: maximizar F1 y minimizar falsos negativos.",
+  "notebook_reference": "El notebook usa threshold 0.5 para clasificacion binaria. Los dos thresholds adicionales (0.3 y 0.7) son para la UI de tres estados de la app movil."
+}
