@@ -20,6 +20,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import kotlinx.serialization.json.Json
@@ -157,6 +158,38 @@ class DatosTabsViewModelTest {
     }
 
     @Test
+    fun historialUiState_emiteInmediatoSinEsperarMedianoche() = runTest(testDispatcher) {
+        subscribirTodos()
+        db.escaneoDao().insertar(
+            EscaneoEntity(
+                id = "esc-ui-1",
+                urlOriginal = "https://ui.example.com",
+                urlLimpia = "ui.example.com",
+                probabilidad = 0.5f,
+                nivelAlerta = "SOSPECHOSO",
+                delegado = null,
+                esMalicioso = false,
+                creadoEnMillis = System.currentTimeMillis(),
+                dirty = false,
+                syncedAtMillis = System.currentTimeMillis()
+            )
+        )
+        // Drena Room + dispatcher SIN avanzar el tiempo virtual: el ticker de
+        // medianoche tiene un delay de horas; si el combine depende de su
+        // primer emit, historialUiState queda congelado en el valor inicial
+        // (totalTodos=null) y el historial se pintaria vacio en la UI.
+        repeat(5) {
+            Thread.sleep(50)
+            runCurrent()
+        }
+        runCurrent()
+
+        val estado = viewModel.historialUiState.value
+        assertEquals("historialUiState debe emitir totalTodos sin esperar a medianoche", 1, estado.totalTodos)
+        assertEquals(1, estado.grupos.sumOf { it.escaneos.size })
+    }
+
+    @Test
     fun urlsBloqueadas_emiteTrasInsert() = runTest(testDispatcher) {
         subscribirTodos()
         val ahora = System.currentTimeMillis()
@@ -225,5 +258,51 @@ class DatosTabsViewModelTest {
         )
 
         assertEquals(listOf("evil-1"), result.map { it.id })
+    }
+
+    @Test
+    fun agruparHistorial_fechasFuturasVanAlGrupoHoy() {
+        // Fechas-futuras fix: un creadoEnMillis futuro (reloj del device
+        // atrasado contra el servidor) daba diasDeDiferencia negativo y la
+        // fila caia fuera de los 3 grupos — sumaba en totalTodos pero nunca
+        // se pintaba.
+        val ahora = System.currentTimeMillis()
+        val enUnaHora = ahora + 3_600_000L
+        val haceTresDias = ahora - 3L * 24 * 3_600_000L
+        val entidades = listOf(
+            EscaneoEntity(
+                id = "futuro",
+                urlOriginal = "https://futuro.example.com",
+                urlLimpia = "futuro.example.com",
+                probabilidad = 0.5f,
+                nivelAlerta = "SOSPECHOSO",
+                delegado = null,
+                esMalicioso = false,
+                creadoEnMillis = enUnaHora,
+                dirty = false,
+                syncedAtMillis = enUnaHora
+            ),
+            EscaneoEntity(
+                id = "viejo",
+                urlOriginal = "https://viejo.example.com",
+                urlLimpia = "viejo.example.com",
+                probabilidad = 0.1f,
+                nivelAlerta = "SEGURO",
+                delegado = null,
+                esMalicioso = false,
+                creadoEnMillis = haceTresDias,
+                dirty = false,
+                syncedAtMillis = haceTresDias
+            )
+        )
+
+        val grupos = agruparHistorialPorFecha(entidades, ahora = ahora)
+
+        assertEquals(listOf("Hoy", "Anteriores"), grupos.map { it.titulo })
+        assertEquals(
+            "La fila con fecha futura debe pintarse en Hoy",
+            listOf("futuro"),
+            grupos.first { it.titulo == "Hoy" }.escaneos.map { it.id }
+        )
     }
 }

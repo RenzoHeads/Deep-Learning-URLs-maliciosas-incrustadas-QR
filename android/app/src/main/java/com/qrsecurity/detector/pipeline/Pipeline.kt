@@ -202,18 +202,18 @@ class Pipeline @Inject constructor(
                         }
                     }
                 }
-            } catch (e: Exception) {
+            } catch (t: Throwable) {
                 // Bug H3 (aplicado en Pipeline tambien): rethrow CancellationException
                 // para no ejecutar side effects en corutina cancelada.
-                if (e is kotlinx.coroutines.CancellationException) throw e
-                // Bug A4 fix: antes ``e.message ?: "Error desconocido"`` perdia
-                // el tipo de excepcion — un ``UnsatisfiedLinkError`` ("No implementation
-                // found for...") y un ``OutOfMemoryError`` ("Failed to allocate
-                // allocation...") aparecian ambos como strings opacos sin contexto
-                // para diagnosticar. Ahora conservamos el nombre de la clase de
-                // la excepcion (siempre available en JVM) junto con el mensaje.
-                val clase = e::class.simpleName ?: "Exception"
-                val msg = e.message?.takeIf { it.isNotBlank() } ?: "(sin mensaje)"
+                if (t is kotlinx.coroutines.CancellationException) throw t
+                // U4 fix: ``UnsatisfiedLinkError`` (JNI de TFLite con ABI
+                // faltante) y ``OutOfMemoryError`` extienden java.lang.Error,
+                // NO Exception — el catch anterior (Exception) los dejaba
+                // escapar del viewModelScope y crashaba el proceso, justo
+                // los casos que el Bug A4 decia manejar. Se conserva el
+                // nombre de la clase de la excepcion junto con el mensaje.
+                val clase = t::class.simpleName ?: "Throwable"
+                val msg = t.message?.takeIf { it.isNotBlank() } ?: "(sin mensaje)"
                 _estado.value = Estado.Error("$clase: $msg")
             }
         }

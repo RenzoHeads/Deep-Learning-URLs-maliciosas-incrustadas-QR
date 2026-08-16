@@ -176,10 +176,20 @@ class DetalleUrlViewModel @Inject constructor(
                                 // y el nuevo Flow emitira el escaneo con el
                                 // id correcto en <1ms.
                                 cargarEscaneo(nuevoId, yaTeniaCargado = true)
+                            } else {
+                                // U6: sin reescaneos vivos de la misma URL,
+                                // la fila fue eliminada de verdad (DELETE del
+                                // usuario o tombstone del pull). Preservar el
+                                // Cargado dejaba al usuario actuando (abrir/
+                                // bloquear/eliminar) sobre un escaneo
+                                // fantasma, y el cache re-inyectaba el dato
+                                // muerto en cada re-entrada al detalle.
+                                cacheDetalle.invalidar(id)
+                                cacheDetalle.invalidarPorUrlLimpia(
+                                    cargado.escaneo.urlLimpia
+                                )
+                                _uiState.value = DetalleUrlUiState.NoEncontrado
                             }
-                            // Si nuevoId == null (fila borrada en vuelo) o
-                            // nuevoId == id (no hubo reKey, caso raro),
-                            // preservar el ultimo Cargado.
                         }
                     }
                     return@collect

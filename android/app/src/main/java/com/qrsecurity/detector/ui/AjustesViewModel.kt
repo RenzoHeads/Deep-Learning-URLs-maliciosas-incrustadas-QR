@@ -83,7 +83,15 @@ class AjustesViewModel @Inject constructor(
         }
     }
 
+    private var cerrandoSesion = false
+
     private fun cerrarSesion() {
+        // U7: logout() tarda hasta ~3s (espera de WorkManager + clearAllTables);
+        // sin guard, un segundo tap lanzaba un logout() CONCURRENTE y dos
+        // eventos LogoutCompletado navegaban a LOGIN dos veces (pila
+        // [LOGIN, LOGIN] — el boton back "no hacia nada").
+        if (cerrandoSesion) return
+        cerrandoSesion = true
         viewModelScope.launch {
             // LogoutCoordinator.logout() hace la limpieza COMPLETA:
             // - sesionUsuario.cerrarSesion() (borra token)
@@ -96,7 +104,17 @@ class AjustesViewModel @Inject constructor(
             // completo (DB vacia + cursor reseteado -> backend envia todo el
             // historial). Antes solo se borraba el token, dejando cursores
             // avanzados que hacian que el backend respondiera "no hay cambios".
-            logoutCoordinator.logout()
+            try {
+                logoutCoordinator.logout()
+            } catch (e: Exception) {
+                // Si el logout falla (p.ej. SQLiteException por dos
+                // clearAllTables racing), rearmar el guard para permitir
+                // reintentar; sin evento de navegacion — la sesion pudo no
+                // limpiarse y navegar a LOGIN dejaria estado inconsistente.
+                cerrandoSesion = false
+                android.util.Log.e("AjustesViewModel", "logout fallo", e)
+                return@launch
+            }
             _eventos.send(AjustesEvento.LogoutCompletado)
         }
     }

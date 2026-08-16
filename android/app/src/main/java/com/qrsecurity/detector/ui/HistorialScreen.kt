@@ -19,14 +19,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Block
-import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SearchOff
 import androidx.compose.material.icons.filled.Sync
-import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -48,10 +44,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.qrsecurity.detector.datos.local.entidades.EscaneoEntity
 import com.qrsecurity.detector.ui.theme.CyberCyan
 import com.qrsecurity.detector.ui.theme.CyberFondo
 import com.qrsecurity.detector.ui.theme.CyberGlass
@@ -422,106 +416,3 @@ private fun ChipResumen(texto: String, colorPunto: Color) {
         )
     }
 }
-
-@Composable
-private fun FilaEscaneo(
-    escaneo: EscaneoEntity,
-    bloqueada: Boolean,
-    onVerDetalle: (String) -> Unit,
-    onMensaje: (TipoMensaje, String) -> Unit
-) {
-    // Audit fix D1: el mapeo nivel→(icono, color, etiqueta) usa
-    // [NivelAlerta] (single source of truth) en vez de literales crudos —
-    // el fallback ante un id desconocido también es consistente
-    // (SOSPECHOSO, fail-safe).
-    val nivel = escaneo.nivelAlertaEnum
-    val (icono, color) = when (nivel) {
-        NivelAlerta.SEGURO -> Icons.Filled.CheckCircle to nivel.color
-        NivelAlerta.SOSPECHOSO -> Icons.Filled.Warning to nivel.color
-        NivelAlerta.MALICIOSO -> Icons.Filled.Block to nivel.color
-    }
-    val etiqueta = if (bloqueada) {
-        "Bloqueada"
-    } else {
-        when (nivel) {
-            NivelAlerta.SEGURO -> "Segura"
-            NivelAlerta.SOSPECHOSO -> "Sospechosa"
-            NivelAlerta.MALICIOSO -> "Maliciosa"
-        }
-    }
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable {
-                if (bloqueada) onMensaje(TipoMensaje.INFO, "Abre el detalle para desbloquear esta URL")
-                onVerDetalle(escaneo.id)
-            }
-            .padding(horizontal = Espaciado.lg, vertical = Espaciado.md),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Espaciado.md)
-    ) {
-        // Status Tile
-        Box(
-            modifier = Modifier
-                .size(TamanosIcono.mediano)
-                .clip(CircleShape)
-                .background(color.copy(alpha = 0.15f)),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = icono,
-                contentDescription = etiqueta,
-                tint = color,
-                modifier = Modifier.size(TamanosIcono.estandar)
-            )
-        }
-        // Info
-        Column(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(Espaciado.xs)
-        ) {
-            Text(
-                text = escaneo.urlLimpia,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = CyberTextoPrincipal,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            Text(
-                text = etiqueta,
-                style = MaterialTheme.typography.labelSmall,
-                color = CyberTextoSecundario
-            )
-        }
-        // Time + Unlock Pill
-        Column(
-            horizontalAlignment = Alignment.End,
-            verticalArrangement = Arrangement.spacedBy(Espaciado.xs)
-        ) {
-            Text(
-                text = fechaRelativa(escaneo.creadoEnMillis),
-                style = MaterialTheme.typography.labelSmall,
-                color = CyberTextoSecundario
-            )
-            if (bloqueada) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(Espaciado.xs),
-                    modifier = Modifier
-                        .background(CyberGlassAlto, RoundedCornerShape(RadioBorde.sm))
-                        .padding(horizontal = Espaciado.sm, vertical = Espaciado.xs)
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.LockOpen,
-                        contentDescription = "Desbloquear",
-                        tint = CyberCyan,
-                        modifier = Modifier.size(14.dp)
-                    )
-                }
-            }
-        }
-    }
-}
-

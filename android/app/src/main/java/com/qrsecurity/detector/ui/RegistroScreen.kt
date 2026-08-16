@@ -123,37 +123,9 @@ fun PantallaRegistro(
         verticalArrangement = Arrangement.spacedBy(Espaciado.lg)
     ) {
         // ─── Brand Header ───
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Espaciado.md)
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(Espaciado.gigante)
-                    .clip(CircleShape)
-                    .background(PencilBrandMark),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Security,
-                    contentDescription = null,
-                    tint = CyberCyan,
-                    modifier = Modifier.size(TamanosIcono.estandar)
-                )
-            }
-            Column(verticalArrangement = Arrangement.spacedBy(Espaciado.xs)) {
-                Text(
-                    text = "SeguridadQR",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = CyberTextoPrincipal
-                )
-                Text(
-                    text = "Proteccion inteligente",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = CyberTextoSecundario
-                )
-            }
-        }
+        BrandHeader(
+            subtitulo = "Proteccion inteligente",
+        )
 
         // ─── Registration Intro ───
         Column(verticalArrangement = Arrangement.spacedBy(Espaciado.xs)) {
@@ -221,67 +193,28 @@ fun PantallaRegistro(
                 )
 
                 // Contrasena
-                OutlinedTextField(
+                CampoPassword(
                     value = password,
                     onValueChange = { password = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("contrasena") },
-                    leadingIcon = {
-                        Icon(
-                            imageVector = Icons.Filled.Lock,
-                            contentDescription = null,
-                            modifier = Modifier.size(TamanosIcono.estandar)
-                        )
-                    },
-                    trailingIcon = {
-                        IconButton(onClick = { mostrarPassword = !mostrarPassword }) {
-                            Icon(
-                                imageVector = if (mostrarPassword) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
-                                contentDescription = if (mostrarPassword) "Ocultar contrasena" else "Mostrar contrasena",
-                                modifier = Modifier.size(TamanosIcono.estandar)
-                            )
-                        }
-                    },
-                    visualTransformation = if (mostrarPassword) VisualTransformation.None else PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                    singleLine = true,
-                    shape = RoundedCornerShape(RadioBorde.md),
-                    colors = coloresCampoTexto()
+                    mostrarPassword = mostrarPassword,
+                    onTogglePassword = { mostrarPassword = !mostrarPassword },
                 )
 
                 // Confirmar contrasena
-                OutlinedTextField(
+                CampoPassword(
                     value = confirmarPassword,
                     onValueChange = { confirmarPassword = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("confirmar contrasena") },
-                    leadingIcon = {
-                        Icon(
-                            imageVector = Icons.Filled.Lock,
-                            contentDescription = null,
-                            modifier = Modifier.size(TamanosIcono.estandar)
-                        )
-                    },
-                    trailingIcon = {
-                        IconButton(onClick = { mostrarConfirmarPassword = !mostrarConfirmarPassword }) {
-                            Icon(
-                                imageVector = if (mostrarConfirmarPassword) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
-                                contentDescription = if (mostrarConfirmarPassword) "Ocultar contrasena" else "Mostrar contrasena",
-                                modifier = Modifier.size(TamanosIcono.estandar)
-                            )
-                        }
-                    },
-                    visualTransformation = if (mostrarConfirmarPassword) VisualTransformation.None else PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                    singleLine = true,
-                    shape = RoundedCornerShape(RadioBorde.md),
-                    colors = coloresCampoTexto()
+                    mostrarPassword = mostrarConfirmarPassword,
+                    onTogglePassword = { mostrarConfirmarPassword = !mostrarConfirmarPassword },
+                    placeholder = "confirmar contrasena",
                 )
             }
         }
 
         // ─── Registration Actions ───
-        Button(
+        BotonSubmit(
+            texto = "Crear cuenta",
+            procesando = uiState.procesando,
             onClick = {
                 viewModel.onAction(
                     RegistroAction.Registrar(
@@ -292,29 +225,7 @@ fun PantallaRegistro(
                     )
                 )
             },
-            enabled = !uiState.procesando,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(TamanosToque.boton),
-            shape = RoundedCornerShape(RadioBorde.lg),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = CyberCyan,
-                contentColor = CyberFondo
-            )
-        ) {
-            if (uiState.procesando) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(TamanosIcono.estandar),
-                    color = CyberFondo,
-                    strokeWidth = 2.dp
-                )
-            } else {
-                Text(
-                    text = "Crear cuenta",
-                    style = MaterialTheme.typography.labelLarge
-                )
-            }
-        }
+        )
 
         // Login link row
         Row(

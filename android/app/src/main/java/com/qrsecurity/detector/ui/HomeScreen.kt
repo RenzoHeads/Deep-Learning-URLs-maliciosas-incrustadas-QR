@@ -1,5 +1,13 @@
 package com.qrsecurity.detector.ui
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.graphics.Rect
+import android.net.Uri
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -36,6 +44,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -48,6 +57,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -55,6 +65,8 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.camera.view.PreviewView
+import androidx.core.content.ContextCompat
+import androidx.core.os.bundleOf
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -114,6 +126,54 @@ import com.qrsecurity.detector.ui.escaner.qrDentroDeReticulo
  * @param onEscanear Callback para navegar a la pantalla de analisis.
  * @param pipelineViewModel VM del pipeline (compartido a nivel NavGuardian).
  */
+/**
+ * Saver U1: sobrevive la deteccion a rotacion/process-death. El Bitmap
+ * [DeteccionQr.instantanea] no es saveable — se restaura null y la UI
+ * degrada al overlay sobre el preview en vivo (fallback ya documentado
+ * de la captura fallida). Sin este saver, al rotar con el modal "URL ya
+ * escaneada" abierto el estado se perdia: el modal desaparecia pero
+ * [Estado.UrlDuplicada] (singleton) seguia bloqueando el gate de
+ * deteccion para siempre — el escaner quedaba muerto hasta matar la app.
+ */
+private val DeteccionQrSaver: Saver<DeteccionQr?, android.os.Bundle> = Saver(
+    save = { deteccion ->
+        if (deteccion == null) {
+            // Bundle vacio = "sin deteccion": rememberSaveable exige un valor
+            // V no-null; la restauracion distingue por la ausencia del payload.
+            android.os.Bundle.EMPTY
+        } else {
+            bundleOf(
+                "payload" to deteccion.payload,
+                "left" to deteccion.boundingBox.left,
+                "top" to deteccion.boundingBox.top,
+                "right" to deteccion.boundingBox.right,
+                "bottom" to deteccion.boundingBox.bottom,
+                "ancho" to deteccion.anchoImagen,
+                "alto" to deteccion.altoImagen
+            )
+        }
+    },
+    restore = { bundle ->
+        val payload = bundle.getString("payload")
+        if (payload == null) {
+            null
+        } else {
+            DeteccionQr(
+                payload = payload,
+                boundingBox = Rect(
+                    bundle.getInt("left"),
+                    bundle.getInt("top"),
+                    bundle.getInt("right"),
+                    bundle.getInt("bottom")
+                ),
+                anchoImagen = bundle.getInt("ancho"),
+                altoImagen = bundle.getInt("alto"),
+                instantanea = null
+            )
+        }
+    }
+)
+
 @Composable
 fun PantallaHome(
     onEscanear: () -> Unit,
@@ -121,14 +181,45 @@ fun PantallaHome(
     onMensaje: (TipoMensaje, String) -> Unit = { _, _ -> }
 ) {
     val lifecycleOwner = LocalLifecycleOwner.current
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val analizando by pipelineViewModel.analizando.collectAsStateWithLifecycle()
     val estado by pipelineViewModel.estado.collectAsStateWithLifecycle()
 
     var moduloCamara by remember { mutableStateOf<ModuloCamara?>(null) }
     var yaNavegoAnalisis by rememberSaveable { mutableStateOf(false) }
-    var deteccionQr by remember { mutableStateOf<DeteccionQr?>(null) }
+    var deteccionQr by rememberSaveable(stateSaver = DeteccionQrSaver) {
+        mutableStateOf<DeteccionQr?>(null)
+    }
     var tamanoBox by remember { mutableStateOf(IntSize.Zero) }
+
+    // ── U5: permiso CAMERA en runtime — sin el, bindToLifecycle falla
+    //    silenciosamente y la pantalla queda muerta (fondo negro + reticulo
+    //    animado) sin dialogo ni boton. Se pide al entrar; si se revoca
+    //    desde Ajustes del sistema, ON_RESUME re-chequea. ──
+    var permisoCamara by rememberSaveable {
+        mutableStateOf(
+            ContextCompat.checkSelfPermission(
+                context, Manifest.permission.CAMERA
+            ) == PackageManager.PERMISSION_GRANTED
+        )
+    }
+    val launcherPermisoCamara = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { concedido -> permisoCamara = concedido }
+    LaunchedEffect(Unit) {
+        if (!permisoCamara) {
+            launcherPermisoCamara.launch(Manifest.permission.CAMERA)
+        }
+    }
+    fun abrirAjustesDeLaApp() {
+        context.startActivity(
+            Intent(
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.fromParts("package", context.packageName, null)
+            )
+        )
+    }
 
     // ── Navegacion a AnalisisScreen cuando inicia el analisis ──
     LaunchedEffect(analizando, estado) {
@@ -163,7 +254,40 @@ fun PantallaHome(
             deteccionQr = null
             moduloCamara?.reanudarDeteccion()
             pipelineViewModel.reiniciar()
-            onMensaje(TipoMensaje.INFO, "El QR no contiene una URL")
+            // U11: "url_demasiado_larga" decia "El QR no contiene una URL"
+            // aunque el payload SI era una URL — mensaje contradictorio.
+            val noUrl = e.resultado as ResultadoAnalisis.NoUrl
+            val mensaje = if (noUrl.tipoContenido == "url_demasiado_larga") {
+                "El QR contiene una URL demasiado larga (maximo 2048 caracteres)"
+            } else {
+                "El QR no contiene una URL"
+            }
+            onMensaje(TipoMensaje.INFO, mensaje)
+        }
+    }
+
+    // ── U3: Estado.Error sin manejo local dejaba el modal "Procesando..."
+    //    congelado y la camara pausada para siempre (el handler de Error
+    //    solo vivia en AnalisisScreen, pantalla a la que nunca se llego).
+    //    Igual que NoUrl: limpiar, reanudar, reiniciar y notificar. ──
+    LaunchedEffect(estado) {
+        val e = estado
+        if (e is Estado.Error && !analizando) {
+            deteccionQr = null
+            moduloCamara?.reanudarDeteccion()
+            pipelineViewModel.reiniciar()
+            onMensaje(TipoMensaje.ERROR, e.mensaje)
+        }
+    }
+
+    // ── U1 safety net: si Estado.UrlDuplicada queda huerfano (sin
+    //    deteccion visible y sin analisis en curso — p.ej. tras
+    //    process-death o un estado restaurado inconsistente), el gate de
+    //    deteccion lo bloquearia para siempre. Cancelarlo y reanudar. ──
+    LaunchedEffect(estado, deteccionQr, analizando) {
+        if (estado is Estado.UrlDuplicada && deteccionQr == null && !analizando) {
+            pipelineViewModel.cancelarReescaneo()
+            moduloCamara?.reanudarDeteccion()
         }
     }
 
@@ -180,7 +304,14 @@ fun PantallaHome(
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_RESUME -> moduloCamara?.iniciar()
+                Lifecycle.Event.ON_RESUME -> {
+                    // U5: el usuario pudo revocar el permiso desde Ajustes
+                    // del sistema mientras la app estaba en background.
+                    permisoCamara = ContextCompat.checkSelfPermission(
+                        context, Manifest.permission.CAMERA
+                    ) == PackageManager.PERMISSION_GRANTED
+                    if (permisoCamara) moduloCamara?.iniciar()
+                }
                 Lifecycle.Event.ON_PAUSE -> moduloCamara?.detener()
                 else -> Unit
             }
@@ -221,22 +352,59 @@ fun PantallaHome(
         // Aqui dejamos un callback vacio — el LaunchedEffect lo sobrescribe
         // en el mismo frame antes de que cualquier frame de la camara pueda
         // disparar un escaneo.
-        AndroidView(
-            factory = { ctx ->
-                PreviewView(ctx).also { previewView ->
-                    previewView.scaleType = PreviewView.ScaleType.FILL_CENTER
-                    val modulo = ModuloCamara(
-                        context = ctx,
-                        lifecycleOwner = lifecycleOwner,
-                        previewView = previewView,
-                        onQrDetectado = { /* set by LaunchedEffect above */ }
-                    )
-                    moduloCamara = modulo
-                    modulo.iniciar()
+        // U5: sin permiso concedido ni siquiera se compone el viewfinder —
+        // en su lugar, UI de concesion con reintentar y acceso a Ajustes.
+        if (permisoCamara) {
+            AndroidView(
+                factory = { ctx ->
+                    PreviewView(ctx).also { previewView ->
+                        previewView.scaleType = PreviewView.ScaleType.FILL_CENTER
+                        val modulo = ModuloCamara(
+                            context = ctx,
+                            lifecycleOwner = lifecycleOwner,
+                            previewView = previewView,
+                            onQrDetectado = { /* set by LaunchedEffect above */ }
+                        )
+                        moduloCamara = modulo
+                        modulo.iniciar()
+                    }
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(Espaciado.xl),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.QrCodeScanner,
+                    contentDescription = null,
+                    tint = CyberCyan,
+                    modifier = Modifier.size(48.dp)
+                )
+                Text(
+                    text = "La camara necesita permiso para escanear codigos QR",
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = CyberTextoPrincipal,
+                    modifier = Modifier.padding(vertical = Espaciado.md)
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(Espaciado.md)
+                ) {
+                    TextButton(onClick = {
+                        launcherPermisoCamara.launch(Manifest.permission.CAMERA)
+                    }) {
+                        Text("Otorgar permiso", color = CyberCyan)
+                    }
+                    TextButton(onClick = { abrirAjustesDeLaApp() }) {
+                        Text("Abrir ajustes", color = CyberTextoSecundario)
+                    }
                 }
-            },
-            modifier = Modifier.fillMaxSize()
-        )
+            }
+        }
 
         // ─── Frozen-frame snapshot (covers live preview while QR holds) ───
         // El [DeteccionQr.instantanea] es el Bitmap del frame EXACTO en el que
@@ -392,6 +560,17 @@ fun PantallaHome(
                             style = MaterialTheme.typography.bodySmall,
                             color = CyberTextoSecundario
                         )
+                    }
+                    // U8: el boton Cancelar solo existia en AnalisisScreen,
+                    // pantalla a la que no se llega mientras corre el dedup
+                    // de una URL nueva (hasta 60s con red colgada) — el
+                    // usuario quedaba atrapado mirando este modal.
+                    TextButton(onClick = {
+                        deteccionQr = null
+                        pipelineViewModel.cancelarReescaneo()
+                        moduloCamara?.reanudarDeteccion()
+                    }) {
+                        Text("Cancelar", color = CyberTextoSecundario)
                     }
                 }
             }

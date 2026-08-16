@@ -139,7 +139,7 @@ internal fun SeccionAcciones(
             // El `Modifier.weight(1f)` se aplica aqui porque weight es un
             // modificador de RowScope y la funcion extraida no tiene acceso
             // al scope del Row padre.
-            if (escaneo.nivelAlerta == "MALICIOSO") {
+            if (escaneo.nivelAlertaEnum == NivelAlerta.MALICIOSO) {
                 BotonToggleBloqueo(
                     modifier = Modifier.weight(1f),
                     bloqueada = estado.urlBloqueada,

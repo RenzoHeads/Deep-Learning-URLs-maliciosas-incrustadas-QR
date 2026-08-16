@@ -139,16 +139,11 @@ class LoginViewModel @Inject constructor(
                 _eventos.send(LoginEvento.Exito)
             } catch (e: ClienteBackend.HttpBackendException) {
                 _uiState.update { it.copy(procesando = false) }
-                _eventos.send(LoginEvento.Error(manejarErrorBackend(e.codigo, e.cuerpo, e.message)))
+                _eventos.send(LoginEvento.Error(manejarErrorAutenticacion(e.codigo, e.cuerpo, e.message, mapOf(401 to "Usuario o contrasena incorrectos."))))
             } catch (e: Exception) {
                 _uiState.update { it.copy(procesando = false) }
                 _eventos.send(LoginEvento.Error("No se pudo conectar al backend: ${e.message ?: "error desconocido"}"))
             }
         }
     }
-}
-
-private fun manejarErrorBackend(codigo: Int, cuerpo: String?, message: String?): String = when (codigo) {
-    401 -> "Usuario o contrasena incorrectos."
-    else -> "Error $codigo: ${cuerpo ?: message}"
 }

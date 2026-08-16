@@ -384,6 +384,10 @@ private fun NavGuardianRutas(
                     // el detalle stale del usuario anterior.
                     navController.navigate(Rutas.LOGIN) {
                         popUpTo(0) { inclusive = true }
+                        // U7: si el evento de logout llegara dos veces (o un
+                        // segundo logout culmina tras re-login), sin
+                        // launchSingleTop la pila quedaba [LOGIN, LOGIN].
+                        launchSingleTop = true
                     }
                 },
                 onMensaje = contexto.mostrarMensaje,

@@ -122,14 +122,16 @@ fun PantallaAnalisis(
                         // filtraba por URL y navegaba al escaneo mas reciente
                         // de OTRA URL, mostrando su veredicto como si fuera
                         // el resultado del QR recien escaneado.
-                        val idNavegacion = e.idLocal
-                            ?: historial.firstOrNull {
-                                it.urlLimpia == resultado.urlLimpia &&
-                                    it.urlOriginal == resultado.urlOriginal
-                            }?.id
-                            ?: historial.filter {
-                                it.urlLimpia == resultado.urlLimpia
-                            }.maxByOrNull { it.creadoEnMillis }?.id
+                        //
+                        // Refactor Fase 4 #5: la heuristica en cascada
+                        // (idLocal → match exacto → match parcial) se extrajo
+                        // a [resolverIdNavegacion] (funcion pura) para
+                        // habilitar testeo JVM sin instanciar Pipeline/Room.
+                        val idNavegacion = resolverIdNavegacion(
+                            idLocal = e.idLocal,
+                            resultado = resultado,
+                            historial = historial
+                        )
 
                         if (idNavegacion != null) {
                             if (resultado.nivelAlerta ==
@@ -149,7 +151,14 @@ fun PantallaAnalisis(
                         }
                     }
                     is ResultadoAnalisis.NoUrl -> {
-                        onMensaje(TipoMensaje.INFO, "El QR no contiene una URL")
+                        // U11: "url_demasiado_larga" decia "no contiene una
+                        // URL" aunque el payload SI era una URL.
+                        val mensaje = if (resultado.tipoContenido == "url_demasiado_larga") {
+                            "El QR contiene una URL demasiado larga (maximo 2048 caracteres)"
+                        } else {
+                            "El QR no contiene una URL"
+                        }
+                        onMensaje(TipoMensaje.INFO, mensaje)
                         pipelineViewModel.reiniciar()
                     }
                 }

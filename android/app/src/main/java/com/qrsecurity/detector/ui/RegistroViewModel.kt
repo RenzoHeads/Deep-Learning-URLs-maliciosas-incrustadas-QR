@@ -140,16 +140,11 @@ class RegistroViewModel @Inject constructor(
                 _eventos.send(RegistroEvento.Exito)
             } catch (e: ClienteBackend.HttpBackendException) {
                 _uiState.update { it.copy(procesando = false) }
-                _eventos.send(RegistroEvento.Error(manejarErrorRegistro(e.codigo, e.cuerpo, e.message)))
+                _eventos.send(RegistroEvento.Error(manejarErrorAutenticacion(e.codigo, e.cuerpo, e.message, mapOf(409 to "El usuario ya existe. Intenta con otro."))))
             } catch (e: Exception) {
                 _uiState.update { it.copy(procesando = false) }
                 _eventos.send(RegistroEvento.Error("No se pudo conectar al backend: ${e.message ?: "error desconocido"}"))
             }
         }
     }
-}
-
-private fun manejarErrorRegistro(codigo: Int, cuerpo: String?, message: String?): String = when (codigo) {
-    409 -> "El usuario ya existe. Intenta con otro."
-    else -> "Error $codigo: ${cuerpo ?: message}"
 }

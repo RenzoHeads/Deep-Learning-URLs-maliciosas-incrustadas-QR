@@ -76,7 +76,11 @@ internal fun agruparHistorialPorFecha(
     // Blocker 2 fix: delega a `diasDeDiferencia` (Fechas.kt) — antes existia
     // un gemelo `diasDeDiferenciaHistorial` aqui mismo con algoritmo identico;
     // el unico diferencial (seam `ahora`) ya esta absorbido en la firma canonica.
-    val hoy = ordenados.filter { diasDeDiferencia(it.creadoEnMillis, ahora) == 0L }
+    // Fechas-futuras fix: un creadoEnMillis FUTURO (reloj del device atrasado
+    // contra el servidor) daba diasDeDiferencia NEGATIVO y caia fuera de los
+    // 3 grupos — la fila sumaba en totalTodos pero nunca se pintaba.
+    // Incluirlo en "Hoy" (es lo mas reciente que el usuario ve).
+    val hoy = ordenados.filter { diasDeDiferencia(it.creadoEnMillis, ahora) <= 0L }
     val ayer = ordenados.filter { diasDeDiferencia(it.creadoEnMillis, ahora) == 1L }
     val anteriores = ordenados.filter { diasDeDiferencia(it.creadoEnMillis, ahora) >= 2L }
     return buildList {
@@ -168,11 +172,16 @@ class DatosTabsViewModel @Inject constructor(
      * Ticker que emite al pasar cada medianoche local (audit fix P6): los
      * grupos "Hoy/Ayer" se computan contra `System.currentTimeMillis()`,
      * pero el combine solo re-emite cuando cambian Room/filtro/busqueda.
-     * Sin este ticker, al pasar medianoche con la app abria los headers
+     * Sin este ticker, al pasar medianoche con la app abia los headers
      * quedaban stale hasta la proxima mutacion. El valor emitido es
      * irrelevante — solo fuerza el recomputo de [historialUiState].
      */
     private val medianocheTicker: kotlinx.coroutines.flow.Flow<Long> = flow {
+        // P6 fix: combine no emite hasta que TODAS las fuentes emiten al menos
+        // una vez; sin esta emision inicial inmediata, el primer valor del
+        // ticker llegaba recien en la proxima medianoche y [historialUiState]
+        // quedaba congelado en su valor inicial (historial "vacio" en la UI).
+        emit(System.currentTimeMillis())
         while (true) {
             val ahora = ZonedDateTime.now(ZoneId.systemDefault())
             val proximaMedianoche = ahora.toLocalDate().plusDays(1)

@@ -40,28 +40,34 @@ enum class NivelAlerta(
     /** Subtitulo del verdict card, debajo del gauge. */
     val subtituloAmenaza: String,
     /** Etiqueta corta usada en el chip del timeline de Analisis Anteriores. */
-    val etiquetaLineaTiempo: String
+    val etiquetaLineaTiempo: String,
+    /** Etiqueta de la fila del historial (Maliciosa ≠ "Bloqueada" del timeline:
+     *  aqui el flag urlBloqueada pinta su propia etiqueta aparte). */
+    val etiquetaHistorial: String
 ) {
     MALICIOSO(
         id = "MALICIOSO",
         color = CyberRojo,
         etiquetaAmenaza = "Amenaza alta",
         subtituloAmenaza = "Phishing · smishing activo",
-        etiquetaLineaTiempo = "Bloqueada"
+        etiquetaLineaTiempo = "Bloqueada",
+        etiquetaHistorial = "Maliciosa"
     ),
     SOSPECHOSO(
         id = "SOSPECHOSO",
         color = CyberAmbar,
         etiquetaAmenaza = "Amenaza moderada",
         subtituloAmenaza = "Patrón sospechoso detectado",
-        etiquetaLineaTiempo = "Sospechosa"
+        etiquetaLineaTiempo = "Sospechosa",
+        etiquetaHistorial = "Sospechosa"
     ),
     SEGURO(
         id = "SEGURO",
         color = CyberVerdeAlerta,
         etiquetaAmenaza = "Sin amenazas",
         subtituloAmenaza = "Análisis completado",
-        etiquetaLineaTiempo = "Segura"
+        etiquetaLineaTiempo = "Segura",
+        etiquetaHistorial = "Segura"
     );
 
     companion object {

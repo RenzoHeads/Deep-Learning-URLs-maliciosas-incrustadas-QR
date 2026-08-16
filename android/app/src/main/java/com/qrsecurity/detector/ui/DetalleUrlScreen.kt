@@ -17,6 +17,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -82,6 +83,35 @@ sealed interface ModalDetalleUrl {
     data object ConfirmarAbrirEnlace : ModalDetalleUrl
 }
 
+/**
+ * Saver para [ModalDetalleUrl]: los `data object` no son Bundle-saveables,
+ * por lo que [rememberSaveable] lanza `IllegalArgumentException` al
+ * intentar persistir el [MutableState] (crash FATAL en main al abrir Detalle
+ * tras escanear QR). Serializamos cada variante a su nombre estable.
+ */
+private val ModalDetalleUrlSaver: Saver<ModalDetalleUrl, String> = Saver(
+    save = { state ->
+        when (state) {
+            ModalDetalleUrl.Ninguno -> "Ninguno"
+            ModalDetalleUrl.ConfirmarDesbloqueo -> "ConfirmarDesbloqueo"
+            ModalDetalleUrl.OkDesbloqueo -> "OkDesbloqueo"
+            ModalDetalleUrl.ConfirmarBloqueo -> "ConfirmarBloqueo"
+            ModalDetalleUrl.EliminarUrl -> "EliminarUrl"
+            ModalDetalleUrl.ConfirmarAbrirEnlace -> "ConfirmarAbrirEnlace"
+        }
+    },
+    restore = { name ->
+        when (name) {
+            "ConfirmarDesbloqueo" -> ModalDetalleUrl.ConfirmarDesbloqueo
+            "OkDesbloqueo" -> ModalDetalleUrl.OkDesbloqueo
+            "ConfirmarBloqueo" -> ModalDetalleUrl.ConfirmarBloqueo
+            "EliminarUrl" -> ModalDetalleUrl.EliminarUrl
+            "ConfirmarAbrirEnlace" -> ModalDetalleUrl.ConfirmarAbrirEnlace
+            else -> ModalDetalleUrl.Ninguno
+        }
+    }
+)
+
 @Composable
 fun PantallaDetalleUrl(
     id: String,
@@ -97,14 +127,23 @@ fun PantallaDetalleUrl(
     // P1: estado del modal en un solo state tipado. Solo un modal activo por
     // vez. rememberSaveable (audit fix P1): sobrevive rotacion/process death
     // — antes un `remember` cerraba el modal abierto al rotar.
-    var modalActiva by rememberSaveable { mutableStateOf<ModalDetalleUrl>(ModalDetalleUrl.Ninguno) }
+    // Saver custom: los `data object` de [ModalDetalleUrl] NO son
+    // Bundle-saveables (crash FATAL IllegalArgumentException en main al
+    // entrar a DetalleUrl tras escanear QR). Usamos [ModalDetalleUrlSaver]
+    // para mapear cada variante a un String.
+    var modalActiva by rememberSaveable(stateSaver = ModalDetalleUrlSaver) {
+        mutableStateOf<ModalDetalleUrl>(ModalDetalleUrl.Ninguno)
+    }
 
     // Audit fix B5: bandera del desbloqueo pendiente. El modal de exito
     // (OkDesbloqueo) ya NO se muestra optimista al confirmar — se muestra
     // solo cuando el VM emite el mensaje EXITO de desbloqueo. Antes, si
     // desbloquearUrl fallaba, convivian el modal "URL desbloqueada" y el
     // snackbar "Error al desbloquear URL".
-    var desbloqueoPendiente by remember { mutableStateOf(false) }
+    // U9: rememberSaveable — con remember, una rotacion entre la
+    // confirmacion y el EXITO del VM reseteaba la bandera y el modal de
+    // exito nunca se abria (solo quedaba el snackbar).
+    var desbloqueoPendiente by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(id) { viewModel.cargarEscaneo(id) }
 
@@ -218,10 +257,13 @@ fun PantallaDetalleUrl(
         ModalDetalleUrl.ConfirmarAbrirEnlace -> {
             // Audit fix S1: advertencia en el momento de abrir una URL que
             // NO fue clasificada como SEGURO (y está desbloqueada).
+            // Refactor: cast unico `as? Cargado` — antes se repetia en el
+            // cuerpo del modal (linea 224) y en onConfirmar (linea 235).
+            val cargado = uiState as? DetalleUrlUiState.Cargado
             PlantillaModalConfirmacion(
                 titulo = "Abrir enlace de riesgo",
                 cuerpo = "Este enlace fue clasificado como " +
-                    ((uiState as? DetalleUrlUiState.Cargado)?.escaneo?.nivelAlertaEnum
+                    (cargado?.escaneo?.nivelAlertaEnum
                         ?: NivelAlerta.SOSPECHOSO).etiquetaAmenaza.lowercase() +
                     ". Ábrelo solo si confías en la fuente.",
                 consecuencias = listOf(
@@ -232,7 +274,6 @@ fun PantallaDetalleUrl(
                 colorBoton = CyberRojo,
                 onConfirmar = {
                     modalActiva = ModalDetalleUrl.Ninguno
-                    val cargado = uiState as? DetalleUrlUiState.Cargado
                     val url = cargado?.let {
                         urlParaAbrir(it.escaneo.urlOriginal, it.escaneo.urlLimpia)
                     }

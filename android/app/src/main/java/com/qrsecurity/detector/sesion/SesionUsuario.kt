@@ -65,21 +65,34 @@ open class SesionUsuario @Inject constructor(
             // Double-check tras adquirir el lock — otro hilo pudo haber
             // inicializado prefsCache mientras este esperaba.
             prefsCache?.let { return it }
-            // MasterKey.Builder usa el Keystore; si el dispositivo no soporta
-            // Keystore (API < 23) fallaria, pero minSdk = 26 asi que siempre OK.
-            val masterKey = MasterKey.Builder(context)
-                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-                .build()
-            val instance = EncryptedSharedPreferences.create(
-                context,
-                PREFS,
-                masterKey,
-                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-            )
+            val instance = crearPrefs()
             prefsCache = instance
             return instance
         }
+    }
+
+    /**
+     * Construccion cruda de EncryptedSharedPreferences (Keystore + crypto).
+     *
+     * U2: punto unico de fallo permanente extraido como seam — el Keystore
+     * puede corromperse (backup-restore, dispositivos con firmware roto) y
+     * lanzar GeneralSecurityException/IOException en CADA intento. Los
+     * callers publicos ([precargar], [estaLogueado]) degradan a "no
+     * logueado" en vez de propagar la excepcion; open para tests.
+     */
+    protected open fun crearPrefs(): SharedPreferences {
+        // MasterKey.Builder usa el Keystore; si el dispositivo no soporta
+        // Keystore (API < 23) fallaria, pero minSdk = 26 asi que siempre OK.
+        val masterKey = MasterKey.Builder(context)
+            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+            .build()
+        return EncryptedSharedPreferences.create(
+            context,
+            PREFS,
+            masterKey,
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+        )
     }
 
     /**
@@ -94,22 +107,37 @@ open class SesionUsuario @Inject constructor(
      * [prefsLock]. Llamarlo desde cualquier dispatcher es seguro.
      */
     open fun precargar() {
-        prefs()
-        // Bug 3 (pieza a): resolver el estado tri-state con el valor real del
-        // disco en el primer acceso — precargar() se llama desde
-        // AppSeguridadQR.onCreate en background. Mientras el valor es null,
-        // NavGuardian muestra splash en vez de congelar un destino inicial
-        // potencialmente erróneo.
-        _estadoSesion.value = estaLogueado()
+        // U2: si el Keystore esta corrupto (backup-restore, firmware roto),
+        // crearPrefs() lanza en CADA intento. Sin este catch, el tri-state
+        // quedaba null para siempre y NavGuardian mostraba el splash
+        // eternamente (peor que un crash: la app parece colgada sin error).
+        // Degradar a "no logueado" deja la app navegable hacia Login.
+        try {
+            prefs()
+            _estadoSesion.value = estaLogueado()
+        } catch (e: Exception) {
+            android.util.Log.e(
+                "SesionUsuario",
+                "precargar: prefs cifradas ilegibles; se degrada a no logueado",
+                e
+            )
+            _estadoSesion.value = false
+        }
     }
 
     // ──────────────────────────────────────────────────────────────
     // Sesion activa — token + correo + flag logueado
     // ──────────────────────────────────────────────────────────────
 
-    open fun estaLogueado(): Boolean =
+    open fun estaLogueado(): Boolean = try {
         prefs().getBoolean(KEY_LOGUEADO, false) &&
             !prefs().getString(KEY_TOKEN, null).isNullOrBlank()
+    } catch (e: Exception) {
+        // U2: misma degradacion que precargar() — prefs ilegible = no hay
+        // sesion utilizable; devolver false evita el crash en el hot path
+        // de NavGuardian.
+        false
+    }
 
     open fun obtenerToken(): String? =
         prefs().getString(KEY_TOKEN, null)

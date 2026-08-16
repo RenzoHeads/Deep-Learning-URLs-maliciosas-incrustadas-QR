@@ -121,42 +121,10 @@ fun PantallaLogin(
         verticalArrangement = Arrangement.spacedBy(Espaciado.lg)
     ) {
         // ─── Brand Intro ───
-        Column(verticalArrangement = Arrangement.spacedBy(Espaciado.md)) {
-        Text(
-            text = "ACCESO SEGURO",
-            style = MaterialTheme.typography.labelMedium,
-            color = CyberCyan
+        BrandHeader(
+            subtitulo = "Tu centro de control para navegar con confianza.",
+            etiquetaSuperior = "ACCESO SEGURO",
         )
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(Espaciado.md)
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(Espaciado.gigante)
-                    .clip(CircleShape)
-                    .background(PencilBrandMark),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Security,
-                    contentDescription = null,
-                    tint = CyberCyan,
-                    modifier = Modifier.size(TamanosIcono.estandar)
-                )
-            }
-            Text(
-                text = "SeguridadQR",
-                style = MaterialTheme.typography.titleLarge,
-                color = CyberTextoPrincipal
-            )
-        }
-        Text(
-            text = "Tu centro de control para navegar con confianza.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = CyberTextoSecundario
-        )
-        }
 
         // ─── Login Form Card ───
         Card(
@@ -208,40 +176,14 @@ fun PantallaLogin(
                 }
 
                 // Contrasena field group
-                Column(verticalArrangement = Arrangement.spacedBy(Espaciado.xs)) {
-                    Text(
-                        text = "Contrasena",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = CyberTextoSecundario
-                    )
-                    OutlinedTextField(
-                        value = password,
-                        onValueChange = { password = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        placeholder = { Text("Introduce tu contrasena") },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Filled.Lock,
-                                contentDescription = null,
-                                modifier = Modifier.size(TamanosIcono.estandar)
-                            )
-                        },
-                        trailingIcon = {
-                            IconButton(onClick = { mostrarPassword = !mostrarPassword }) {
-                                Icon(
-                                    imageVector = if (mostrarPassword) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
-                                    contentDescription = if (mostrarPassword) "Ocultar contrasena" else "Mostrar contrasena",
-                                    modifier = Modifier.size(TamanosIcono.estandar)
-                                )
-                            }
-                        },
-                        visualTransformation = if (mostrarPassword) VisualTransformation.None else PasswordVisualTransformation(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                        singleLine = true,
-                        shape = RoundedCornerShape(RadioBorde.md),
-                        colors = coloresCampoTexto()
-                    )
-                }
+                CampoPassword(
+                    value = password,
+                    onValueChange = { password = it },
+                    mostrarPassword = mostrarPassword,
+                    onTogglePassword = { mostrarPassword = !mostrarPassword },
+                    placeholder = "Introduce tu contrasena",
+                    label = "Contrasena",
+                )
 
                 // WAVE 22 fix: eliminado el TextButton "Olvidaste tu contrasena?"
                 // — era un boton muerto (onClick vacio) sin ruta de recuperacion
@@ -249,7 +191,9 @@ fun PantallaLogin(
                 // recuperacion (evitaUI prometedora sin funcion).
 
                 // Primary Login button
-                Button(
+                BotonSubmit(
+                    texto = "Iniciar sesion",
+                    procesando = uiState.procesando,
                     onClick = {
                         viewModel.onAction(
                             LoginAction.Autenticar(
@@ -258,35 +202,8 @@ fun PantallaLogin(
                             )
                         )
                     },
-                    enabled = !uiState.procesando,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(TamanosToque.boton),
-                    shape = RoundedCornerShape(RadioBorde.lg),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = CyberCyan,
-                        contentColor = CyberFondo
-                    )
-                ) {
-                    if (uiState.procesando) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(TamanosIcono.estandar),
-                            color = CyberFondo,
-                            strokeWidth = 2.dp
-                        )
-                    } else {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                            contentDescription = null,
-                            modifier = Modifier.size(TamanosIcono.estandar)
-                        )
-                        Spacer(modifier = Modifier.width(Espaciado.sm))
-                        Text(
-                            text = "Iniciar sesion",
-                            style = MaterialTheme.typography.labelLarge
-                        )
-                    }
-                }
+                    mostrarIcono = true,
+                )
 
                 // Trust note
                 Row(
