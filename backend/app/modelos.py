@@ -25,14 +25,17 @@ if TYPE_CHECKING:
 class RegistroUsuarioEntrada(BaseModel):
     """Datos para registrar un nuevo usuario con usuario y password."""
     nombre_usuario: str = Field(..., min_length=3, max_length=50, pattern=r"^[A-Za-z0-9_]+$")
-    password: str = Field(..., min_length=6, max_length=128)
+    # bcrypt opera sobre los primeros 72 bytes: passwords mas largas
+    # colisionaban silenciosamente (dos passwords distintas con el mismo
+    # prefijo de 72 bytes autenticaban igual). Rechazar en la entrada.
+    password: str = Field(..., min_length=6, max_length=72)
     correo: EmailStr | None = None
 
 
 class LoginEntrada(BaseModel):
     """Credenciales para iniciar sesion."""
     nombre_usuario: str = Field(..., min_length=3, max_length=50)
-    password: str = Field(..., min_length=1, max_length=128)
+    password: str = Field(..., min_length=1, max_length=72)
 
 
 class RespuestaAuth(BaseModel):

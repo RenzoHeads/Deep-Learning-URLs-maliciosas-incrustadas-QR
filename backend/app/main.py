@@ -62,6 +62,35 @@ async def handler_error_dominio(request: Request, exc: ErrorDominio) -> JSONResp
         headers=exc.headers,
     )
 
+
+# Contrato JSON tambien en el 500: sin este handler, cualquier excepcion
+# no-dominio (pool caido, violacion de constraint no capturada, etc.) caia
+# en el ServerErrorMiddleware de Starlette → respuesta text/plain que el
+# cliente no puede parsear como el resto de los errores. El detalle real
+# se loguea; al response solo llega un mensaje generico.
+@app.exception_handler(Exception)
+async def handler_error_interno(request: Request, exc: Exception) -> JSONResponse:
+    logger.exception(
+        "Error no manejado en %s %s: %s",
+        request.method,
+        request.url.path,
+        type(exc).__name__,
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Error interno del servidor"},
+    )
+
+# BUG #3 fix: rate limiting middleware. Se registra ANTES de CORS en
+# codigo → CORS queda como middleware OUTER → los 429 del rate limit
+# pasan por CORSMiddleware y llegan con headers CORS (legibles por
+# consumidores web). El flood de /auth sigue bloqueandose igual: CORS
+# apenas agrega headers antes de delegar; los preflights OPTIONS validos
+# los responde CORS directamente (costo trivial) y los requests reales
+# consumen el limite normalmente. En Vercel serverless el contador es
+# por-instancia (ver rate_limit.py para caveats).
+app.add_middleware(RateLimitMiddleware)
+
 # Bug B7 fix: CORS middleware. Combos `allow_methods=["*"]` + `allow_credentials=True`
 # son invalidos segun la spec CORS (los navegadores rechazan `*` para methods/headers
 # cuando credentials=true). Lista explicita en vez de `*`.
@@ -76,13 +105,6 @@ app.add_middleware(
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
-
-# BUG #3 fix: rate limiting middleware. Se registra DESPUES de CORS en
-# codigo → es la middleware OUTER → procesa el request ANTES que CORS.
-# Esto bloquea floods / brute-force en /auth antes de cualquier trabajo,
-# incluyendo el preflight OPTIONS. En Vercel serverless el contador es
-# por-instancia (ver rate_limit.py para caveats).
-app.add_middleware(RateLimitMiddleware)
 
 # Registrar routers
 app.include_router(auth.router)

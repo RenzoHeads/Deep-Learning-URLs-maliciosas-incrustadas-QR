@@ -73,6 +73,11 @@ class UrlBloqueadaNoEncontrada(ErrorDominio):
     detail = "URL bloqueada no encontrada o ya eliminada"
 
 
+class IdClienteDuplicado(ErrorDominio):
+    status_code = 409
+    detail = "id_cliente ya fue usado por otra operacion"
+
+
 # ── Denuncias ───────────────────────────────────────────────────────────────
 class CategoriaInvalida(ErrorDominio):
     status_code = 400

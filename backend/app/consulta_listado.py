@@ -75,7 +75,11 @@ def construir_consulta_listado(
             params.append(modificados_desde)
             query = (
                 f"{select_sql} WHERE {' AND '.join(condiciones)} "
-                f"ORDER BY {a}updated_at ASC "
+                # Tiebreaker por id: ``now()`` de Postgres es el timestamp de
+                # transaccion, asi que los multi-INSERT empatan en masa; sin
+                # desempate, el orden entre paginas OFFSET no es estable y las
+                # filas del empate se duplican o se pierden.
+                f"ORDER BY {a}updated_at ASC, {a}id ASC "
                 f"LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
             )
             params.extend([limite, offset])
@@ -84,7 +88,7 @@ def construir_consulta_listado(
         condiciones.extend(condiciones_normales)
         query = (
             f"{select_sql} WHERE {' AND '.join(condiciones)} "
-            f"ORDER BY {a}creado_en DESC "
+            f"ORDER BY {a}creado_en DESC, {a}id DESC "
             f"LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
         )
         params.extend([limite, offset])

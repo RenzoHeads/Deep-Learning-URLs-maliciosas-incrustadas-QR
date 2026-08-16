@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS historial_escaneos (
     es_malicioso  BOOLEAN NOT NULL,
     id_cliente    TEXT NULL,                -- anadida formalmente en 007
     creado_en     TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at    TIMESTAMPTZ NULL,
+    updated_at    TIMESTAMPTZ NULL DEFAULT now(),  -- DEFAULT en 011
     deleted_at    TIMESTAMPTZ NULL
 );
 CREATE INDEX IF NOT EXISTS idx_historial_escaneos_usuario
@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS urls_bloqueadas (
     razon       TEXT NULL,
     id_cliente  TEXT NULL,                 -- anadida formalmente en 007
     creado_en   TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at  TIMESTAMPTZ NULL,
+    updated_at  TIMESTAMPTZ NULL DEFAULT now(),  -- DEFAULT en 011
     deleted_at  TIMESTAMPTZ NULL
 );
 CREATE INDEX IF NOT EXISTS idx_urls_bloqueadas_usuario
@@ -79,7 +79,7 @@ CREATE TABLE IF NOT EXISTS denuncias_url (
     estado       TEXT NOT NULL DEFAULT 'PENDIENTE',
     id_cliente   TEXT NULL,                -- anadida formalmente en 007
     creado_en    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at   TIMESTAMPTZ NULL,
+    updated_at   TIMESTAMPTZ NULL DEFAULT now(),  -- DEFAULT en 011
     deleted_at   TIMESTAMPTZ NULL
 );
 CREATE INDEX IF NOT EXISTS idx_denuncias_url_usuario

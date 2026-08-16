@@ -20,7 +20,11 @@ from app.consulta_listado import (
     eliminar_logico,
     fila_viva_por_id_cliente,
 )
-from app.errores import UrlBloqueadaNoEncontrada, UrlYaBloqueada
+from app.errores import (
+    IdClienteDuplicado,
+    UrlBloqueadaNoEncontrada,
+    UrlYaBloqueada,
+)
 from app.modelos import UrlBloqueadaRespuesta, fila_a_url_bloqueada
 
 # Re-export para compatibilidad de imports existentes.
@@ -80,13 +84,20 @@ async def bloquear_url(
       1. Idempotencia (Bug A5 fix): si ``id_cliente`` ya existe como fila
          viva, devuelve la fila existente (replay tras crash post-POST).
       2. Resurrect atomico: si existe una fila soft-deleted (tombstone) para
-         este (id_usuario, url), actualizarla in-place. Un solo UPDATE —
-         atomico, sin race window, preserva el id original.
+         este (id_usuario, url), actualizarla in-place — adoptando el
+         ``id_cliente`` del POST actual, que es la llave de idempotencia
+         del replay (sin esto, la fila resurrectada conservaba el
+         id_cliente del bloqueo original y el replay devolvia 409).
+         Un solo UPDATE — atomico, sin race window, preserva el id.
       3. INSERT nuevo con ON CONFLICT DO NOTHING — elimina la ventana TOCTOU.
       4. ON CONFLICT fired — ya existe una fila viva → 409.
 
     Raises:
         UrlYaBloqueada: la URL ya esta bloqueada (409).
+        IdClienteDuplicado: el ``id_cliente`` ya fue usado por otra
+            operacion (viva o tombstone) con una URL distinta — viola el
+            indice parcial ``(id_usuario, id_cliente)`` de la migracion
+            007, que el ON CONFLICT de esta query no captura (409).
     """
     async with pool.acquire() as conexion:
         async with conexion.transaction():
@@ -97,27 +108,14 @@ async def bloquear_url(
                 if existente is not None:
                     return fila_a_url_bloqueada(existente)
 
-            # 1. Resurrect atomico de tombstone.
+            # 1. Resurrect atomico de tombstone — COALESCE preserva el
+            #    id_cliente existente cuando el POST no trae uno.
             fila = await conexion.fetchrow(
                 """
                 UPDATE urls_bloqueadas
-                SET deleted_at = NULL, razon = $3, updated_at = now()
+                SET deleted_at = NULL, razon = $3,
+                    id_cliente = COALESCE($4, id_cliente), updated_at = now()
                 WHERE id_usuario = $1 AND url = $2 AND deleted_at IS NOT NULL
-                RETURNING id, url, razon, creado_en, updated_at, deleted_at
-                """,
-                id_usuario,
-                url,
-                razon,
-            )
-            if fila is not None:
-                return fila_a_url_bloqueada(dict(fila))
-
-            # 2. No hay tombstone. INSERT nuevo con ON CONFLICT DO NOTHING.
-            fila = await conexion.fetchrow(
-                """
-                INSERT INTO urls_bloqueadas (id_usuario, url, razon, id_cliente)
-                VALUES ($1, $2, $3, $4)
-                ON CONFLICT (id_usuario, url) WHERE deleted_at IS NULL DO NOTHING
                 RETURNING id, url, razon, creado_en, updated_at, deleted_at
                 """,
                 id_usuario,
@@ -125,6 +123,34 @@ async def bloquear_url(
                 razon,
                 id_cliente,
             )
+            if fila is not None:
+                return fila_a_url_bloqueada(dict(fila))
+
+            # 2. No hay tombstone. INSERT nuevo con ON CONFLICT DO NOTHING.
+            try:
+                fila = await conexion.fetchrow(
+                    """
+                    INSERT INTO urls_bloqueadas
+                        (id_usuario, url, razon, id_cliente, updated_at)
+                    VALUES ($1, $2, $3, $4, now())
+                    ON CONFLICT (id_usuario, url) WHERE deleted_at IS NULL
+                        DO NOTHING
+                    RETURNING id, url, razon, creado_en, updated_at, deleted_at
+                    """,
+                    id_usuario,
+                    url,
+                    razon,
+                    id_cliente,
+                )
+            except asyncpg.UniqueViolationError as exc:
+                # El arbiter declarado cubre (id_usuario, url) activo; un
+                # id_cliente ya usado (migracion 007, incluye tombstones)
+                # dispara el OTRO indice parcial y escapa del ON CONFLICT.
+                if getattr(exc, "constraint_name", None) == (
+                    "uq_urls_bloqueadas_id_cliente"
+                ):
+                    raise IdClienteDuplicado() from exc
+                raise
             if fila is not None:
                 return fila_a_url_bloqueada(dict(fila))
 

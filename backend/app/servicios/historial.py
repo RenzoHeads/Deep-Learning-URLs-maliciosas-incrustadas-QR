@@ -95,8 +95,8 @@ async def crear_escaneo(
                 INSERT INTO historial_escaneos
                     (id_usuario, url_original, url_limpia, probabilidad,
                      nivel_alerta, delegado, notas_analisis, es_malicioso,
-                     id_cliente)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                     id_cliente, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
                 ON CONFLICT (id_usuario, id_cliente)
                     WHERE id_cliente IS NOT NULL DO NOTHING
                 RETURNING id, url_original, url_limpia, probabilidad,

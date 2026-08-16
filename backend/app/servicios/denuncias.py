@@ -112,8 +112,8 @@ async def crear_denuncia(
                     """
                     INSERT INTO denuncias_url
                         (id_usuario, url, id_categoria, descripcion, estado,
-                         id_cliente)
-                    VALUES ($1, $2, $3, $4, 'PENDIENTE', $5)
+                         id_cliente, updated_at)
+                    VALUES ($1, $2, $3, $4, 'PENDIENTE', $5, now())
                     ON CONFLICT (id_usuario, id_cliente)
                         WHERE id_cliente IS NOT NULL DO NOTHING
                     RETURNING id, url, id_categoria, descripcion, estado,

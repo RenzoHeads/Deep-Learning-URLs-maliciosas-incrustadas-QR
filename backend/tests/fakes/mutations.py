@@ -125,15 +125,33 @@ def update_returning(
         if matches(r, eq_conds, ge_conds, keyset_conds, is_null, is_not_null):
             r["deleted_at"] = None
             r["updated_at"] = datetime.now(timezone.utc)
+            set_clause = ""
             m_set = re.search(
-                r"SET\s+deleted_at\s*=\s*NULL\s*,\s*razon\s*=\s*\$(\d+)",
+                r"SET\s+(.+?)\s+WHERE",
                 sql,
-                flags=re.IGNORECASE,
+                flags=re.IGNORECASE | re.DOTALL,
             )
             if m_set:
-                idx = int(m_set.group(1))
-                if 1 <= idx <= len(params):
-                    r["razon"] = params[idx - 1]
+                set_clause = m_set.group(1)
+            # Asignaciones directas ``col = $N`` del SET (p.ej. razon).
+            if set_clause:
+                for cm in re.finditer(
+                    r"([\w_]+)\s*=\s*\$(\d+)", set_clause
+                ):
+                    col, idx = cm.group(1).lower(), int(cm.group(2))
+                    if 1 <= idx <= len(params):
+                        r[col] = params[idx - 1]
+                # ``col = COALESCE($N, col)`` — solo sobreescribe cuando el
+                # param llega distinto de None (id_cliente opcional del
+                # resurrect de urls_bloqueadas).
+                for cm in re.finditer(
+                    r"([\w_]+)\s*=\s*COALESCE\(\$(\d+),\s*[\w_]+\)",
+                    set_clause,
+                    flags=re.IGNORECASE,
+                ):
+                    col, idx = cm.group(1).lower(), int(cm.group(2))
+                    if 1 <= idx <= len(params) and params[idx - 1] is not None:
+                        r[col] = params[idx - 1]
             return [FakeRecord(r)]
     return []
 

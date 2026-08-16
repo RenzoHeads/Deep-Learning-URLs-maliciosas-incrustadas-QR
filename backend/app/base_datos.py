@@ -112,6 +112,20 @@ async def obtener_pool() -> asyncpg.Pool:
                 # router es DRY y cubre endpoints futuros.
                 init=_init_utc,
                 command_timeout=30,
+                # PgBouncer-safe: el endpoint pooler de Neon (transaction
+                # mode) no garantiza soporte de prepared statements entre
+                # conexiones; asyncpg los cachea a partir de la 5a ejecucion
+                # del mismo query — exactamente el patron del PULL delta
+                # (misma query por cada pagina) — y falla con 500s
+                # intermitentes ("prepared statement does not exist") en
+                # las paginas 2+ cuando la conexion reciclada no los tiene.
+                statement_cache_size=0,
+                # Neon corta conexiones idle (~5 min) mientras Vercel
+                # congela la instancia entre requests: tras el thaw, un
+                # acquire() podia devolver una conexion TCP muerta. El
+                # reciclaje proactivo descarta conexiones viejas antes
+                # de entregarlas.
+                max_inactive_connection_lifetime=300,
             )
         except Exception as e:
             logger.exception("No se pudo crear el pool de conexiones a Neon: %s", type(e).__name__)

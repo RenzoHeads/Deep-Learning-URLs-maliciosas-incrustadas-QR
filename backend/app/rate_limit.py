@@ -84,14 +84,21 @@ def _clasificar_ruta(path: str) -> str:
 
 
 def _obtener_cliente_ip(request: Request) -> str:
-    """Extrae la IP del cliente. Prefiere X-Forwarded-For (Vercel lo
-    setea con la IP real del cliente; sin trusted proxies adicionales
-    tomamos el primer hop).
+    """Extrae la IP del cliente sin confiar en hops spoofeables.
+
+    Prioriza ``x-real-ip`` (lo setea la plataforma — Vercel lo sobreescribe
+    con la IP de conexion real) y del ``X-Forwarded-For`` toma el ULTIMO
+    elemento: el hop agregado por el proxy inmediato. Tomar el PRIMER
+    elemento permitia a un cliente rotar su propio header XFF y evadir el
+    limite por completo (cada valor inventado era una clave de contador
+    nueva).
     """
+    real_ip = request.headers.get("x-real-ip")
+    if real_ip:
+        return real_ip.strip()
     xff = request.headers.get("x-forwarded-for")
     if xff:
-        # Primer elemento = cliente original
-        return xff.split(",")[0].strip()
+        return xff.split(",")[-1].strip()
     if request.client:
         return request.client.host
     return "unknown"
