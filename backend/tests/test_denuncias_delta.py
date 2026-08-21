@@ -18,7 +18,7 @@ def _payload_denuncia() -> dict:
 
 
 def _crear_denuncia(client, body: dict | None = None):
-    r = client.post("/denuncias?token_api=test-token", json=body or _payload_denuncia())
+    r = client.post("/denuncias", json=body or _payload_denuncia())
     assert r.status_code == 201, r.text
     return r.json()
 
@@ -46,7 +46,7 @@ def test_crear_denuncia_devuelve_201(client):
 
 def test_listar_denuncias(client):
     _crear_denuncia(client)
-    r = client.get("/denuncias?token_api=test-token")
+    r = client.get("/denuncias")
     assert r.status_code == 200, r.text
     assert isinstance(r.json(), list)
     assert len(r.json()) >= 1
@@ -76,7 +76,7 @@ def test_get_denuncias_con_modificados_desde(client):
     # Con un timestamp en el futuro lejano, deberia devolver lista vacia.
     _crear_denuncia(client)
     r = client.get(
-        "/denuncias?modificados_desde=2099-01-01T00:00:00Z&token_api=test-token"
+        "/denuncias?modificados_desde=2099-01-01T00:00:00Z"
     )
     assert r.status_code == 200, r.text
     assert len(r.json()) == 0, (
@@ -89,7 +89,7 @@ def test_delete_denuncia_devuelve_204(client):
     # El endpoint DELETE /denuncias/{id} NO existe hoy -> 405 Method Not Allowed
     # (o 404 si FastAPI no matchea la ruta). El test afirma 204 -> FALLA.
     creado = _crear_denuncia(client)
-    r = client.delete(f"/denuncias/{creado['id']}?token_api=test-token")
+    r = client.delete(f"/denuncias/{creado['id']}")
     assert r.status_code == 204, (
         f"DELETE /denuncias/{{id}} debe existir y devolver 204. "
         f"Estado actual: {r.status_code} ({r.text})"
@@ -98,7 +98,7 @@ def test_delete_denuncia_devuelve_204(client):
 
 def test_delete_denuncia_es_soft_delete(client, store):
     creado = _crear_denuncia(client)
-    r = client.delete(f"/denuncias/{creado['id']}?token_api=test-token")
+    r = client.delete(f"/denuncias/{creado['id']}")
     assert r.status_code == 204
     rows = [r2 for r2 in store["denuncias_url"] if str(r2["id"]) == str(creado["id"])]
     assert len(rows) == 1
@@ -127,7 +127,7 @@ def test_keyset_fila_limite_no_se_repite_con_mismo_updated_at(client, store):
     rows[2].update(id=uuid.UUID(int=3), updated_at=t0 + timedelta(hours=1))
 
     r1 = client.get(
-        "/denuncias?modificados_desde=2026-07-01T00:00:00Z&limite=2&token_api=test-token"
+        "/denuncias?modificados_desde=2026-07-01T00:00:00Z&limite=2"
     )
     assert r1.status_code == 200, r1.text
     p1 = r1.json()
@@ -135,7 +135,7 @@ def test_keyset_fila_limite_no_se_repite_con_mismo_updated_at(client, store):
 
     r2 = client.get(
         f"/denuncias?modificados_desde={p1[-1]['updated_at']}&limite=2"
-        f"&cursor_id={p1[-1]['id']}&token_api=test-token"
+        f"&cursor_id={p1[-1]['id']}"
     )
     assert r2.status_code == 200, r2.text
     p2 = r2.json()
@@ -171,7 +171,7 @@ def test_keyset_barrido_completo_sin_duplicados_ni_perdidas(client, store):
     while True:
         url = (
             f"/denuncias?modificados_desde={modificados_desde}&limite=2"
-            f"&token_api=test-token"
+            f""
         )
         if cursor_id:
             url += f"&cursor_id={cursor_id}"

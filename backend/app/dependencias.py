@@ -23,7 +23,7 @@ from fastapi import Depends, Query, Request
 
 from app.base_datos import obtener_pool
 from app.errores import TokenAusente
-from app.servicios.auth import obtener_id_usuario_por_token
+from app.servicios.auth import obtener_id_usuario_por_sub, verificar_jwt
 
 logger = logging.getLogger(__name__)
 
@@ -32,45 +32,29 @@ Pool = Annotated[asyncpg.Pool, Depends(obtener_pool)]
 
 
 async def verificar_token(request: Request, pool: Pool) -> str:
-    """Dependencia: verifica el token y devuelve el ``id_usuario``.
+    """Dependencia: verifica el JWT de Auth0 y devuelve el ``id_usuario``.
 
-    Acepta el token en este orden de prioridad:
-
-    1. Header ``Authorization: Bearer <token>`` (estandar REST, preferido).
-       Evita que el token aparezca en logs de acceso, historial del
-       navegador o capas de cache web (Bug A15 / B2 fix del cliente).
-    2. Query param ``?token_api=...`` (compatibilidad retroactiva con el
-       cliente Android que lo manda asi — ver ClienteBackend.kt).
+    El token llega en el header ``Authorization: Bearer <jwt>`` (único
+    canal soportado — el fallback ``?token_api=`` del auth legacy se
+    eliminó junto con los tokens opacos). La verificación de firma/claims
+    vive en [app.servicios.auth.verificar_jwt]; la resolución del usuario
+    (con provisioning JIT al primer login) en
+    [app.servicios.auth.obtener_id_usuario_por_sub].
 
     Raises:
         TokenAusente / TokenInvalido (401): traducidos por el handler
         central de [app.errores.ErrorDominio].
     """
-    token_api: str | None = None
-
-    # 1. Intentar header Authorization: Bearer <token>
     auth_header = request.headers.get("Authorization")
+    token: str | None = None
     if auth_header and auth_header.lower().startswith("bearer "):
-        token_api = auth_header[7:].strip() or None
+        token = auth_header[7:].strip() or None
 
-    # 2. Fallback: query param ?token_api=... (compat Android)
-    if token_api is None:
-        token_api = request.query_params.get("token_api")
-        if token_api is not None:
-            # Senal de seguridad: el token puede quedar registrado en logs
-            # de acceso o capas de cache. Logueamos (sin el token) para
-            # poder medir la migracion al header y eventualmente deprecar
-            # este fallback.
-            logger.warning(
-                "Auth via query param ?token_api= (path=%s) — el cliente "
-                "deberia migrar al header Authorization: Bearer",
-                request.url.path,
-            )
-
-    if token_api is None:
+    if token is None:
         raise TokenAusente()
 
-    return await obtener_id_usuario_por_token(pool, token_api)
+    claims = verificar_jwt(token)
+    return await obtener_id_usuario_por_sub(pool, claims["sub"])
 
 
 #: Id del usuario autenticado (UUID como string).

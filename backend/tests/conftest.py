@@ -28,14 +28,13 @@ ID_USUARIO_TEST = "test-user-id"
 # Fixtures
 # ============================================================================
 def _seed_usuarios(store: dict[str, list[dict]]) -> None:
-    """Garantiza que existe un usuario con token_api='test-token'."""
+    """Garantiza que existe el usuario de tests con auth0_user_id='auth0|test'."""
     store.setdefault("usuarios", []).append(
         {
             "id": uuid.UUID(ID_USUARIO_TEST) if _is_uuid(ID_USUARIO_TEST) else uuid.uuid4(),
-            "token_api": "test-token",
+            "auth0_user_id": "auth0|test",
             "nombre_usuario": "tester",
             "correo": "tester@test.com",
-            "password_hash": None,
             "id_dispositivo": "dev-test",
             "creado_en": datetime.now(timezone.utc),
         }
@@ -63,21 +62,6 @@ def store() -> dict[str, list[dict]]:
 @pytest.fixture
 def fake_pool(store) -> FakePool:
     return FakePool(store)
-
-
-@pytest.fixture
-def usuario_aleatorio() -> dict[str, str]:
-    """Genera credenciales aleatorias para un usuario de prueba.
-
-    Usado por ``tests/test_auth_offload.py`` para registro/login roundtrip
-    sin colisionar con el usuario 'tester' predefinido en ``_seed_usuarios``.
-    """
-    import secrets as _secrets
-    return {
-        "nombre_usuario": f"user_{_secrets.token_hex(8)}",
-        "password": f"pw_{_secrets.token_urlsafe(12)}",
-        "correo": f"{_secrets.token_hex(4)}@test.com",
-    }
 
 
 @pytest.fixture(autouse=True)

@@ -1,185 +1,138 @@
-"""Servicio de autenticacion.
+"""Servicio de autenticación Auth0.
 
-Capa de negocio separada del router ``app.routers.auth``. No conoce
-FastAPI — devuelve filas y lanza excepciones de [app.errores].
+La app móvil inicia sesión vía Auth0 (Universal Login) y presenta el
+access token JWT en el header ``Authorization: Bearer``. Este servicio:
 
-Operaciones:
-  - Registrar usuario (nombre_usuario + password + correo)
-  - Login por nombre_usuario + password
-  - Resolver token_api → id_usuario (para la dependencia verificar_token)
+  - Verifica el JWT: firma RS256 contra el JWKS del tenant (cacheado por
+    ``PyJWKClient``), ``aud`` = API registrada, ``iss`` = tenant y ``exp``.
+  - Resuelve el claim ``sub`` → ``id`` de la tabla ``usuarios``,
+    creando el usuario al primer login (provisioning JIT).
+
+No conoce FastAPI — devuelve payloads y lanza excepciones de
+[app.errores] que el handler central traduce a HTTP.
 """
 from __future__ import annotations
 
-import asyncio
-import secrets
-import uuid
-
+import logging
+from functools import lru_cache
 from typing import Any
 
 import asyncpg
-import bcrypt
+import jwt
+from jwt import PyJWKClient
 
-from app.errores import CredencialesInvalidas, TokenInvalido, UsuarioYaExiste
+from app.config import obtener_ajustes
+from app.errores import TokenInvalido
 
-# Re-export para compatibilidad de imports existentes.
-__all__ = [
-    "CredencialesInvalidas",
-    "UsuarioYaExiste",
-    "registrar_usuario",
-    "login_usuario",
-    "obtener_id_usuario_por_token",
-]
+logger = logging.getLogger(__name__)
+
+__all__ = ["verificar_jwt", "obtener_id_usuario_por_sub", "TokenInvalido"]
 
 
-# ============================================================================
-# Hash dummy constante para timing-attack defense (Bug B4 fix).
-# Evita distinguir por tiempo si un usuario existe o no — siempre
-# ejecuta un bcrypt.checkpw contra este hash cuando el usuario no existe.
-# ============================================================================
-_HASH_DUMMY = bcrypt.hashpw(b"__dummy__", bcrypt.gensalt()).decode("utf-8")
+@lru_cache
+def _cliente_jwks() -> PyJWKClient:
+    """Cliente JWKS del tenant (singleton — cachea las signing keys)."""
+    ajustes = obtener_ajustes()
+    return PyJWKClient(f"https://{ajustes.AUTH0_DOMAIN}/.well-known/jwks.json")
 
 
-# ============================================================================
-# POST /auth/registrar
-# ============================================================================
-async def registrar_usuario(
-    pool: asyncpg.Pool,
-    *,
-    nombre_usuario: str,
-    password: str,
-    correo: str,
-) -> dict[str, Any]:
-    """Registra un nuevo usuario con nombre_usuario y password.
+def verificar_jwt(token: str) -> dict[str, Any]:
+    """Verifica un access token JWT emitido por Auth0 y devuelve sus claims.
 
-    El hash de bcrypt se ejecuta en un thread del executor para no
-    bloquear el event loop (Bug B12 fix, ~150ms CPU-bound).
+    Valida firma (RS256 vía JWKS), ``aud`` (API audience), ``iss``
+    (tenant) y ``exp``. La app ya validó el token en el flujo de login;
+    esta verificación defiende el backend de tokens falsos/expirados
+    presentados directamente.
 
     Returns:
-        ``dict`` con ``id``, ``token_api``, ``nombre_usuario``, ``correo``,
-        ``creado_en``.
+        Payload decodificado — garantiza ``sub`` no vacío.
 
     Raises:
-        UsuarioYaExiste: el nombre de usuario ya esta en uso (409).
+        TokenInvalido: firma, claims o formato inválidos (401).
+    """
+    ajustes = obtener_ajustes()
+    try:
+        clave = _cliente_jwks().get_signing_key_from_jwt(token)
+        payload: dict[str, Any] = jwt.decode(
+            token,
+            key=clave.key,
+            algorithms=[a.strip() for a in ajustes.AUTH0_ALGORITMOS.split(",")],
+            audience=ajustes.AUTH0_AUDIENCE,
+            issuer=f"https://{ajustes.AUTH0_DOMAIN}/",
+            options={"require": ["exp", "iss", "aud", "sub"]},
+        )
+    except jwt.PyJWTError as exc:
+        # Sin el token en el log: podría terminar en logs de acceso
+        # compartidos. El tipo de error basta para diagnosticar.
+        logger.warning("JWT Auth0 rechazado: %s", type(exc).__name__)
+        raise TokenInvalido() from exc
+
+    if not payload.get("sub"):
+        raise TokenInvalido()
+    return payload
+
+
+async def obtener_id_usuario_por_sub(
+    pool: asyncpg.Pool,
+    sub: str,
+) -> str:
+    """Devuelve el ``id`` (UUID como string) del usuario Auth0 ``sub``.
+
+    Provisioning JIT: si es el primer login del usuario, crea la fila en
+    ``usuarios`` con identidad mínima (``auth0_user_id`` + un
+    ``nombre_usuario`` derivado del sub, único por construcción). El
+    perfil visible en la app (email, nickname) viaja en el ID token del
+    lado del cliente — el backend solo necesita la identidad estable.
+
+    Raises:
+        TokenInvalido: el usuario no existe y no se pudo crear (401).
     """
     async with pool.acquire() as conexion:
-        # Verificar primero si el nombre_usuario ya existe. Hacer el SELECT
-        # antes del bcrypt ahorra ~150ms de CPU-bound hashing cuando el
-        # usuario esta ocupado (failure path).
-        existe = await conexion.fetchval(
-            "SELECT 1 FROM usuarios WHERE nombre_usuario = $1",
-            nombre_usuario,
+        fila = await conexion.fetchrow(
+            "SELECT id FROM usuarios WHERE auth0_user_id = $1",
+            sub,
         )
-        if existe:
-            raise UsuarioYaExiste()
+        if fila is not None:
+            return str(fila["id"])
 
-        # bcrypt.hashpw es CPU-bound (~150ms por diseno). Se offloadea a un
-        # thread del executor por defecto para no bloquear el event loop.
-        loop = asyncio.get_running_loop()
-        password_hash = await loop.run_in_executor(
-            None,
-            lambda: bcrypt.hashpw(
-                password.encode("utf-8"), bcrypt.gensalt()
-            ).decode("utf-8"),
-        )
-        token = secrets.token_urlsafe(32)
+        # sub "auth0|66bf1f2e..." → "auth0_66bf1f2e": cumple el formato
+        # histórico de nombre_usuario (^[A-Za-z0-9_]+$) y es único por
+        # construcción — el sufijo hex es el user_id del tenant.
+        nombre_usuario = sub.replace("|", "_")
 
-        # Bug B5 fix: id_dispositivo sintetico con UUID v4 para evitar
-        # colisiones con dispositivos legacy.
-        id_disp_sintetico = f"user_{uuid.uuid4()}"
         try:
             fila = await conexion.fetchrow(
                 """
-                INSERT INTO usuarios
-                    (id_dispositivo, correo, token_api, nombre_usuario, password_hash)
-                VALUES ($1, $2, $3, $4, $5)
-                RETURNING id, token_api, nombre_usuario, correo, creado_en
+                INSERT INTO usuarios (auth0_user_id, nombre_usuario)
+                VALUES ($1, $2)
+                ON CONFLICT (auth0_user_id) DO NOTHING
+                RETURNING id
                 """,
-                id_disp_sintetico,
-                correo,
-                token,
+                sub,
                 nombre_usuario,
-                password_hash,
             )
         except asyncpg.UniqueViolationError:
-            # Race condition: otra request lo creo entre SELECT e INSERT.
-            raise UsuarioYaExiste()
+            # Colisión de nombre_usuario con un usuario legacy (prácticamente
+            # imposible: los legacy no empiezan por "auth0_"). Reintentar con
+            # un sufijo derivado del sub mantiene la unicidad.
+            fila = await conexion.fetchrow(
+                """
+                INSERT INTO usuarios (auth0_user_id, nombre_usuario)
+                VALUES ($1, $2)
+                ON CONFLICT (auth0_user_id) DO NOTHING
+                RETURNING id
+                """,
+                sub,
+                f"{nombre_usuario}_{sub[-8:]}",
+            )
 
-    return dict(fila)
-
-
-# ============================================================================
-# POST /auth/login
-# ============================================================================
-async def login_usuario(
-    pool: asyncpg.Pool,
-    *,
-    nombre_usuario: str,
-    password: str,
-) -> dict[str, Any]:
-    """Autentica un usuario por nombre_usuario y password.
-
-    Usa un hash dummy constante para igualar el tiempo de respuesta cuando
-    el usuario no existe (Bug B4 fix, timing-attack defense). El
-    ``bcrypt.checkpw`` se ejecuta en un thread (Bug B11 fix, CPU-bound).
-
-    Returns:
-        ``dict`` con ``id``, ``token_api``, ``nombre_usuario``, ``correo``,
-        ``creado_en``.
-
-    Raises:
-        CredencialesInvalidas: usuario o password incorrectos (401).
-    """
-    async with pool.acquire() as conexion:
-        fila = await conexion.fetchrow(
-            "SELECT id, token_api, nombre_usuario, correo, password_hash, creado_en "
-            "FROM usuarios WHERE nombre_usuario = $1",
-            nombre_usuario,
-        )
-
-    # Bug B4 fix: tiempo constante. Si el usuario no existe, verificamos
-    # contra un hash dummy para que el tiempo de respuesta sea igual al
-    # caso donde el usuario existe (evitar enumeracion de usuarios).
-    hash_verificar = (
-        fila["password_hash"] if (fila and fila["password_hash"]) else _HASH_DUMMY
-    )
-
-    # Bug B11 fix: bcrypt.checkpw es CPU-bound (~100ms). Se offloadea a un
-    # thread para no bloquear el event loop.
-    loop = asyncio.get_running_loop()
-    password_ok = await loop.run_in_executor(
-        None,
-        lambda: bcrypt.checkpw(
-            password.encode("utf-8"),
-            hash_verificar.encode("utf-8"),
-        ),
-    )
-
-    if fila is None or fila["password_hash"] is None or not password_ok:
-        raise CredencialesInvalidas()
-
-    return dict(fila)
-
-
-# ============================================================================
-# Dependencia verificar_token — token_api → id_usuario
-# ============================================================================
-async def obtener_id_usuario_por_token(
-    pool: asyncpg.Pool,
-    token_api: str,
-) -> str:
-    """Devuelve el ``id`` (UUID como string) del dueno del ``token_api``.
-
-    Bug B13 fix: la comparacion es SQL directa (bind parameters asyncpg);
-    ver historico en git para el analisis de compare_digest.
-
-    Raises:
-        TokenInvalido: el token no corresponde a ningun usuario (401).
-    """
-    async with pool.acquire() as conexion:
-        fila = await conexion.fetchrow(
-            "SELECT id FROM usuarios WHERE token_api = $1",
-            token_api,
-        )
-    if fila is None:
-        raise TokenInvalido()
-    return str(fila["id"])
+        if fila is None:
+            # ON CONFLICT DO NOTHING sin fila devuelta: otra request creó el
+            # usuario en la carrera — resolver por SELECT.
+            fila = await conexion.fetchrow(
+                "SELECT id FROM usuarios WHERE auth0_user_id = $1",
+                sub,
+            )
+        if fila is None:
+            raise TokenInvalido()
+        return str(fila["id"])

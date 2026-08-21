@@ -55,7 +55,7 @@ backend/
 
 | Tabla | Descripcion |
 |---|---|
-| `usuarios` | Usuarios con `nombre_usuario` + `password` (bcrypt) + `token_api` |
+| `usuarios` | Usuarios identificados por `auth0_user_id` (claim `sub` del JWT; provisioning JIT al primer login — migracion 012) |
 | `historial_escaneos` | Historial de escaneos de QR (url, probabilidad, nivel_alerta) |
 | `urls_bloqueadas` | URLs bloqueadas por el usuario |
 | `denuncias_url` | Denuncias de URLs maliciosas |
@@ -102,42 +102,24 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 ## API Endpoints
 
-### Auth
+### Autenticacion (Auth0)
 
-| Metodo | Ruta | Descripcion | Auth |
-|---|---|---|---|
-| POST | `/auth/registrar` | Registra un usuario con `nombre_usuario` + `password` y devuelve `token_api` | No |
-| POST | `/auth/login` | Autentica con `nombre_usuario` + `password` y devuelve `token_api` | No |
+El login/registro NO vive en este backend: la app Android usa **Auth0
+Universal Login** (SDK `com.auth0.android:auth0`). Cada peticion
+autenticada llega con el access token JWT en el header:
 
-**Ejemplo — registrar:**
-```json
-POST /auth/registrar
-{
-    "nombre_usuario": "rena_99",
-    "password": "s3cret-password",
-    "correo": "usuario@email.com"
-}
-
-Respuesta:
-{
-    "id_usuario": "uuid-...",
-    "token_api": "token-seguro-...",
-    "nombre_usuario": "rena_99",
-    "correo": "usuario@email.com",
-    "creado_en": "2026-07-24T..."
-}
+```
+Authorization: Bearer <access_token_jwt>
 ```
 
-**Ejemplo — login:**
-```json
-POST /auth/login
-{
-    "nombre_usuario": "rena_99",
-    "password": "s3cret-password"
-}
+`verificar_token` (app/dependencias.py) valida la firma RS256 contra el
+JWKS del tenant (`AUTH0_DOMAIN`), el audience (`AUTH0_AUDIENCE`), issuer
+y expiracion; despues resuelve el claim `sub` → `usuarios.auth0_user_id`,
+creando la fila al primer login (provisioning JIT). Un 401
+(`Token de API invalido`) indica JWT expirado/revocado o firma invalida.
 
-Respuesta: igual que /auth/registrar (devuelve el mismo token_api del registro).
-```
+Variables de entorno (ver `.env.example`): `AUTH0_DOMAIN`,
+`AUTH0_AUDIENCE`, `AUTH0_ALGORITMOS=RS256`.
 
 ### Escaneos (Historial)
 
@@ -174,20 +156,17 @@ Respuesta: igual que /auth/registrar (devuelve el mismo token_api del registro).
 
 ## Autenticacion
 
-Todos los endpoints protegidos requieren el token en el **header** estandar REST:
+Todos los endpoints protegidos requieren el access token JWT de Auth0 en
+el **header** estandar REST (el fallback `?token_api=` del auth legacy
+fue eliminado junto con `/auth/login` y `/auth/registrar`):
 
 ```
-Authorization: Bearer <token_api>
+Authorization: Bearer <access_token_jwt>
 ```
 
-> **Compatibilidad retroactiva:** el backend acepta tambien el token como
-> query param `?token_api=...` para no romper clientes antiguos que aun lo
-> mandan asi. Los clientes nuevos **deben** usar el header — el query param
-> puede quedar registrado en logs de acceso o capas de cache intermedias,
-> mientras que el header `Authorization` no.
-
-El backend verifica el token contra la tabla `usuarios` y devuelve el
-`id_usuario` (UUID) asociado.
+El backend verifica firma RS256 (JWKS del tenant), audience, issuer y
+expiracion, y resuelve el claim `sub` contra `usuarios.auth0_user_id`
+(ver "Autenticacion (Auth0)" arriba).
 
 ### Healthcheck (`/salud`)
 

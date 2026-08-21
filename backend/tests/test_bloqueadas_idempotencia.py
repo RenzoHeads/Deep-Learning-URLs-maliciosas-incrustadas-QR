@@ -20,7 +20,7 @@ from __future__ import annotations
 
 def _post_bloquear(client, url: str, id_cliente: str | None):
     return client.post(
-        "/urls-bloqueadas?token_api=test-token",
+        "/urls-bloqueadas",
         json={"url": url, "razon": "phishing", "id_cliente": id_cliente},
     )
 
@@ -32,7 +32,7 @@ def test_resurrect_actualiza_id_cliente_y_replay_es_idempotente(client, store):
     assert r1.status_code == 201, r1.text
     id_fila = r1.json()["id"]
 
-    r2 = client.delete(f"/urls-bloqueadas/{id_fila}?token_api=test-token")
+    r2 = client.delete(f"/urls-bloqueadas/{id_fila}")
     assert r2.status_code == 204, r2.text
 
     r3 = _post_bloquear(client, url, "B")
@@ -58,7 +58,7 @@ def test_id_cliente_reusado_de_tombstone_de_otra_url_devuelve_409(client):
     assert r1.status_code == 201, r1.text
     id_fila = r1.json()["id"]
 
-    r2 = client.delete(f"/urls-bloqueadas/{id_fila}?token_api=test-token")
+    r2 = client.delete(f"/urls-bloqueadas/{id_fila}")
     assert r2.status_code == 204, r2.text
 
     # URL distinta con el id_cliente de la tombstone: viola

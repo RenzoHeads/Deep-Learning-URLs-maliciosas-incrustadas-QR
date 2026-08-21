@@ -25,7 +25,7 @@ def _payload_url() -> dict:
 
 def _crear_escaneo(client, body: dict | None = None) -> dict:
     r = client.post(
-        "/escaneos?token_api=test-token",
+        "/escaneos",
         json=body or _payload_url(),
     )
     assert r.status_code == 201, r.text
@@ -36,7 +36,7 @@ def _crear_escaneo(client, body: dict | None = None) -> dict:
 # GREEN — comportamiento existente (debe pasar contra codigo actual)
 # ============================================================================
 def test_crear_escaneo_devuelve_201_con_id_y_creado_en(client):
-    r = client.post("/escaneos?token_api=test-token", json=_payload_url())
+    r = client.post("/escaneos", json=_payload_url())
     assert r.status_code == 201, r.text
     data = r.json()
     # id debe ser un UUID valido como string
@@ -48,7 +48,7 @@ def test_crear_escaneo_devuelve_201_con_id_y_creado_en(client):
 
 def test_listar_escaneos_devuelve_lista(client):
     _crear_escaneo(client)
-    r = client.get("/escaneos?filtro=todos&token_api=test-token")
+    r = client.get("/escaneos?filtro=todos")
     assert r.status_code == 200, r.text
     assert isinstance(r.json(), list)
     assert len(r.json()) >= 1
@@ -56,7 +56,7 @@ def test_listar_escaneos_devuelve_lista(client):
 
 def test_contar_escaneos_devuelve_total(client):
     _crear_escaneo(client)
-    r = client.get("/escaneos/count?filtro=todos&token_api=test-token")
+    r = client.get("/escaneos/count?filtro=todos")
     assert r.status_code == 200, r.text
     body = r.json()
     assert "total" in body
@@ -65,20 +65,20 @@ def test_contar_escaneos_devuelve_total(client):
 
 def test_obtener_escaneo_por_id_existente(client):
     creado = _crear_escaneo(client)
-    r = client.get(f"/escaneos/{creado['id']}?token_api=test-token")
+    r = client.get(f"/escaneos/{creado['id']}")
     assert r.status_code == 200, r.text
     assert r.json()["id"] == creado["id"]
 
 
 def test_obtener_escaneo_inexistente_404(client):
     fake_id = str(uuid.uuid4())
-    r = client.get(f"/escaneos/{fake_id}?token_api=test-token")
+    r = client.get(f"/escaneos/{fake_id}")
     assert r.status_code == 404
 
 
 def test_eliminar_escaneo_devuelve_204(client):
     creado = _crear_escaneo(client)
-    r = client.delete(f"/escaneos/{creado['id']}?token_api=test-token")
+    r = client.delete(f"/escaneos/{creado['id']}")
     assert r.status_code == 204
 
 
@@ -118,7 +118,7 @@ def test_get_escaneos_con_modificados_desde(client):
     # su contenido: si modificados_desde filtrara, el row de HOY excluiria al
     # de ayer. Simulamos forzando un timestamp posterior al crear.
     r = client.get(
-        "/escaneos?modificados_desde=2099-01-01T00:00:00Z&token_api=test-token"
+        "/escaneos?modificados_desde=2099-01-01T00:00:00Z"
     )
     assert r.status_code == 200, r.text
     data = r.json()
@@ -137,14 +137,14 @@ def test_get_escaneos_excluye_soft_deleted_sin_param(client, store):
     for row in store["historial_escaneos"]:
         if str(row["id"]) == str(creado["id"]):
             row["deleted_at"] = "2026-07-25T00:00:00Z"
-    r = client.get("/escaneos?filtro=todos&token_api=test-token")
+    r = client.get("/escaneos?filtro=todos")
     ids = [e["id"] for e in r.json()]
     assert str(creado["id"]) not in ids
 
 
 def test_delete_escaneo_es_soft_delete(client, store):
     creado = _crear_escaneo(client)
-    r = client.delete(f"/escaneos/{creado['id']}?token_api=test-token")
+    r = client.delete(f"/escaneos/{creado['id']}")
     assert r.status_code == 204
     # El row debe seguir presente en el almacen de mock con ``deleted_at`` set.
     rows = [r2 for r2 in store["historial_escaneos"] if str(r2["id"]) == str(creado["id"])]
@@ -162,7 +162,7 @@ def test_get_escaneos_count_excluye_soft_deleted(client, store):
     for row in store["historial_escaneos"]:
         if str(row["id"]) == str(creado["id"]):
             row["deleted_at"] = "2026-07-25T00:00:00Z"
-    r = client.get("/escaneos/count?filtro=todos&token_api=test-token")
+    r = client.get("/escaneos/count?filtro=todos")
     total = r.json()["total"]
     assert total == 0, "count debe ignorar rows con deleted_at set"
 
@@ -171,7 +171,7 @@ def test_get_escaneos_count_positivo_total_real(client):
     """Bug C2 fix: 2 escaneos (sin soft-delete) → total == 2, no 1."""
     _crear_escaneo(client)
     _crear_escaneo(client)
-    r = client.get("/escaneos/count?filtro=todos&token_api=test-token")
+    r = client.get("/escaneos/count?filtro=todos")
     assert r.status_code == 200, r.text
     assert r.json()["total"] == 2, (
         f"count debe reflejar el total real (2). Recibido: {r.json()}"
@@ -199,7 +199,7 @@ def test_keyset_fila_limite_no_se_repite_con_mismo_updated_at(client, store):
 
     # Pagina 1 (sin cursor, rama legacy): [id1, id2] en orden ASC por updated_at.
     r1 = client.get(
-        "/escaneos?modificados_desde=2026-07-01T00:00:00Z&limite=2&token_api=test-token"
+        "/escaneos?modificados_desde=2026-07-01T00:00:00Z&limite=2"
     )
     assert r1.status_code == 200, r1.text
     p1 = r1.json()
@@ -210,7 +210,7 @@ def test_keyset_fila_limite_no_se_repite_con_mismo_updated_at(client, store):
     # NO debe repetirse — solo id3.
     r2 = client.get(
         f"/escaneos?modificados_desde={p1[-1]['updated_at']}&limite=2"
-        f"&cursor_id={p1[-1]['id']}&token_api=test-token"
+        f"&cursor_id={p1[-1]['id']}"
     )
     assert r2.status_code == 200, r2.text
     p2 = r2.json()
@@ -238,7 +238,7 @@ def test_keyset_insert_concurrente_entre_paginas_no_pierde_filas(client, store):
 
     # Pagina 1: limite=2 -> [id1, id2]
     r1 = client.get(
-        "/escaneos?modificados_desde=2026-06-30T00:00:00Z&limite=2&token_api=test-token"
+        "/escaneos?modificados_desde=2026-06-30T00:00:00Z&limite=2"
     )
     assert r1.status_code == 200, r1.text
     p1 = r1.json()
@@ -253,7 +253,7 @@ def test_keyset_insert_concurrente_entre_paginas_no_pierde_filas(client, store):
     # Pagina 2 (cursor = id2): debe incluir la fila nueva (id4) y luego id3.
     r2 = client.get(
         f"/escaneos?modificados_desde={p1[-1]['updated_at']}&limite=2"
-        f"&cursor_id={p1[-1]['id']}&token_api=test-token"
+        f"&cursor_id={p1[-1]['id']}"
     )
     assert r2.status_code == 200, r2.text
     p2 = r2.json()
@@ -291,7 +291,7 @@ def test_keyset_barrido_completo_sin_duplicados_ni_perdidas(client, store):
     while True:
         url = (
             f"/escaneos?modificados_desde={modificados_desde}&limite=2"
-            f"&token_api=test-token"
+            f""
         )
         if cursor_id:
             url += f"&cursor_id={cursor_id}"

@@ -36,7 +36,7 @@ def _payload(url_limpia: str = "example.com/foo", nivel: str = "MALICIOSO",
 
 
 def _crear_escaneo(client, body: dict | None = None) -> dict:
-    r = client.post("/escaneos?token_api=test-token", json=body or _payload())
+    r = client.post("/escaneos", json=body or _payload())
     assert r.status_code == 201, r.text
     return r.json()
 

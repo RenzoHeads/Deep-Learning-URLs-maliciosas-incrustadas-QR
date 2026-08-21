@@ -40,13 +40,13 @@ def _payload(url_limpia: str = "example.com/foo", nivel: str = "MALICIOSO",
 
 
 def _crear_escaneo(client, body: dict | None = None) -> dict:
-    r = client.post("/escaneos?token_api=test-token", json=body or _payload())
+    r = client.post("/escaneos", json=body or _payload())
     assert r.status_code == 201, r.text
     return r.json()
 
 
 def _eliminar_escaneo(client, escaneo_id: str) -> None:
-    r = client.delete(f"/escaneos/{escaneo_id}?token_api=test-token")
+    r = client.delete(f"/escaneos/{escaneo_id}")
     assert r.status_code == 204, r.text
 
 
@@ -231,7 +231,7 @@ def test_delete_id_inexistente_404_no_toca_catalogo(client, store):
         url_limpia="g.com/solo", nivel="MALICIOSO", prob=0.95
     ))
     fake_id = str(_uuid.uuid4())
-    r = client.delete(f"/escaneos/{fake_id}?token_api=test-token")
+    r = client.delete(f"/escaneos/{fake_id}")
     assert r.status_code == 404
     # Cache intacto
     assert len(store.get("urls_catalogo", [])) == 1

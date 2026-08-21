@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, Field
 
 # Bug B14 fix: ``asyncpg`` solo se usa aqui para anotaciones de tipo
 # (``asyncpg.Record``). Importarlo eagerly en cada arranque de worker sumaba
@@ -17,34 +17,6 @@ from pydantic import BaseModel, EmailStr, Field
 # el modulo no se carga.
 if TYPE_CHECKING:
     import asyncpg
-
-
-# ============================================================================
-# Auth — Registro/Login por usuario y password
-# ============================================================================
-class RegistroUsuarioEntrada(BaseModel):
-    """Datos para registrar un nuevo usuario con usuario y password."""
-    nombre_usuario: str = Field(..., min_length=3, max_length=50, pattern=r"^[A-Za-z0-9_]+$")
-    # bcrypt opera sobre los primeros 72 bytes: passwords mas largas
-    # colisionaban silenciosamente (dos passwords distintas con el mismo
-    # prefijo de 72 bytes autenticaban igual). Rechazar en la entrada.
-    password: str = Field(..., min_length=6, max_length=72)
-    correo: EmailStr | None = None
-
-
-class LoginEntrada(BaseModel):
-    """Credenciales para iniciar sesion."""
-    nombre_usuario: str = Field(..., min_length=3, max_length=50)
-    password: str = Field(..., min_length=1, max_length=72)
-
-
-class RespuestaAuth(BaseModel):
-    """Respuesta del registro/autenticacion."""
-    id_usuario: uuid.UUID
-    token_api: str
-    nombre_usuario: str | None = None
-    correo: str | None = None
-    creado_en: datetime
 
 
 # ============================================================================
@@ -180,16 +152,6 @@ class CategoriaDenunciaRespuesta(BaseModel):
     id: int
     nombre: str
     descripcion: str | None = None
-
-
-def fila_a_respuesta_auth(fila: asyncpg.Record) -> RespuestaAuth:
-    return RespuestaAuth(
-        id_usuario=fila["id"],
-        token_api=fila["token_api"],
-        nombre_usuario=fila["nombre_usuario"],
-        correo=fila["correo"],
-        creado_en=fila["creado_en"],
-    )
 
 
 def fila_a_escaneo(fila: asyncpg.Record) -> EscaneoRespuesta:

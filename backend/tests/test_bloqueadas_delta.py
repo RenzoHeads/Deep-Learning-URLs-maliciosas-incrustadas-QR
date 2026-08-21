@@ -18,7 +18,7 @@ def _payload() -> dict:
 
 
 def _bloquear(client, body: dict | None = None):
-    r = client.post("/urls-bloqueadas?token_api=test-token", json=body or _payload())
+    r = client.post("/urls-bloqueadas", json=body or _payload())
     return r
 
 
@@ -27,7 +27,7 @@ def _bloquear(client, body: dict | None = None):
 # ============================================================================
 def test_listar_urls_bloqueadas(client):
     _bloquear(client)
-    r = client.get("/urls-bloqueadas?token_api=test-token")
+    r = client.get("/urls-bloqueadas")
     assert r.status_code == 200, r.text
     assert isinstance(r.json(), list)
     assert len(r.json()) >= 1
@@ -48,7 +48,7 @@ def test_bloquear_url_duplicada_409(client):
 
 def test_desbloquear_url_204(client):
     creado = _bloquear(client).json()
-    r = client.delete(f"/urls-bloqueadas/{creado['id']}?token_api=test-token")
+    r = client.delete(f"/urls-bloqueadas/{creado['id']}")
     assert r.status_code == 204
 
 
@@ -77,7 +77,7 @@ def test_get_urls_bloqueadas_con_modificados_desde(client):
     # El test afirma len==0 -> FALLA contra actual (que devuelve el row creado).
     _bloquear(client)
     r = client.get(
-        "/urls-bloqueadas?modificados_desde=2099-01-01T00:00:00Z&token_api=test-token"
+        "/urls-bloqueadas?modificados_desde=2099-01-01T00:00:00Z"
     )
     assert r.status_code == 200, r.text
     assert len(r.json()) == 0, (
@@ -88,7 +88,7 @@ def test_get_urls_bloqueadas_con_modificados_desde(client):
 
 def test_desbloquear_es_soft_delete(client, store):
     creado = _bloquear(client).json()
-    r = client.delete(f"/urls-bloqueadas/{creado['id']}?token_api=test-token")
+    r = client.delete(f"/urls-bloqueadas/{creado['id']}")
     assert r.status_code == 204
     rows = [r2 for r2 in store["urls_bloqueadas"] if str(r2["id"]) == str(creado["id"])]
     assert len(rows) == 1, "soft-delete: el row debe conservarse"
@@ -109,11 +109,11 @@ def test_resurrect_url(client):
     assert creado["deleted_at"] is None
 
     # 2. Desbloquear (soft-delete)
-    r2 = client.delete(f"/urls-bloqueadas/{url_id}?token_api=test-token")
+    r2 = client.delete(f"/urls-bloqueadas/{url_id}")
     assert r2.status_code == 204
 
     # 3. Verificar que ya no aparece en el listado activo
-    r3 = client.get("/urls-bloqueadas?token_api=test-token")
+    r3 = client.get("/urls-bloqueadas")
     assert r3.status_code == 200
     urls_activas = [u for u in r3.json() if u["url"] == _payload()["url"]]
     assert len(urls_activas) == 0, "La URL desbloqueada no debe aparecer en el listado activo"
@@ -131,7 +131,7 @@ def test_resurrect_url(client):
     assert resurrected["deleted_at"] is None, "Tras resurrect, deleted_at debe ser NULL"
 
     # 6. La URL debe aparecer nuevamente en el listado activo
-    r5 = client.get("/urls-bloqueadas?token_api=test-token")
+    r5 = client.get("/urls-bloqueadas")
     urls_activas = [u for u in r5.json() if u["url"] == _payload()["url"]]
     assert len(urls_activas) == 1, "La URL resurrectada debe aparecer exactamente una vez en el listado activo"
 
@@ -155,7 +155,7 @@ def test_keyset_fila_limite_no_se_repite_con_mismo_updated_at(client, store):
     rows[2].update(id=uuid.UUID(int=3), updated_at=t0 + timedelta(hours=1))
 
     r1 = client.get(
-        "/urls-bloqueadas?modificados_desde=2026-07-01T00:00:00Z&limite=2&token_api=test-token"
+        "/urls-bloqueadas?modificados_desde=2026-07-01T00:00:00Z&limite=2"
     )
     assert r1.status_code == 200, r1.text
     p1 = r1.json()
@@ -163,7 +163,7 @@ def test_keyset_fila_limite_no_se_repite_con_mismo_updated_at(client, store):
 
     r2 = client.get(
         f"/urls-bloqueadas?modificados_desde={p1[-1]['updated_at']}&limite=2"
-        f"&cursor_id={p1[-1]['id']}&token_api=test-token"
+        f"&cursor_id={p1[-1]['id']}"
     )
     assert r2.status_code == 200, r2.text
     p2 = r2.json()
@@ -199,7 +199,7 @@ def test_keyset_barrido_completo_sin_duplicados_ni_perdidas(client, store):
     while True:
         url = (
             f"/urls-bloqueadas?modificados_desde={modificados_desde}&limite=2"
-            f"&token_api=test-token"
+            f""
         )
         if cursor_id:
             url += f"&cursor_id={cursor_id}"

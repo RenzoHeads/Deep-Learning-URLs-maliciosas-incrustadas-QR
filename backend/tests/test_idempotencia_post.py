@@ -56,8 +56,8 @@ def _denuncia_payload(id_cliente: str | None = "clt-den-0001") -> dict:
 # Escaneos
 # ============================================================================
 def test_escaneo_replay_mismo_id_cliente_devuelve_mismo_id(client, store):
-    r1 = client.post("/escaneos?token_api=test-token", json=_escaneo_payload())
-    r2 = client.post("/escaneos?token_api=test-token", json=_escaneo_payload())
+    r1 = client.post("/escaneos", json=_escaneo_payload())
+    r2 = client.post("/escaneos", json=_escaneo_payload())
     assert r1.status_code == 201 and r2.status_code == 201, (r1.text, r2.text)
     assert r1.json()["id"] == r2.json()["id"], "replay debe devolver la misma fila"
     filas = store["historial_escaneos"]
@@ -67,10 +67,10 @@ def test_escaneo_replay_mismo_id_cliente_devuelve_mismo_id(client, store):
 
 def test_escaneo_distinto_id_cliente_mismo_payload_crea_dos_filas(client, store):
     r1 = client.post(
-        "/escaneos?token_api=test-token", json=_escaneo_payload("clt-esc-aaa")
+        "/escaneos", json=_escaneo_payload("clt-esc-aaa")
     )
     r2 = client.post(
-        "/escaneos?token_api=test-token", json=_escaneo_payload("clt-esc-bbb")
+        "/escaneos", json=_escaneo_payload("clt-esc-bbb")
     )
     assert r1.status_code == 201 and r2.status_code == 201
     assert r1.json()["id"] != r2.json()["id"]
@@ -81,10 +81,10 @@ def test_escaneo_legacy_sin_id_cliente_conserva_append_only(client, store):
     # Clientes legacy sin id_cliente: el log append-only se mantiene
     # (misma URL escaneada dos veces = dos escaneos, no se colapsan).
     r1 = client.post(
-        "/escaneos?token_api=test-token", json=_escaneo_payload(id_cliente=None)
+        "/escaneos", json=_escaneo_payload(id_cliente=None)
     )
     r2 = client.post(
-        "/escaneos?token_api=test-token", json=_escaneo_payload(id_cliente=None)
+        "/escaneos", json=_escaneo_payload(id_cliente=None)
     )
     assert r1.status_code == 201 and r2.status_code == 201
     assert r1.json()["id"] != r2.json()["id"]
@@ -96,14 +96,14 @@ def test_escaneo_tombstone_race_id_cliente_reusado_devuelve_409(client, store):
     # fila ya soft-deleted → el INSERT hace DO NOTHING, el re-SELECT no
     # encuentra fila viva → 409 (antes: fila_a_escaneo(None) → crash 500).
     r1 = client.post(
-        "/escaneos?token_api=test-token", json=_escaneo_payload("clt-esc-tomb")
+        "/escaneos", json=_escaneo_payload("clt-esc-tomb")
     )
     assert r1.status_code == 201
     for row in store["historial_escaneos"]:
         if row.get("id_cliente") == "clt-esc-tomb":
             row["deleted_at"] = "2026-07-25T00:00:00Z"
     r2 = client.post(
-        "/escaneos?token_api=test-token", json=_escaneo_payload("clt-esc-tomb")
+        "/escaneos", json=_escaneo_payload("clt-esc-tomb")
     )
     assert r2.status_code == 409, (
         f"id_cliente de fila eliminada debe dar 409, got {r2.status_code}: {r2.text}"
@@ -120,8 +120,8 @@ def test_escaneo_tombstone_race_id_cliente_reusado_devuelve_409(client, store):
 # URLs bloqueadas
 # ============================================================================
 def test_bloqueada_replay_mismo_id_cliente_devuelve_mismo_id(client, store):
-    r1 = client.post("/urls-bloqueadas?token_api=test-token", json=_bloqueo_payload())
-    r2 = client.post("/urls-bloqueadas?token_api=test-token", json=_bloqueo_payload())
+    r1 = client.post("/urls-bloqueadas", json=_bloqueo_payload())
+    r2 = client.post("/urls-bloqueadas", json=_bloqueo_payload())
     assert r1.status_code == 201 and r2.status_code == 201, (r1.text, r2.text)
     assert r1.json()["id"] == r2.json()["id"], "replay debe devolver la misma fila"
     assert len(store["urls_bloqueadas"]) == 1
@@ -131,10 +131,10 @@ def test_bloqueada_legacy_sin_id_cliente_duplicada_sigue_409(client):
     # Comportamiento legacy preservado: sin id_cliente, la misma URL dos
     # veces sigue devolviendo 409 (la idempotencia nueva no lo altera).
     r1 = client.post(
-        "/urls-bloqueadas?token_api=test-token", json=_bloqueo_payload(id_cliente=None)
+        "/urls-bloqueadas", json=_bloqueo_payload(id_cliente=None)
     )
     r2 = client.post(
-        "/urls-bloqueadas?token_api=test-token", json=_bloqueo_payload(id_cliente=None)
+        "/urls-bloqueadas", json=_bloqueo_payload(id_cliente=None)
     )
     assert r1.status_code == 201
     assert r2.status_code == 409, r2.text
@@ -144,8 +144,8 @@ def test_bloqueada_legacy_sin_id_cliente_duplicada_sigue_409(client):
 # Denuncias
 # ============================================================================
 def test_denuncia_replay_mismo_id_cliente_devuelve_mismo_id(client, store):
-    r1 = client.post("/denuncias?token_api=test-token", json=_denuncia_payload())
-    r2 = client.post("/denuncias?token_api=test-token", json=_denuncia_payload())
+    r1 = client.post("/denuncias", json=_denuncia_payload())
+    r2 = client.post("/denuncias", json=_denuncia_payload())
     assert r1.status_code == 201 and r2.status_code == 201, (r1.text, r2.text)
     assert r1.json()["id"] == r2.json()["id"], "replay debe devolver la misma fila"
     assert r1.json()["nombre_categoria"] == "Phishing"
@@ -156,10 +156,10 @@ def test_denuncia_replay_mismo_id_cliente_devuelve_mismo_id(client, store):
 
 def test_denuncia_distinto_id_cliente_mismo_payload_crea_dos_filas(client, store):
     r1 = client.post(
-        "/denuncias?token_api=test-token", json=_denuncia_payload("clt-den-aaa")
+        "/denuncias", json=_denuncia_payload("clt-den-aaa")
     )
     r2 = client.post(
-        "/denuncias?token_api=test-token", json=_denuncia_payload("clt-den-bbb")
+        "/denuncias", json=_denuncia_payload("clt-den-bbb")
     )
     assert r1.status_code == 201 and r2.status_code == 201
     assert r1.json()["id"] != r2.json()["id"]

@@ -23,11 +23,11 @@ def _payload_escaneo() -> dict:
 
 
 def test_post_escaneo_aparece_en_delta_pull(client):
-    r = client.post("/escaneos?token_api=test-token", json=_payload_escaneo())
+    r = client.post("/escaneos", json=_payload_escaneo())
     assert r.status_code == 201, r.text
 
     r_delta = client.get(
-        "/escaneos?modificados_desde=1970-01-01T00:00:00Z&token_api=test-token"
+        "/escaneos?modificados_desde=1970-01-01T00:00:00Z"
     )
     assert r_delta.status_code == 200, r_delta.text
     data = r_delta.json()
@@ -40,14 +40,14 @@ def test_post_escaneo_aparece_en_delta_pull(client):
 
 def test_post_bloqueada_aparece_en_delta_pull(client):
     r = client.post(
-        "/urls-bloqueadas?token_api=test-token",
+        "/urls-bloqueadas",
         json={"url": "https://malicious.example.com/phish", "razon": "phishing"},
     )
     assert r.status_code == 201, r.text
 
     r_delta = client.get(
         "/urls-bloqueadas?modificados_desde=1970-01-01T00:00:00Z"
-        "&token_api=test-token"
+        ""
     )
     assert r_delta.status_code == 200, r_delta.text
     data = r_delta.json()
@@ -60,7 +60,7 @@ def test_post_bloqueada_aparece_en_delta_pull(client):
 
 def test_post_denuncia_aparece_en_delta_pull(client):
     r = client.post(
-        "/denuncias?token_api=test-token",
+        "/denuncias",
         json={
             "url": "https://phish.example.com/x",
             "id_categoria": 1,
@@ -70,7 +70,7 @@ def test_post_denuncia_aparece_en_delta_pull(client):
     assert r.status_code == 201, r.text
 
     r_delta = client.get(
-        "/denuncias?modificados_desde=1970-01-01T00:00:00Z&token_api=test-token"
+        "/denuncias?modificados_desde=1970-01-01T00:00:00Z"
     )
     assert r_delta.status_code == 200, r_delta.text
     data = r_delta.json()

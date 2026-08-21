@@ -34,7 +34,7 @@ def _payload(url_limpia: str = "example.com/foo", nivel: str = "MALICIOSO",
 
 
 def _crear_escaneo(client, body: dict | None = None) -> dict:
-    r = client.post("/escaneos?token_api=test-token", json=body or _payload())
+    r = client.post("/escaneos", json=body or _payload())
     assert r.status_code == 201, r.text
     return r.json()
 
@@ -42,7 +42,7 @@ def _crear_escaneo(client, body: dict | None = None) -> dict:
 def _existe_url(client, url_limpia: str) -> dict:
     r = client.get(
         "/escaneos/existe-url",
-        params={"url_limpia": url_limpia, "token_api": "test-token"},
+        params={"url_limpia": url_limpia},
     )
     assert r.status_code == 200, r.text
     return r.json()
@@ -111,7 +111,7 @@ def test_existe_url_soft_delete_hace_existe_false(client, store):
     data_antes = _existe_url(client, "deleteme.com/x")
     assert data_antes["existe"] is True
     # Soft-delete via DELETE /escaneos/{id}.
-    r = client.delete(f"/escaneos/{escaneo['id']}?token_api=test-token")
+    r = client.delete(f"/escaneos/{escaneo['id']}")
     assert r.status_code == 204
     # Ahora ninguna fila viva → existe=False.
     data_despues = _existe_url(client, "deleteme.com/x")

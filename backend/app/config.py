@@ -16,10 +16,17 @@ class Ajustes(BaseSettings):
     # desde localhost y para origins web futuros.
     ALLOWED_ORIGINS: str = "https://qr-guardian-api.vercel.app"
 
+    # Auth0 — verificacion de access tokens JWT en verificar_token.
+    # DOMAIN: tenant Auth0 (ej. dev-abc123.us.auth0.com, sin https://).
+    # AUDIENCE: identifier de la API registrada en Auth0; debe coincidir
+    # con el audience que pide la app Android al hacer login.
+    AUTH0_DOMAIN: str = ""
+    AUTH0_AUDIENCE: str = ""
+    AUTH0_ALGORITMOS: str = "RS256"
+
     # Rate limiting fixed-window (ver app/rate_limit.py).
     RATE_LIMIT_VENTANA_SEGUNDOS: int = 60
-    RATE_LIMIT_AUTH: int = 10   # /auth/registrar + /auth/login
-    RATE_LIMIT_API: int = 120   # resto de endpoints CRUD/sync
+    RATE_LIMIT_API: int = 120   # endpoints CRUD/sync
 
     # Pool asyncpg (ver app/base_datos.py).
     POOL_MIN_SIZE: int = 0      # 0: sin conexion eager (Vercel cold-start)

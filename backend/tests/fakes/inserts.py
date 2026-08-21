@@ -134,13 +134,19 @@ def insert_returning(
             "nombre_categoria": "Phishing",
         }
     elif table == "usuarios":
+        # INSERT JIT de app.servicios.auth — (auth0_user_id, nombre_usuario).
+        # Respeta ``ON CONFLICT (auth0_user_id) DO NOTHING``: sub existente
+        # → [] (fetchrow recibe None y la dependencia resuelve por SELECT).
+        if "ON CONFLICT" in sql_u and "DO NOTHING" in sql_u:
+            auth0_nuevo = params[0]
+            for r in store.get(table, []):
+                if r.get("auth0_user_id") == auth0_nuevo:
+                    return []  # conflict — DO NOTHING
         new_row = {
             "id": uuid.uuid4(),
-            "id_dispositivo": params[0],
-            "correo": params[1],
-            "token_api": params[2],
-            "nombre_usuario": params[3],
-            "password_hash": params[4],
+            "auth0_user_id": params[0],
+            "nombre_usuario": params[1],
+            "correo": None,
             "creado_en": datetime.now(timezone.utc),
         }
     else:

@@ -60,6 +60,39 @@ jobs:
               "https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}/env" >/dev/null
           echo "DATABASE_URL env var synced."
 
+      - name: Sync env vars de Auth0 a Vercel (production)
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          AUTH0_DOMAIN: ${{ secrets.AUTH0_DOMAIN }}
+          AUTH0_AUDIENCE: ${{ secrets.AUTH0_AUDIENCE }}
+        run: |
+          set -euo pipefail
+          for VAR in AUTH0_DOMAIN AUTH0_AUDIENCE; do
+            VALOR="${!VAR}"
+            if [ -z "${VALOR:-}" ]; then
+              echo "::error::GitHub Secret $VAR is not set. Create it in repo Settings > Secrets and variables > Actions."
+              exit 1
+            fi
+            EXISTING_IDS=$(curl -fsSL -H "Authorization: Bearer ${VERCEL_TOKEN}" \
+              "https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}/env" \
+              | jq -r ".envs[]? | select(.key==\"$VAR\") | .id" || true)
+            if [ -n "${EXISTING_IDS}" ]; then
+              for id in ${EXISTING_IDS}; do
+                curl -fsSL -X DELETE -H "Authorization: Bearer ${VERCEL_TOKEN}" \
+                  "https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}/env/${id}" >/dev/null || true
+              done
+            fi
+            jq -n --arg val "${VALOR}" \
+              "{key:\"$VAR\", value:\$val, target:[\"production\"], type:\"encrypted\"}" \
+              | curl -fsSL -X POST \
+                -H "Authorization: Bearer ${VERCEL_TOKEN}" \
+                -H "Content-Type: application/json" \
+                --data @- \
+                "https://api.vercel.com/v9/projects/${VERCEL_PROJECT_ID}/env" >/dev/null
+            echo "$VAR env var synced."
+          done
+
       - name: Deploy to Vercel (production)
         working-directory: backend
         run: |

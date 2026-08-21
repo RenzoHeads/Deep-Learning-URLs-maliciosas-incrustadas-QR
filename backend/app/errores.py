@@ -25,17 +25,6 @@ class ErrorDominio(Exception):
 
 
 # ── Auth ────────────────────────────────────────────────────────────────────
-class UsuarioYaExiste(ErrorDominio):
-    status_code = 409
-    detail = "El nombre de usuario ya esta en uso"
-
-
-class CredencialesInvalidas(ErrorDominio):
-    status_code = 401
-    detail = "Usuario o password incorrectos"
-    headers = {"WWW-Authenticate": "Bearer"}
-
-
 class TokenInvalido(ErrorDominio):
     status_code = 401
     detail = "Token de API invalido"

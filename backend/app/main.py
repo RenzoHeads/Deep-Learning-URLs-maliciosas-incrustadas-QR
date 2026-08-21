@@ -24,7 +24,7 @@ from app.config import obtener_ajustes
 from app.dependencias import Pool
 from app.errores import ErrorDominio
 from app.rate_limit import RateLimitMiddleware
-from app.routers import auth, historial, bloqueadas, denuncias
+from app.routers import bloqueadas, denuncias, historial
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +107,6 @@ app.add_middleware(
 )
 
 # Registrar routers
-app.include_router(auth.router)
 app.include_router(historial.router)
 app.include_router(bloqueadas.router)
 app.include_router(denuncias.router)

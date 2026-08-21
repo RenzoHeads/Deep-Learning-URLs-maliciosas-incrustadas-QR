@@ -1,5 +1,5 @@
 """Tests de robustez del backend: IP real del rate limit, pool asyncpg
-contra PgBouncer/Neon, 500 JSON, orden de middlewares y limite bcrypt.
+contra PgBouncer/Neon, 500 JSON y orden de middlewares.
 
 Cada test corresponde a un bug de la auditoria:
   - Rate limit: el primer hop de X-Forwarded-For es spoofeable por el
@@ -15,8 +15,6 @@ Cada test corresponde a un bug de la auditoria:
     de Starlette → text/plain, rompiendo el contrato JSON de errores.
   - CORS outer: con RateLimit por fuera de CORS, el 429 viaja sin
     headers CORS y es ilegible para consumidores web.
-  - bcrypt: hashpw/checkpw operan sobre los primeros 72 bytes; passwords
-    mas largas colisionan silenciosamente (max_length=128 las aceptaba).
 """
 from __future__ import annotations
 
@@ -24,7 +22,6 @@ import asyncio
 import json
 
 import pytest
-from pydantic import ValidationError
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 
@@ -125,15 +122,3 @@ def test_cors_es_middleware_mas_externo():
         "CORS debe ser el middleware mas externo para que el 429 del rate "
         "limit incluya headers CORS y sea legible por consumidores web."
     )
-
-
-# ── bcrypt: 72 bytes ─────────────────────────────────────────────────────────
-def test_passwords_rechazan_mas_de_72_bytes():
-    from app.modelos import LoginEntrada, RegistroUsuarioEntrada
-
-    with pytest.raises(ValidationError):
-        RegistroUsuarioEntrada(
-            nombre_usuario="usuario", password="a" * 73, correo=None
-        )
-    with pytest.raises(ValidationError):
-        LoginEntrada(nombre_usuario="usuario", password="a" * 73)

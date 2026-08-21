@@ -22,12 +22,11 @@ y un Vercel reroute_tipicamente reutiliza la misma instancia caliente
 para conexiones cercanas en el tiempo.
 
 Limites (configurables via env — ver ``app.config.Ajustes``):
-  - AUTH:  RATE_LIMIT_AUTH=10  req / RATE_LIMIT_VENTANA_SEGUNDOS=60 s por IP
   - API:   RATE_LIMIT_API=120  req / RATE_LIMIT_VENTANA_SEGUNDOS=60 s por IP
   - Salud: exento (monitores de uptime necesitan probing continuo)
 
-Respuesta 429 incluye header `Retry-After` (segundos restantes en la
-ventana) para que el cliente Android pueda retroceder con backoff.
+(El limite AUTH de los endpoints /auth/* legacy se elimino junto con
+esos endpoints — la autenticacion vive en Auth0 desde la migracion 012.)
 """
 from __future__ import annotations
 
@@ -47,8 +46,7 @@ from app.config import obtener_ajustes
 #    monkeypatchean directamente sobre el modulo) ──
 
 VENTANA_SEGUNDOS = obtener_ajustes().RATE_LIMIT_VENTANA_SEGUNDOS
-LIMITE_AUTH = obtener_ajustes().RATE_LIMIT_AUTH   # /auth/registrar + /auth/login
-LIMITE_API = obtener_ajustes().RATE_LIMIT_API     # resto de endpoints CRUD/sync
+LIMITE_API = obtener_ajustes().RATE_LIMIT_API       # endpoints CRUD/sync
 
 
 # ── Estado en memoria ──
@@ -61,8 +59,8 @@ class _Contador:
 
 
 # Dict[(ip, route_class)] → _Contador. Crecimiento acotado: en el peor
-# caso ~N_ips distintas * 2 clases = 2N entradas. Para N=10k IPs activas
-# = 20k entradas, ~1.6 MB. Aceptable en serverless efimero.
+# caso ~N_ips * 1 clase = N entradas. Para N=10k IPs activas = 10k
+# entradas, ~0.8 MB. Aceptable en serverless efimero.
 _contadores: dict[tuple[str, str], _Contador] = defaultdict(_Contador)
 _lock = asyncio.Lock()
 
@@ -71,15 +69,12 @@ def _clasificar_ruta(path: str) -> str:
     """Clasifica un path en categoria de rate limit.
 
     Returns:
-        "auth"  → aplica LIMITE_AUTH (estricto, brute-force)
         "api"   → aplica LIMITE_API (general CRUD/sync)
         "salud" → exento (no rate limit)
         "raiz"  → exento (endpoint de verificacion /)
     """
     if path in ("/salud", "/"):
         return "salud"
-    if path.startswith("/auth/"):
-        return "auth"
     return "api"
 
 
@@ -106,8 +101,6 @@ def _obtener_cliente_ip(request: Request) -> str:
 
 def _limite_para_clase(clase: str) -> int:
     """Devuelve el limite configurado para la clase de ruta."""
-    if clase == "auth":
-        return LIMITE_AUTH
     if clase == "api":
         return LIMITE_API
     return 0  # "salud" / exento
