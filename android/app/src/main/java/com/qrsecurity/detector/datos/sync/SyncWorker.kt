@@ -217,6 +217,26 @@ class SyncWorker @AssistedInject constructor(
         /** Maximo de tiempo para procesar el outbox en un worker-run. */
         internal const val PRESUPUESTO_PUSH_MS = 8 * 60 * 1000L
 
+        /**
+         * A3-a fix — tamanio del batch de claim en `procesarPendingOps`.
+         *
+         * Cada iteracion del loop drena [BATCH_SIZE_PUSH] ops en una sola
+         * tx (3 SQL agrupadas via `minPendingIds` + `markInProgressBatch`
+         * + `getByIds`). Amortiza el fsync de WAL por cada N ops
+         * procesados, reduciendo el overhead de `withTransaction` cuando
+         * hay cola atrasada.
+         *
+         * `8` es un balance empirico:
+         *   - Techo: WAL fsync cuesta ~5-15ms por tx en flash moderna;
+         *     procesar 8 ops en una tx ahorra 7 fsyncs (~50-100ms).
+         *   - Cola: el ultimo op del batch puede ser procesado fuera de tx
+         *     en donde un HTTP hito puede durar 20-60s. Un batch grande
+         *     aumentaria el riesgo de phantom `intentos++` si el worker
+         *     muere en ese ventana. 8 es lo suficientemente pequeno para
+         *     que `MAX_INTENTOS_OP=10` siga dando margen amplio.
+         */
+        internal const val BATCH_SIZE_PUSH = 8
+
         /** SharedPreferences file name for sync metadata. */
         const val PREFS_SYNC = "qr_guardian_sync_prefs"
 

@@ -7,37 +7,33 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
+
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SearchOff
-import androidx.compose.material.icons.filled.Sync
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -55,6 +51,7 @@ import com.qrsecurity.detector.ui.theme.CyberRojo
 import com.qrsecurity.detector.ui.theme.CyberTextoPrincipal
 import com.qrsecurity.detector.ui.theme.CyberTextoSecundario
 import com.qrsecurity.detector.ui.theme.CyberVerdeAlerta
+import com.qrsecurity.detector.ui.theme.Borde
 import com.qrsecurity.detector.ui.theme.Elevacion
 import com.qrsecurity.detector.ui.theme.Espaciado
 import com.qrsecurity.detector.ui.theme.RadioBorde
@@ -81,9 +78,9 @@ import java.util.Locale
  * Cambio visual: cada fila de escaneo ahora se envuelve en su propio Card
  * con fondo cyber-glass y esquinas redondeadas (en vez de un solo Card por
  * grupo con todas las filas y divisores internos). Los headers de grupo
- * ("Hoy", "Ayer", "Anteriores") se preservan como items individuales del
- * LazyColumn — virtualizacion completa incluso dentro de un mismo grupo
- * (clave para usuarios con miles de URLs todas agrupadas en "Anteriores").
+ * ("Hoy", "Ayer", "Anteayer", y fechas concretas "dd/MM/yyyy") se preservan
+ * como items individuales del LazyColumn — virtualizacion completa incluso
+ * dentro de un mismo grupo (clave para usuarios con miles de URLs).
  *
  * @param datosViewModel VM compartido con los Flows de historial.
  * @param onEscanear Callback para navegar a la pantalla de analisis.
@@ -98,14 +95,16 @@ fun PantallaHistorial(
     onMensaje: (TipoMensaje, String) -> Unit = { _, _ -> }
 ) {
     val historialUiState by datosViewModel.historialUiState.collectAsStateWithLifecycle()
-    val urlsBloqueadas by datosViewModel.urlsBloqueadas.collectAsStateWithLifecycle()
     val syncEnCurso by datosViewModel.syncEnCurso.collectAsStateWithLifecycle()
     val busqueda by datosViewModel.busquedaHistorial.collectAsStateWithLifecycle()
     val filtroSeleccionado by datosViewModel.filtroHistorial.collectAsStateWithLifecycle()
+    val hayMasHistorial by datosViewModel.hayMasHistorial.collectAsStateWithLifecycle()
 
-    val bloqueadasUrls = remember(urlsBloqueadas) {
-        urlsBloqueadas.map { it.url }.toSet()
-    }
+    // F4.3 audit fix — el set de URLs bloqueadas viene en el UiState (derivado
+    // una vez en el combine del VM). Antes la pantalla colectaba
+    // `urlsBloqueadas` aparte y recomputaba `map { it.url }.toSet()` con
+    // remember en cada emisión.
+    val bloqueadasUrls = historialUiState.urlsBloqueadasSet
 
     // V-1 fix: campos de historialUiState son nullable Int? — null = cargando
     // (la UI muestra "—"), 0 = realmente cero. Esto elimina el flash de
@@ -143,7 +142,6 @@ fun PantallaHistorial(
                         Text(
                             text = "Historial",
                             style = MaterialTheme.typography.displaySmall,
-                            fontWeight = FontWeight.Bold,
                             color = CyberTextoPrincipal
                         )
                         Text(
@@ -153,25 +151,7 @@ fun PantallaHistorial(
                         )
                     }
                     if (syncEnCurso) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(Espaciado.xs),
-                            modifier = Modifier
-                                .background(CyberGlassAlto, RoundedCornerShape(RadioBorde.lg))
-                                .padding(horizontal = Espaciado.md, vertical = Espaciado.sm)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.Sync,
-                                contentDescription = "Sincronizando",
-                                tint = CyberCyan,
-                                modifier = Modifier.size(TamanosIcono.estandar)
-                            )
-                            Text(
-                                text = "Sincronizando...",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = CyberTextoSecundario
-                            )
-                        }
+                        EstadoSincronizacion()
                     }
                 }
             }
@@ -248,7 +228,10 @@ fun PantallaHistorial(
                     horizontalArrangement = Arrangement.spacedBy(Espaciado.sm)
                 ) {
                     ChipResumen("$escaneosFormateado escaneos", CyberCyan)
-                    ChipResumen("${urlsBloqueadas.size} bloqueados", CyberRojo)
+                    ChipResumen(
+                        "${historialUiState.totalUrlsBloqueadas} bloqueados",
+                        CyberRojo
+                    )
                     ChipResumen(
                         segurosPct?.let { "$it% seguros" } ?: "— seguros",
                         CyberVerdeAlerta
@@ -263,41 +246,14 @@ fun PantallaHistorial(
             // flash del empty-state durante el sub-frame de carga.
             if (historialUiState.totalTodos != null && grupos.isEmpty()) {
                 item(key = "empty_state") {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = Espaciado.giganteM),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(Espaciado.md)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.SearchOff,
-                            contentDescription = null,
-                            tint = CyberTextoSecundario,
-                            modifier = Modifier.size(TamanosIcono.mediano)
-                        )
-                        Text(
-                            text = "No hay escaneos para mostrar",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = CyberTextoSecundario
-                        )
-                        Button(
-                            onClick = onEscanear,
-                            shape = RoundedCornerShape(RadioBorde.lg),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = CyberCyan,
-                                contentColor = CyberFondo
-                            )
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.QrCodeScanner,
-                                contentDescription = null,
-                                modifier = Modifier.size(TamanosIcono.estandar)
-                            )
-                            Spacer(modifier = Modifier.width(Espaciado.sm))
-                            Text("Escanear código")
-                        }
-                    }
+                    EstadoVacio(
+                        icono = Icons.Filled.SearchOff,
+                        titulo = "No hay escaneos para mostrar",
+                        descripcion = "Escanea un código QR para ver su análisis aquí.",
+                        textoBoton = "Escanear código",
+                        iconoBoton = Icons.Filled.QrCodeScanner,
+                        onClick = onEscanear,
+                    )
                 }
             } else {
                 // BUG #2 fix: cada grupo se particiona en header + items individuales.
@@ -308,28 +264,41 @@ fun PantallaHistorial(
                 // recycler identificar items movidos entre grupos/ordenes sin
                 // recomponerlos desde cero (mantiene estado y animaciones).
                 grupos.forEach { grupo ->
-                    item(key = "grp_header_${grupo.titulo}") {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = grupo.titulo,
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = CyberTextoSecundario
-                            )
-                            Text(
-                                text = "${grupo.escaneos.size}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = CyberTextoSecundario
+                    item(key = "grp_header_${grupo.titulo}", contentType = "grupo_header") {
+                        // Auditoría UI 2: título + contador + divisor — la
+                        // sección temporal se lee como bloque delimitado, no
+                        // como una etiqueta suelta flotando sobre la lista.
+                        Column(verticalArrangement = Arrangement.spacedBy(Espaciado.xs)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = grupo.titulo,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = CyberTextoSecundario
+                                )
+                                Text(
+                                    text = "${grupo.escaneos.size}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = CyberTextoSecundario
+                                )
+                            }
+                            HorizontalDivider(
+                                thickness = Borde.fino,
+                                color = CyberGlassBorde
                             )
                         }
                     }
                     itemsIndexed(
                         items = grupo.escaneos,
-                        key = { _, escaneo -> escaneo.id }
+                        key = { _, escaneo -> escaneo.id },
+                        // F4.1: headers y filas comparten el LazyColumn — el
+                        // contentType separa los pools de reutilización para
+                        // que el recycler no mezcle "shapes" distintos.
+                        contentType = { _, _ -> "fila_escaneo" }
                     ) { _, escaneo ->
                         val bloqueada = escaneo.urlLimpia in bloqueadasUrls
                         // Cada fila obtiene su propio Card cyber-glass con esquinas
@@ -346,7 +315,24 @@ fun PantallaHistorial(
                                 escaneo = escaneo,
                                 bloqueada = bloqueada,
                                 onVerDetalle = onVerDetalle,
-                                onMensaje = onMensaje,
+                            )
+                        }
+                    }
+                }
+
+                // ─── Cargar más (M5 audit fix) ───
+                // Amplía la ventana LIMIT del historial cuando la lista
+                // cargada alcanzó el límite (solo visible con >500 URLs).
+                if (hayMasHistorial) {
+                    item(key = "cargar_mas") {
+                        TextButton(
+                            onClick = datosViewModel::cargarMasHistorial,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = "Cargar más",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = CyberCyan
                             )
                         }
                     }
@@ -406,7 +392,7 @@ private fun ChipResumen(texto: String, colorPunto: Color) {
         Box(
             modifier = Modifier
                 .size(8.dp)
-                .clip(CircleShape)
+                .clip(RadioBorde.full)
                 .background(colorPunto)
         )
         Text(

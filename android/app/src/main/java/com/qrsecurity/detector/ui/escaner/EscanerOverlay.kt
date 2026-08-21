@@ -12,11 +12,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
 import com.qrsecurity.detector.camera.DeteccionQr
+import com.qrsecurity.detector.ui.theme.Alphas
 import com.qrsecurity.detector.ui.theme.CyberCyan
+import com.qrsecurity.detector.ui.theme.PencilOverlay
 
 /**
  * Componentes visuales y geometricos del viewfinder de escaneo.
@@ -106,8 +107,8 @@ fun ScanReticle() {
         // Animated scan line (horizontal line moving top->bottom inside reticle)
         val scanY = top + reticleSize * scanLineOffset
         val scanAlpha = when {
-            scanLineOffset < 0.05f || scanLineOffset > 0.95f -> 0.3f
-            else -> 0.85f
+            scanLineOffset < 0.05f || scanLineOffset > 0.95f -> Alphas.notorio
+            else -> Alphas.alto
         }
         drawLine(
             color = color.copy(alpha = scanAlpha),
@@ -140,7 +141,7 @@ fun OverlayResaltadoQr(deteccion: DeteccionQr) {
         val rectRight = mapeo.x(bbox.right.toFloat())
         val rectBottom = mapeo.y(bbox.bottom.toFloat())
 
-        val dimColor = Color.Black.copy(alpha = 0.6f)
+        val dimColor = PencilOverlay
 
         // Dim four strips around the QR area (leaves QR visible)
         // Top strip
@@ -178,7 +179,7 @@ fun OverlayResaltadoQr(deteccion: DeteccionQr) {
 
         // Cyan border around the QR highlight area
         drawRect(
-            color = CyberCyan.copy(alpha = 0.85f),
+            color = CyberCyan.copy(Alphas.alto),
             topLeft = Offset(rectLeft, rectTop),
             size = Size(rectRight - rectLeft, rectBottom - rectTop),
             style = Stroke(width = 3.dp.toPx())

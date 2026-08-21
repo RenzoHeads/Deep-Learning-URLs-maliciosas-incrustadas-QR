@@ -2,11 +2,15 @@ package com.qrsecurity.detector.ui
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.qrsecurity.detector.api.ClienteBackend
-import com.qrsecurity.detector.api.login
+import com.auth0.android.authentication.storage.SecureCredentialsManager
 import com.qrsecurity.detector.datos.sync.MediadorSincronizacion
+import com.qrsecurity.detector.sesion.ExcepcionAuth0App
+import com.qrsecurity.detector.sesion.PerfilIdToken
+import com.qrsecurity.detector.sesion.ServicioAuth0
 import com.qrsecurity.detector.sesion.SesionUsuario
 import dagger.hilt.android.lifecycle.HiltViewModel
+import javax.inject.Inject
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -14,7 +18,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import javax.inject.Inject
+import kotlinx.coroutines.withContext
 
 /**
  * UiState para la pantalla Login — patron NowInAndroid.
@@ -36,43 +40,36 @@ data class LoginUiState(
  * del UiState que re-disparaban en rotacion.
  */
 sealed interface LoginEvento {
-    /**
-     * Login exitoso. El registro vive en [RegistroViewModel]; este VM
-     * solo maneja autenticacion de cuentas existentes.
-     */
+    /** Login exitoso — la pantalla navega a HOME. */
     data object Exito : LoginEvento
     data class Error(val mensaje: String) : LoginEvento
 }
 
 /**
  * Acciones que la UI puede despachar (Unidirectional Data Flow).
- *
- * El VM solo ejecuta `clienteBackend.login(nombreUsuario, password)` —
- * el registro vive en [RegistroViewModel].
  */
 sealed interface LoginAction {
     data class Autenticar(
-        val nombreUsuario: String,
+        val correo: String,
         val password: String
     ) : LoginAction
 }
 
 /**
- * ViewModel para la pantalla Login (login-only).
+ * ViewModel para la pantalla Login — auth embebida contra Auth0.
  *
- * Maneja solo `clienteBackend.login(...)`. El registro se delega a
- * [RegistroViewModel].
+ * [ServicioAuth0.iniciarSesion] manda correo+password por TLS directo a
+ * Auth0 (la password nunca se persiste) y devuelve los [Credentials] de
+ * siempre: access token JWT (audience del backend) + refresh token,
+ * que se guardan cifrados en [SecureCredentialsManager].
  *
- * Inyecta [ClienteBackend] via Hilt. [SesionUsuario] se inyecta tambien
- * (companion bridge ya hecho, pero la instancia Hilt es la misma
- * registrada desde AppSeguridadQR).
- *
- * El dogma offline-first no aplica aqui: el login es la excepcion —
- * requiere conectividad (sin token, sin datos cacheados que sirvan).
+ * [SesionUsuario] sigue siendo la fuente unica del estado de sesion
+ * (token + perfil + flag reactivo para NavGuardian).
  */
 @HiltViewModel
 class LoginViewModel @Inject constructor(
-    private val clienteBackend: ClienteBackend,
+    private val servicioAuth0: ServicioAuth0,
+    private val credentialsManager: SecureCredentialsManager,
     private val sesionUsuario: SesionUsuario,
     private val mediadorSincronizacion: MediadorSincronizacion
 ) : ViewModel() {
@@ -92,26 +89,26 @@ class LoginViewModel @Inject constructor(
     fun onAction(action: LoginAction) {
         when (action) {
             is LoginAction.Autenticar -> autenticar(
-                nombreUsuario = action.nombreUsuario,
+                correo = action.correo,
                 password = action.password
             )
         }
     }
 
-    private fun autenticar(
-        nombreUsuario: String,
-        password: String
-    ) {
+    private fun autenticar(correo: String, password: String) {
         if (_uiState.value.procesando) return
 
-        // BUG-M5 fix: validacion local antes de gastar red/timeout.
-        // Antes, campos vacios llegaban al backend que devolvia 400/422
-        // (o peor, 401 si el usuario era blank pero la password NO) tras
-        // ~1-3 s de espera — UX pobre y request inutil. Ahora fallamos
-        // rapido en el cliente con un mensaje claro.
-        if (nombreUsuario.isBlank() || password.isBlank()) {
+        // BUG-M5 fix: validacion local antes de gastar red/timeout —
+        // fallo rapido en el cliente con mensaje claro.
+        if (correo.isBlank() || password.isBlank()) {
             viewModelScope.launch {
-                _eventos.send(LoginEvento.Error("Completa todos los campos"))
+                _eventos.send(LoginEvento.Error("Completa todos los campos."))
+            }
+            return
+        }
+        if (!PATRON_CORREO.matches(correo)) {
+            viewModelScope.launch {
+                _eventos.send(LoginEvento.Error("El correo no tiene un formato válido."))
             }
             return
         }
@@ -119,16 +116,24 @@ class LoginViewModel @Inject constructor(
         _uiState.update { it.copy(procesando = true) }
         viewModelScope.launch {
             try {
-                val respuesta = clienteBackend.login(nombreUsuario, password)
-                if (respuesta.tokenApi.isBlank()) {
+                val credenciales = withContext(Dispatchers.IO) {
+                    servicioAuth0.iniciarSesion(correo, password)
+                }
+                if (credenciales.accessToken.isBlank()) {
                     _uiState.update { it.copy(procesando = false) }
-                    _eventos.send(LoginEvento.Error("El servidor devolvio un token vacio. Intenta de nuevo."))
+                    _eventos.send(LoginEvento.Error("El servidor devolvió un token vacío. Inténtalo de nuevo."))
                     return@launch
                 }
+                withContext(Dispatchers.IO) {
+                    // Cifrado en reposo del paquete completo (access + id +
+                    // refresh) — la password ya no existe en memoria.
+                    credentialsManager.saveCredentials(credenciales)
+                }
+                val perfil = PerfilIdToken.desdeIdToken(credenciales.idToken)
                 sesionUsuario.guardarSesion(
-                    token = respuesta.tokenApi,
-                    usuario = respuesta.nombreUsuario ?: nombreUsuario,
-                    correo = respuesta.correo ?: ""
+                    token = credenciales.accessToken,
+                    usuario = perfil?.nombreMostrable() ?: correo.substringBefore("@"),
+                    correo = perfil?.correo ?: correo
                 )
                 // Tras login exitoso, disparar sync inmediato para hacer PULL
                 // de los datos del usuario desde la nube (escaneos, URLs
@@ -137,13 +142,18 @@ class LoginViewModel @Inject constructor(
                 mediadorSincronizacion.dispararSyncUnica()
                 _uiState.update { it.copy(procesando = false) }
                 _eventos.send(LoginEvento.Exito)
-            } catch (e: ClienteBackend.HttpBackendException) {
+            } catch (e: ExcepcionAuth0App) {
                 _uiState.update { it.copy(procesando = false) }
-                _eventos.send(LoginEvento.Error(manejarErrorAutenticacion(e.codigo, e.cuerpo, e.message, mapOf(401 to "Usuario o contrasena incorrectos."))))
+                _eventos.send(LoginEvento.Error(servicioAuth0.mensajeError(e)))
             } catch (e: Exception) {
                 _uiState.update { it.copy(procesando = false) }
-                _eventos.send(LoginEvento.Error("No se pudo conectar al backend: ${e.message ?: "error desconocido"}"))
+                _eventos.send(LoginEvento.Error("No pudimos conectar. Revisa tu conexión e inténtalo de nuevo."))
             }
         }
+    }
+
+    private companion object {
+        /** RFC-lite: algo@algo.algo — igual que el registro. */
+        val PATRON_CORREO = Regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")
     }
 }

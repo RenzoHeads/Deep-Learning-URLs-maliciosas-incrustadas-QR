@@ -22,7 +22,6 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.automirrored.filled.Logout
-import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -40,13 +39,13 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import com.qrsecurity.detector.BuildConfig
-import com.qrsecurity.detector.ui.theme.CyberCyan
+import com.qrsecurity.detector.ui.theme.Alphas
+import com.qrsecurity.detector.ui.theme.Borde
 import com.qrsecurity.detector.ui.theme.CyberFondo
 import com.qrsecurity.detector.ui.theme.CyberGlass
 import com.qrsecurity.detector.ui.theme.CyberGlassBorde
@@ -122,29 +121,13 @@ fun PantallaAjustes(
             Text(
                 text = "Ajustes",
                 style = MaterialTheme.typography.displaySmall,
-                fontWeight = FontWeight.Bold,
                 color = CyberTextoPrincipal
             )
             if (uiState.syncEnCurso) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(Espaciado.xs)
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Sync,
-                        contentDescription = "Sincronizando",
-                        tint = CyberCyan,
-                        modifier = Modifier.size(TamanosIcono.estandar)
-                    )
-                    Text(
-                        text = "Sincronizando datos...",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = CyberCyan
-                    )
-                }
+                EstadoSincronizacion()
             } else {
                 Text(
-                    text = "Tu proteccion, a tu medida",
+                    text = "Tu protección, a tu medida",
                     style = MaterialTheme.typography.bodySmall,
                     color = CyberTextoSecundario
                 )
@@ -156,19 +139,19 @@ fun PantallaAjustes(
             FilaAjuste(
                 etiqueta = "Exportar historial",
                 icono = Icons.Filled.Download,
-                onClick = { onMensaje(TipoMensaje.INFO, "Funcion proximamente disponible") }
+                onClick = { onMensaje(TipoMensaje.INFO, "Función próximamente disponible") }
             )
-            HorizontalDivider(color = CyberGlassBorde, thickness = 1.dp)
+            HorizontalDivider(color = CyberGlassBorde, thickness = Borde.fino)
             FilaAjuste(
                 etiqueta = "Borrar historial",
                 icono = Icons.Filled.Delete,
                 peligro = true,
-                onClick = { onMensaje(TipoMensaje.INFO, "Funcion proximamente disponible") }
+                onClick = { onMensaje(TipoMensaje.INFO, "Función próximamente disponible") }
             )
-            HorizontalDivider(color = CyberGlassBorde, thickness = 1.dp)
+            HorizontalDivider(color = CyberGlassBorde, thickness = Borde.fino)
             FilaAjusteValor(
                 etiqueta = "Idioma",
-                valor = "Espanol",
+                valor = "Español",
                 icono = Icons.Filled.Language
             )
         }
@@ -176,7 +159,7 @@ fun PantallaAjustes(
         // --- Acerca de Card (sin Plan/Pro) ---
         TarjetaSeccion(titulo = "Acerca de") {
             FilaAjusteValor(
-                etiqueta = "Version",
+                etiqueta = "Versión",
                 valor = BuildConfig.VERSION_NAME,
                 icono = Icons.Filled.Info
             )
@@ -195,19 +178,19 @@ fun PantallaAjustes(
                 .height(TamanosToque.boton),
             shape = RoundedCornerShape(RadioBorde.lg),
             colors = ButtonDefaults.buttonColors(
-                containerColor = CyberRojo.copy(alpha = 0.05f),
+                containerColor = CyberRojo.copy(Alphas.suave),
                 contentColor = CyberRojo
             )
         ) {
             Icon(
                 imageVector = Icons.AutoMirrored.Filled.Logout,
-                contentDescription = "Cerrar sesion",
+                contentDescription = "Cerrar sesión",
                 tint = CyberRojo,
                 modifier = Modifier.size(TamanosIcono.estandar)
             )
             Spacer(modifier = Modifier.width(Espaciado.sm))
             Text(
-                text = "Cerrar sesion",
+                text = "Cerrar sesión",
                 style = MaterialTheme.typography.labelLarge,
                 color = CyberRojo
             )
@@ -249,7 +232,7 @@ private fun TarjetaSeccion(
                 color = CyberTextoPrincipal
             )
             Spacer(modifier = Modifier.height(Espaciado.sm))
-            HorizontalDivider(color = CyberGlassBorde, thickness = 1.dp)
+            HorizontalDivider(color = CyberGlassBorde, thickness = Borde.fino)
             Spacer(modifier = Modifier.height(Espaciado.sm))
             contenido()
         }

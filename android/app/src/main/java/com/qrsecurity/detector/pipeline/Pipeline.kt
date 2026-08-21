@@ -1,6 +1,7 @@
 package com.qrsecurity.detector.pipeline
 
 import android.content.Context
+import android.util.Log
 import com.qrsecurity.detector.api.ClienteBackend
 import com.qrsecurity.detector.cache.CacheResultados
 import com.qrsecurity.detector.datos.local.BaseDatosSeguridad
@@ -123,7 +124,7 @@ class Pipeline @Inject constructor(
 
                 when (extraido) {
                     is ExtractorUrls.Extraido.Vacio -> {
-                        _estado.value = Estado.Error("Contenido QR vacio")
+                        _estado.value = Estado.Error("El QR está vacío")
                     }
                     is ExtractorUrls.Extraido.NoUrl -> {
                         val resultado = ResultadoAnalisis.NoUrl(
@@ -184,7 +185,7 @@ class Pipeline @Inject constructor(
                             _estado.value = Estado.Analizando
                             val resultado = procesarMultiplesUrls(extraido.urls, forzar = forzar)
                             if (resultado == null) {
-                                _estado.value = Estado.Error("Sin URLs analizables")
+                                _estado.value = Estado.Error("El QR no contiene URLs que se puedan analizar")
                             } else {
                                 val idLocal = registrarEscaneoLocal(
                                     urlOriginal = resultado.urlOriginal,
@@ -210,11 +211,13 @@ class Pipeline @Inject constructor(
                 // faltante) y ``OutOfMemoryError`` extienden java.lang.Error,
                 // NO Exception — el catch anterior (Exception) los dejaba
                 // escapar del viewModelScope y crashaba el proceso, justo
-                // los casos que el Bug A4 decia manejar. Se conserva el
-                // nombre de la clase de la excepcion junto con el mensaje.
+                // los casos que el Bug A4 decia manejar. El detalle técnico
+                // (clase + mensaje) va a logcat; el usuario ve un mensaje
+                // legible (antes "$clase: $msg" llegaba al snackbar).
                 val clase = t::class.simpleName ?: "Throwable"
                 val msg = t.message?.takeIf { it.isNotBlank() } ?: "(sin mensaje)"
-                _estado.value = Estado.Error("$clase: $msg")
+                Log.e("Pipeline", "Análisis falló — $clase: $msg")
+                _estado.value = Estado.Error("No pudimos completar el análisis. Inténtalo de nuevo.")
             }
         }
     }

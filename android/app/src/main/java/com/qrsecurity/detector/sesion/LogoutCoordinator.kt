@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
+import com.auth0.android.authentication.storage.SecureCredentialsManager
 import com.qrsecurity.detector.datos.local.BaseDatosSeguridad
 import com.qrsecurity.detector.datos.sync.MediadorSincronizacion
 import com.qrsecurity.detector.datos.sync.SyncWorker
@@ -15,6 +16,7 @@ import com.qrsecurity.detector.ui.CacheDetalleEscaneos
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -94,7 +96,8 @@ class LogoutCoordinator @Inject constructor(
     private val db: BaseDatosSeguridad,
     private val sesionUsuario: SesionUsuario,
     private val pipeline: Pipeline,
-    private val cacheDetalleEscaneos: CacheDetalleEscaneos
+    private val cacheDetalleEscaneos: CacheDetalleEscaneos,
+    private val credentialsManager: SecureCredentialsManager
 ) {
 
     /**
@@ -167,7 +170,15 @@ class LogoutCoordinator @Inject constructor(
         // arrancaria en el resultado del usuario anterior.
         pipeline.reiniciar()
 
-        // 7) Eliminar token + flag de sesion (preserva id_dispositivo).
+        // 7) Borrar las credenciales cifradas de Auth0 (access + id +
+        // refresh tokens). Sin esto, el SecureCredentialsManager
+        // conservaria un refresh token utilizable tras el logout local —
+        // el siguiente arranque con sesion expirada lo canjearia por una
+        // sesion nueva del usuario anterior (fuga cross-user).
+        runCatching { credentialsManager.clearCredentials() }
+            .onFailure { Log.w("LogoutCoordinator", "clearCredentials Auth0 fallo", it) }
+
+        // 8) Eliminar token + flag de sesion (preserva id_dispositivo).
         sesionUsuario.cerrarSesion()
     }
 
@@ -204,9 +215,12 @@ class LogoutCoordinator @Inject constructor(
         while (intentos < maxIntentos) {
             val algunoCorriendo = nombres.any { nombre ->
                 try {
-                    val infos = wm.getWorkInfosForUniqueWork(nombre).get()
-                    infos?.any { it.state == WorkInfo.State.RUNNING || it.state == WorkInfo.State.ENQUEUED }
-                        ?: false
+                    // F4.7 audit fix — getWorkInfosForUniqueWorkFlow + first()
+                    // en vez de getWorkInfosForUniqueWork(...).get(): mismo
+                    // one-shot, pero sin Future.get() bloqueando el hilo de IO
+                    // (query a la BD interna de WorkManager + binder).
+                    wm.getWorkInfosForUniqueWorkFlow(nombre).first()
+                        .any { it.state == WorkInfo.State.RUNNING || it.state == WorkInfo.State.ENQUEUED }
                 } catch (e: Exception) {
                     Log.w("LogoutCoordinator", "getWorkInfos fallo para $nombre", e)
                     false

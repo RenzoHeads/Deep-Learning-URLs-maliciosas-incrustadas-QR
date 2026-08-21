@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Block
@@ -20,12 +19,14 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.qrsecurity.detector.datos.local.entidades.EscaneoEntity
+import com.qrsecurity.detector.ui.theme.Alphas
 import com.qrsecurity.detector.ui.theme.CyberCyan
 import com.qrsecurity.detector.ui.theme.CyberGlassAlto
 import com.qrsecurity.detector.ui.theme.CyberTextoPrincipal
@@ -46,8 +47,7 @@ import com.qrsecurity.detector.ui.theme.TamanosIcono
 internal fun FilaEscaneo(
     escaneo: EscaneoEntity,
     bloqueada: Boolean,
-    onVerDetalle: (String) -> Unit,
-    onMensaje: (TipoMensaje, String) -> Unit
+    onVerDetalle: (String) -> Unit
 ) {
     val nivel = escaneo.nivelAlertaEnum
     val (icono, color) = when (nivel) {
@@ -57,13 +57,24 @@ internal fun FilaEscaneo(
     }
     val etiqueta = if (bloqueada) "Bloqueada" else nivel.etiquetaHistorial
 
+    // M3 audit fix — `fechaRelativa` es pura respecto de `creadoEnMillis`
+    // (su dependencia en "ahora" no cambia dentro de una misma sesión de
+    // visualización). `remember(creadoEnMillis)` cachea el string entre
+    // recomposiciones sin re-ejecutar el DateTimeFormatter cada vez que
+    // la columna se recompone sin que haya cambiado el escaneo. La fecha
+    // grupo ("Hoy" / "Ayer") sí sigue viva porque la computa
+    // `agruparHistorialPorFecha` dentro del StateFlow (no aquí).
+    val fechaRelativaTexto = remember(escaneo.creadoEnMillis) {
+        fechaRelativa(escaneo.creadoEnMillis)
+    }
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable {
-                if (bloqueada) onMensaje(TipoMensaje.INFO, "Abre el detalle para desbloquear esta URL")
-                onVerDetalle(escaneo.id)
-            }
+            // Sin snackbar previo: este tap YA navega al detalle, donde vive
+            // el botón Desbloquear — el mensaje "abre el detalle" aparecía
+            // encima de la pantalla a la que acabábamos de entrar.
+            .clickable { onVerDetalle(escaneo.id) }
             .padding(horizontal = Espaciado.lg, vertical = Espaciado.md),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(Espaciado.md)
@@ -72,7 +83,7 @@ internal fun FilaEscaneo(
         Box(
             modifier = Modifier
                 .size(TamanosIcono.mediano)
-                .background(color.copy(alpha = 0.15f), CircleShape),
+                .background(color.copy(Alphas.bajo), RadioBorde.full),
             contentAlignment = Alignment.Center
         ) {
             Icon(
@@ -92,7 +103,10 @@ internal fun FilaEscaneo(
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.SemiBold,
                 color = CyberTextoPrincipal,
-                maxLines = 1,
+                // Auditoría UI 2: la URL es la información principal de la
+                // fila — 2 líneas antes del ellipsis (antes 1) para que la
+                // mayoría de URLs se lean casi completas.
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis
             )
             Text(
@@ -107,9 +121,11 @@ internal fun FilaEscaneo(
             verticalArrangement = Arrangement.spacedBy(Espaciado.xs)
         ) {
             Text(
-                text = fechaRelativa(escaneo.creadoEnMillis),
+                text = fechaRelativaTexto,
                 style = MaterialTheme.typography.labelSmall,
-                color = CyberTextoSecundario
+                color = CyberTextoSecundario,
+                // Acotado a 1 línea para no robarle ancho a la URL.
+                maxLines = 1
             )
             if (bloqueada) {
                 Row(
@@ -123,7 +139,7 @@ internal fun FilaEscaneo(
                         imageVector = Icons.Filled.LockOpen,
                         contentDescription = "Desbloquear",
                         tint = CyberCyan,
-                        modifier = Modifier.size(14.dp)
+                        modifier = Modifier.size(TamanosIcono.chico)
                     )
                 }
             }

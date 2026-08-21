@@ -2,9 +2,11 @@ package com.qrsecurity.detector.ui.theme
 
 import androidx.compose.material3.Typography
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
+import com.qrsecurity.detector.R
 
 // ──────────────────────────────────────────────────────────────────
 // QR Guardian Type Scale — Pencil rediseño (F3).
@@ -14,14 +16,21 @@ import androidx.compose.ui.unit.sp
 //   - Body (Inter 400/500/600): texto general, labels, botones
 //   - Eyebrow (Inter 600 uppercase letter-spacing): "ACCESO SEGURO", etc.
 //
-// Sin bundling de .ttf: usamos FontFamily.SansSerif como fallback
-// para ambos (Inter y Space Grotesk son sans-serif geometric/humanist;
-// el fallback del sistema es visualmente cercano en Android).
-// El peso (FontWeight) distingue headings (Bold) de body (Normal/Medium).
+// Fuentes bundladas en res/font/ (subset latin, incluye acentos/ñ/¿¡):
+//   - Inter Regular/Medium/SemiBold/Bold
+//   - Space Grotesk Bold
 // ──────────────────────────────────────────────────────────────────
 
-private val FamiliaInter = FontFamily.SansSerif
-private val FamiliaSpaceGrotesk = FontFamily.SansSerif
+private val FamiliaInter = FontFamily(
+    Font(R.font.inter_400, FontWeight.Normal),
+    Font(R.font.inter_500, FontWeight.Medium),
+    Font(R.font.inter_600, FontWeight.SemiBold),
+    Font(R.font.inter_700, FontWeight.Bold),
+)
+
+private val FamiliaSpaceGrotesk = FontFamily(
+    Font(R.font.space_grotesk_700, FontWeight.Bold),
+)
 
 val TipografiaCyberSentinel = Typography(
     // ── Display — Space Grotesk Bold (títulos grandes de pantalla) ──

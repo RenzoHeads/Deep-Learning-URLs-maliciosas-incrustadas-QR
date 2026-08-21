@@ -53,4 +53,29 @@ interface UrlCatalogoDao {
      */
     @Query("DELETE FROM urls_catalogo WHERE urlHash = :urlHash")
     suspend fun eliminarPorHash(urlHash: String)
+
+    // ── M4 audit fix: variantes batch para reconciliar sin N+1 ──
+
+    /**
+     * M4: lookup de K hashes en una sola query (vs [buscarPorHash] × K).
+     * Usado por [com.qrsecurity.detector.datos.repositorios.SyncHelpersKt.reconciliarUrlsCatalogoBatch]
+     * para preservar `vecesEscaneada` de las entradas existentes al
+     * reconciliar un batch de URLs afectadas por sync.
+     */
+    @Query("SELECT * FROM urls_catalogo WHERE urlHash IN (:hashes)")
+    suspend fun buscarPorHashes(hashes: List<String>): List<UrlCatalogoEntity>
+
+    /**
+     * M4: UPSERT de K entradas en una sola transaccion (vs [upsert] × K).
+     * Usado por el mismo reconciler batch.
+     */
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertTodos(entidades: List<UrlCatalogoEntity>)
+
+    /**
+     * M4: DELETE de K hashes en una sola query (vs [eliminarPorHash] × K).
+     * Usado por el reconciler batch cuando el conteo de una URL llega a 0.
+     */
+    @Query("DELETE FROM urls_catalogo WHERE urlHash IN (:hashes)")
+    suspend fun eliminarPorHashes(hashes: List<String>)
 }

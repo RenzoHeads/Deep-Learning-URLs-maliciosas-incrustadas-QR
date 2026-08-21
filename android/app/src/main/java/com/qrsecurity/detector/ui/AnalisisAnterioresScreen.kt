@@ -1,6 +1,5 @@
 package com.qrsecurity.detector.ui
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -8,15 +7,13 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.shape.CircleShape
+
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.History
@@ -25,20 +22,18 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.qrsecurity.detector.ui.theme.Borde
 import com.qrsecurity.detector.ui.theme.CyberCyan
 import com.qrsecurity.detector.ui.theme.CyberFondo
 import com.qrsecurity.detector.ui.theme.CyberGlass
@@ -46,11 +41,9 @@ import com.qrsecurity.detector.ui.theme.CyberGlassAlto
 import com.qrsecurity.detector.ui.theme.CyberGlassBorde
 import com.qrsecurity.detector.ui.theme.CyberTextoPrincipal
 import com.qrsecurity.detector.ui.theme.CyberTextoSecundario
-import com.qrsecurity.detector.ui.theme.Elevacion
 import com.qrsecurity.detector.ui.theme.Espaciado
 import com.qrsecurity.detector.ui.theme.RadioBorde
 import com.qrsecurity.detector.ui.theme.TamanosIcono
-import com.qrsecurity.detector.ui.theme.TamanosToque
 
 /**
  * Pantalla de Analisis Anteriores / Versiones anteriores de una URL
@@ -75,6 +68,9 @@ import com.qrsecurity.detector.ui.theme.TamanosToque
  * @param onEscanear Callback para reanalizar la URL.
  * @param onVerDetalle Callback para ver el detalle de una version.
  * @param viewModel VM de analisis anteriores (compartido a nivel NavGuardian).
+ * @param datosViewModel VM compartido de tabs — fuente única de
+ *   `syncEnCurso` (F4.6: elimina la doble observación Eagerly del WorkInfo
+ *   Flow que mantenía el VM propio).
  */
 @Composable
 fun PantallaAnalisisAnteriores(
@@ -83,19 +79,23 @@ fun PantallaAnalisisAnteriores(
     onVolver: () -> Unit,
     onEscanear: () -> Unit,
     onVerDetalle: (String) -> Unit = {},
-    viewModel: AnalisisAnterioresViewModel
+    viewModel: AnalisisAnterioresViewModel,
+    datosViewModel: DatosTabsViewModel
 ) {
     LaunchedEffect(urlLimpia, idActual) {
         viewModel.cargarAnalisisAnteriores(urlLimpia, idActual)
     }
 
     val estado by viewModel.estadoAnalisisAnteriores.collectAsStateWithLifecycle()
-    val syncEnCurso by viewModel.syncEnCurso.collectAsStateWithLifecycle()
+    val syncEnCurso by datosViewModel.syncEnCurso.collectAsStateWithLifecycle()
 
     val dataCoincide = estado.url == urlLimpia && estado.id == idActual
-    val listaOrdenada = remember(estado.lista) {
-        estado.lista.sortedByDescending { it.creadoEnMillis }
-    }
+    // F4.2 audit fix — sin re-sort: el contrato de
+    // `EscaneoDao.observarReescaneosTodos` ya entrega la lista ordenada por
+    // `creadoEnMillis DESC, id DESC`. El `sortedByDescending` por emisión era
+    // O(n log n) redundante (y `remember(estado.lista)` comparaba la lista
+    // entera por equals en cada emisión para decidir si re-sortear).
+    val listaOrdenada = estado.lista
     val total = estado.total
 
     LazyColumn(
@@ -136,7 +136,7 @@ fun PantallaAnalisisAnteriores(
                     ) {
                         if (syncEnCurso) {
                             CircularProgressIndicator(
-                                modifier = Modifier.size(16.dp),
+                                modifier = Modifier.size(TamanosIcono.chico),
                                 color = CyberCyan,
                                 strokeWidth = 2.dp
                             )
@@ -170,7 +170,7 @@ fun PantallaAnalisisAnteriores(
                     .clip(RoundedCornerShape(RadioBorde.xxl))
                     .background(CyberGlass)
                     .border(
-                        width = 1.dp,
+                        width = Borde.fino,
                         color = CyberGlassBorde,
                         shape = RoundedCornerShape(RadioBorde.xxl)
                     )
@@ -181,7 +181,7 @@ fun PantallaAnalisisAnteriores(
                 Box(
                     modifier = Modifier
                         .size(TamanosIcono.mediano)
-                        .clip(CircleShape)
+                        .clip(RadioBorde.full)
                         .background(CyberGlassAlto),
                     contentAlignment = Alignment.Center
                 ) {
@@ -197,7 +197,10 @@ fun PantallaAnalisisAnteriores(
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Medium,
                     color = CyberTextoPrincipal,
-                    maxLines = 2,
+                    // Auditoría UI 2: misma política que TarjetaUrl — la URL es
+                    // la información principal; hasta 4 líneas antes del
+                    // ellipsis en vez de mutilarla a las 2.
+                    maxLines = 4,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f)
                 )
@@ -206,8 +209,11 @@ fun PantallaAnalisisAnteriores(
 
         // ─── History Section ───
         item(key = "history_label") {
+            // Auditoría UI 2: la lista contiene solo versiones anteriores (el
+            // DAO excluye la vigente) — el label lo dice explícitamente para
+            // que no se confunda con "todas las versiones incluida la actual".
             Text(
-                text = "Historial",
+                text = "Versiones anteriores",
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.Bold,
                 color = CyberTextoSecundario
@@ -225,12 +231,12 @@ fun PantallaAnalisisAnteriores(
                         verticalArrangement = Arrangement.spacedBy(Espaciado.md)
                     ) {
                         CircularProgressIndicator(
-                            modifier = Modifier.size(32.dp),
+                            modifier = Modifier.size(TamanosIcono.cargando),
                             color = CyberCyan,
                             strokeWidth = 2.dp
                         )
                         Text(
-                            text = "Cargando...",
+                            text = "Cargando…",
                             style = MaterialTheme.typography.bodySmall,
                             color = CyberTextoSecundario
                         )
@@ -239,48 +245,22 @@ fun PantallaAnalisisAnteriores(
             }
             listaOrdenada.isEmpty() -> {
                 item(key = "empty") {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = Espaciado.gigante),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(Espaciado.lg)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(TamanosIcono.heroContenedor)
-                                .clip(CircleShape)
-                                .background(CyberGlass),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.History,
-                                contentDescription = null,
-                                tint = CyberTextoSecundario,
-                                modifier = Modifier.size(TamanosIcono.grande)
-                            )
-                        }
-                        Text(
-                            text = "No hay análisis anteriores",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = CyberTextoPrincipal
-                        )
-                        Text(
-                            text = "Esta URL solo tiene una versión.\nEscanea de nuevo para crear un historial.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = CyberTextoSecundario,
-                            textAlign = TextAlign.Center
-                        )
-                    }
+                    EstadoVacio(
+                        icono = Icons.Filled.History,
+                        titulo = "No hay análisis anteriores",
+                        descripcion = "Esta URL solo tiene una versión.\nEscanea de nuevo para crear un historial.",
+                    )
                 }
             }
             else -> {
                 // BUG #2 fix: cada entrada es un item individual del LazyColumn
                 // con key=id → virtualizacion completa.
+                // F4.1: contentType homogéneo — todas las entradas comparten
+                // el mismo "shape", el recycler reutiliza el pool completo.
                 itemsIndexed(
                     items = listaOrdenada,
-                    key = { _, escaneo -> escaneo.id }
+                    key = { _, escaneo -> escaneo.id },
+                    contentType = { _, _ -> "entrada_linea_tiempo" }
                 ) { index, escaneo ->
                     val version = total - index
                     val esUltimo = index == listaOrdenada.lastIndex
@@ -301,30 +281,14 @@ fun PantallaAnalisisAnteriores(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(Espaciado.sm)
             ) {
-                OutlinedButton(
+                // Auditoría UI 2: receta unificada — antes este OutlinedButton
+                // duplicaba a mano la geometría de BotonCyber (56dp, radio lg,
+                // borde fino cyan). Ahora es la variante outline del sistema.
+                BotonCyberOutline(
+                    texto = "Reescanear ahora",
                     onClick = onEscanear,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(TamanosToque.boton),
-                    shape = RoundedCornerShape(RadioBorde.lg),
-                    border = BorderStroke(Elevacion.sutil, CyberCyan),
-                    colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
-                        containerColor = CyberGlass,
-                        contentColor = CyberCyan
-                    )
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Refresh,
-                        contentDescription = null,
-                        modifier = Modifier.size(TamanosIcono.estandar)
-                    )
-                    Spacer(modifier = Modifier.size(Espaciado.sm))
-                    Text(
-                        text = "Reanalizar ahora",
-                        style = MaterialTheme.typography.labelLarge,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
+                    icono = Icons.Filled.Refresh
+                )
                 Text(
                     text = "Un escaneo nuevo tarda ~0,3 s",
                     style = MaterialTheme.typography.labelSmall,

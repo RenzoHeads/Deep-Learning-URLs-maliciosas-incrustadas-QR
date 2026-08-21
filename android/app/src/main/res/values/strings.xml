@@ -1,35 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- App name -->
+    <!-- App name — único string referenciado (AndroidManifest.xml).
+         El resto de la copy de la UI vive en los composables (decisión
+         de arquitectura del rediseño F3); los 23 recursos huérfanos
+         que quedaban de pantallas eliminadas (denuncias, etc.) fueron
+         purgados tras verificar con grep que no tenían referencias. -->
     <string name="app_name">Detector QR Seguro</string>
-    <string name="action_scan_again">Escanear otro código</string>
-    <string name="action_open_url">Abrir enlace</string>
-    <string name="action_grant">Conceder</string>
 
-    <!-- P3-E: action buttons reused across screens -->
-    <string name="action_unblock">Desbloquear</string>
-    <string name="action_cancel">Cancelar</string>
-
-    <!-- P3-F: action buttons and labels reused across screens -->
-    <string name="action_report_url">Denunciar URL</string>
-    <string name="action_block_in_progress">Bloqueando...</string>
-    <string name="action_view_blocked">Ver URLs bloqueadas</string>
-    <string name="action_copy">Copiar</string>
-    <string name="action_share">Compartir</string>
-    <string name="action_grant_permission">Conceder permiso</string>
-    <string name="action_login">Iniciar sesion</string>
-    <string name="action_send_report">Enviar denuncia</string>
-    <string name="action_sending">Enviando...</string>
-    <string name="action_connecting">Conectando...</string>
-
-    <!-- P3-F: DenunciarScreen placeholders -->
-    <string name="placeholder_url_suspicious">https://ejemplo-malicioso.com</string>
-    <string name="placeholder_description">Describe como encontraste esta URL...</string>
-
-    <!-- P3-F: LoginScreen labels -->
-    <string name="label_username">Usuario</string>
-    <string name="label_password">Contrasena</string>
-    <string name="label_email_optional">Correo (opcional)</string>
-    <string name="placeholder_username">usuario123</string>
-    <string name="placeholder_email">usuario@correo.com</string>
+    <!-- Auth0 (SDK lee client_id y domain desde aqui; scheme y audience
+         alimentan WebAuthProvider y el manifest placeholder del callback). -->
+    <string name="com_auth0_client_id" translatable="false">zF6qX2lPMA3hcty729KGwSuUbRmgD8l8</string>
+    <string name="com_auth0_domain" translatable="false">dev-zadviauhpninhr1l.us.auth0.com</string>
+    <string name="com_auth0_scheme" translatable="false">qrguardian</string>
+    <string name="com_auth0_audience" translatable="false">https://qr-guardian-api.vercel.app</string>
 </resources>

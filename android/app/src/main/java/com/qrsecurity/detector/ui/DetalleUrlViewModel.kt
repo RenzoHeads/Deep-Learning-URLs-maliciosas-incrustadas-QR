@@ -11,10 +11,16 @@ import com.qrsecurity.detector.datos.repositorios.eliminarLocalPorUrlLimpia
 import com.qrsecurity.detector.datos.sync.MediadorSincronizacion
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -101,6 +107,12 @@ class DetalleUrlViewModel @Inject constructor(
     // al cargar un nuevo id (navegacion a otro detalle) para evitar
     // coleccionadores duplicados.
     private var cargarJob: Job? = null
+
+    // Audit A2+M1 fix: job de la suscripción interna reactiva (combine de
+    // observarPorUrl + snapshot) montada por cada escaneo NO-NULO emitido
+    // por observarPorId. Se cancela al llegar un nuevo escaneo para que el
+    // urlLimpia y los parámetros del escaneo sean siempre los del último.
+    private var innerJob: Job? = null
 
     // Eventos one-shot via Channel — cada evento se entrega una sola vez.
     private val _mensaje = Channel<MensajeUi>(Channel.BUFFERED)
@@ -195,22 +207,79 @@ class DetalleUrlViewModel @Inject constructor(
                     return@collect
                 }
                 tuvoEmisionNoNula = true
-                val urlBloqueada = repositorioUrlsBloqueadas.obtenerPorUrl(escaneo.urlLimpia) != null
-                // Usar escaneo.id (siempre el PK real en la BD) en lugar de
-                // `id` (param que puede ser clientUUID stale tras reKey).
-                val esUltima = repositorioEscaneos.esUltimaVersion(escaneo.id)
-                val totalReesc = repositorioEscaneos.contarReescaneosSnapshot(
-                    escaneo.urlLimpia, escaneo.id
-                )
+                // Audit A2+M1 fix — reemplaza la cascada de 3 queries en
+                // serie (obtenerPorUrl + esUltimaVersion(id) que re-fetchea
+                // obtenerPorId + contarReescaneosSnapshot) por:
+                //
+                //  1. `observarPorUrl(urlLimpia)` (M1): Flow reactivo al
+                //     estado de bloqueo. Combina con el snapshot para que el
+                //     flag `urlBloqueada` del Cargado se actualice en vivo
+                //     sin re-query cuando `urls_bloqueadas` o `pending_ops`
+                //     cambian (p.ej., el usuario bloquea desde esta misma
+                //     pantalla o el sync confirma un DELETE).
+                //
+                //  2. `esUltimaVersion(urlLimpia, creadoEnMillis, id)` (A2.a):
+                //     sobrecarga directa al DAO — elimina el re-fetch del
+                //     escaneo dentro de RepositorioEscaneos.esUltimaVersion(id).
+                //
+                //  3. `async` paralelo (A2.b): esUltimaVersion y
+                //     contarReescaneosSnapshot corren en concurrente; la
+                //     latencia de la emisión es max(esUltima, reesc) en vez
+                //     de su suma.
+                //
+                //  4. `distinctUntilChanged` (A2.c) sobre el Cargado final
+                //     filtra re-emisiones idénticas (p.ej., Room desconecta
+                //     y re-emite el mismo row). Cargado es data class, su
+                //     equals compara los 4 campos → filtra correctamente.
+                //
+                // El `innerJob` se cancela al llegar el siguiente escaneo
+                // (cambia urlLimpia o id) — descarta el `combine` anterior y
+                // monta uno nuevo con los parámetros correctos.
+                innerJob?.cancel()
+                innerJob = launch {
+                    val urlBloqueadaFlow = repositorioUrlsBloqueadas
+                        .observarPorUrl(escaneo.urlLimpia)
+                        .map { it != null }
+                        .distinctUntilChanged()
 
-                val cargado = DetalleUrlUiState.Cargado(
-                    escaneo = escaneo,
-                    urlBloqueada = urlBloqueada,
-                    esUltimaVersion = esUltima,
-                    totalReescaneos = totalReesc
-                )
-                cacheDetalle.guardar(cargado)
-                _uiState.value = cargado
+                    val snapshotFlow = flow<Pair<Boolean, Int>> {
+                        // coroutineScope garantiza que si una async falla, la
+                        // otra se cancela (structured concurrency). Ambas
+                        // delegan en `ioDispatcher` via el repos ⇒ no roban
+                        // hilos del Main.
+                        coroutineScope {
+                            val deferredUltima = async {
+                                repositorioEscaneos.esUltimaVersion(
+                                    escaneo.urlLimpia,
+                                    escaneo.creadoEnMillis,
+                                    escaneo.id
+                                )
+                            }
+                            val deferredReesc = async {
+                                repositorioEscaneos.contarReescaneosSnapshot(
+                                    escaneo.urlLimpia,
+                                    escaneo.id
+                                )
+                            }
+                            emit(deferredUltima.await() to deferredReesc.await())
+                        }
+                    }
+
+                    combine(urlBloqueadaFlow, snapshotFlow) { urlBloqueada, snapshot ->
+                        val (esUltima, totalReesc) = snapshot
+                        DetalleUrlUiState.Cargado(
+                            escaneo = escaneo,
+                            urlBloqueada = urlBloqueada,
+                            esUltimaVersion = esUltima,
+                            totalReescaneos = totalReesc
+                        )
+                    }
+                    .distinctUntilChanged()
+                    .collect { cargado ->
+                        cacheDetalle.guardar(cargado)
+                        _uiState.value = cargado
+                    }
+                }
             }
         }
     }
@@ -241,9 +310,9 @@ class DetalleUrlViewModel @Inject constructor(
                         estado
                     }
                 }
-                _mensaje.send(MensajeUi(TipoMensaje.EXITO, "URL bloqueada"))
+                _mensaje.send(MensajeUi(TipoMensaje.EXITO, "URL bloqueada."))
             } catch (e: Exception) {
-                _mensaje.send(MensajeUi(TipoMensaje.ERROR, "Error al bloquear URL"))
+                _mensaje.send(MensajeUi(TipoMensaje.ERROR, "No pudimos bloquear la URL. Inténtalo de nuevo."))
             }
         }
     }
@@ -264,12 +333,12 @@ class DetalleUrlViewModel @Inject constructor(
                             estado
                         }
                     }
-                    _mensaje.send(MensajeUi(TipoMensaje.EXITO, "URL desbloqueada"))
+                    _mensaje.send(MensajeUi(TipoMensaje.EXITO, "URL desbloqueada."))
                 } else {
-                    _mensaje.send(MensajeUi(TipoMensaje.INFO, "La URL no estaba bloqueada"))
+                    _mensaje.send(MensajeUi(TipoMensaje.INFO, "La URL no estaba bloqueada."))
                 }
             } catch (e: Exception) {
-                _mensaje.send(MensajeUi(TipoMensaje.ERROR, "Error al desbloquear URL"))
+                _mensaje.send(MensajeUi(TipoMensaje.ERROR, "No pudimos desbloquear la URL. Inténtalo de nuevo."))
             }
         }
     }
@@ -296,10 +365,10 @@ class DetalleUrlViewModel @Inject constructor(
                 // como Cargado stale y pintaban un detalle fantasma al
                 // re-entrar desde AnalisisAnteriores).
                 cacheDetalle.invalidarPorUrlLimpia(urlLimpia)
-                _mensaje.send(MensajeUi(TipoMensaje.EXITO, "URL eliminada del historial"))
+                _mensaje.send(MensajeUi(TipoMensaje.EXITO, "URL eliminada del historial."))
                 _eliminarCompletado.send(true)
             } catch (e: Exception) {
-                _mensaje.send(MensajeUi(TipoMensaje.ERROR, "Error al eliminar URL"))
+                _mensaje.send(MensajeUi(TipoMensaje.ERROR, "No pudimos eliminar la URL. Inténtalo de nuevo."))
             }
         }
     }

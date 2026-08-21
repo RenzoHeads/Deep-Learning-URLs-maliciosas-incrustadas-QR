@@ -9,18 +9,14 @@ import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -50,11 +46,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -72,15 +64,18 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.qrsecurity.detector.camera.DeteccionQr
 import com.qrsecurity.detector.camera.ModuloCamara
-import com.qrsecurity.detector.pipeline.Pipeline
 import com.qrsecurity.detector.pipeline.PipelineViewModel
+import com.qrsecurity.detector.ui.theme.Alphas
+import com.qrsecurity.detector.ui.theme.Borde
 import com.qrsecurity.detector.ui.theme.CyberCyan
 import com.qrsecurity.detector.ui.theme.CyberFondo
 import com.qrsecurity.detector.ui.theme.CyberGlass
+import com.qrsecurity.detector.ui.theme.CyberGlassBorde
 import com.qrsecurity.detector.ui.theme.CyberTextoPrincipal
 import com.qrsecurity.detector.ui.theme.CyberTextoSecundario
 import com.qrsecurity.detector.ui.theme.Espaciado
 import com.qrsecurity.detector.ui.theme.RadioBorde
+import com.qrsecurity.detector.ui.theme.TamanosIcono
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import com.qrsecurity.detector.pipeline.Estado
@@ -258,7 +253,7 @@ fun PantallaHome(
             // aunque el payload SI era una URL — mensaje contradictorio.
             val noUrl = e.resultado as ResultadoAnalisis.NoUrl
             val mensaje = if (noUrl.tipoContenido == "url_demasiado_larga") {
-                "El QR contiene una URL demasiado larga (maximo 2048 caracteres)"
+                "El QR contiene una URL demasiado larga (máximo 2048 caracteres)"
             } else {
                 "El QR no contiene una URL"
             }
@@ -383,10 +378,10 @@ fun PantallaHome(
                     imageVector = Icons.Filled.QrCodeScanner,
                     contentDescription = null,
                     tint = CyberCyan,
-                    modifier = Modifier.size(48.dp)
+                    modifier = Modifier.size(TamanosIcono.grande)
                 )
                 Text(
-                    text = "La camara necesita permiso para escanear codigos QR",
+                    text = "La cámara necesita permiso para escanear códigos QR",
                     style = MaterialTheme.typography.bodyLarge,
                     color = CyberTextoPrincipal,
                     modifier = Modifier.padding(vertical = Espaciado.md)
@@ -397,7 +392,7 @@ fun PantallaHome(
                     TextButton(onClick = {
                         launcherPermisoCamara.launch(Manifest.permission.CAMERA)
                     }) {
-                        Text("Otorgar permiso", color = CyberCyan)
+                        Text("Conceder permiso", color = CyberCyan)
                     }
                     TextButton(onClick = { abrirAjustesDeLaApp() }) {
                         Text("Abrir ajustes", color = CyberTextoSecundario)
@@ -451,7 +446,7 @@ fun PantallaHome(
                 imageVector = Icons.Filled.QrCodeScanner,
                 contentDescription = null,
                 tint = CyberCyan,
-                modifier = Modifier.size(20.dp)
+                modifier = Modifier.size(TamanosIcono.estandar)
             )
             Text(
                 text = "SeguridadQR",
@@ -489,7 +484,12 @@ fun PantallaHome(
                     .fillMaxWidth()
                     .padding(horizontal = Espaciado.lg, vertical = Espaciado.lg)
                     .clip(RoundedCornerShape(RadioBorde.xl))
-                    .background(CyberGlass.copy(alpha = 0.97f))
+                    .background(CyberGlass.copy(Alphas.casiOpaco))
+                    .border(
+                        width = Borde.fino,
+                        color = CyberGlassBorde,
+                        shape = RoundedCornerShape(RadioBorde.xl)
+                    )
                     .padding(Espaciado.xl),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(Espaciado.md)
@@ -511,8 +511,9 @@ fun PantallaHome(
                     )
                     Text(
                         text = "Esta URL ya fue escaneada " +
-                            "${duplicada.vecesEscaneadaMaxima} vez(es). " +
-                            "\u00bfDeseas reescanearla de todas formas?",
+                            "${duplicada.vecesEscaneadaMaxima} " +
+                            (if (duplicada.vecesEscaneadaMaxima == 1) "vez." else "veces.") +
+                            " ¿Deseas reescanearla de todas formas?",
                         style = MaterialTheme.typography.bodyMedium,
                         color = CyberTextoSecundario
                     )
@@ -551,12 +552,12 @@ fun PantallaHome(
                         horizontalArrangement = Arrangement.spacedBy(Espaciado.sm)
                     ) {
                         CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
+                            modifier = Modifier.size(TamanosIcono.chico),
                             strokeWidth = 2.dp,
                             color = CyberCyan
                         )
                         Text(
-                            text = if (analizando) "Analizando..." else "Procesando...",
+                            text = if (analizando) "Analizando…" else "Procesando…",
                             style = MaterialTheme.typography.bodySmall,
                             color = CyberTextoSecundario
                         )
@@ -586,8 +587,8 @@ fun PantallaHome(
             Box(
                 modifier = Modifier
                     .padding(bottom = Espaciado.xxl)
-                    .clip(RoundedCornerShape(50))
-                    .background(CyberGlass.copy(alpha = 0.85f))
+                    .clip(RadioBorde.pill)
+                    .background(CyberGlass.copy(Alphas.alto))
                     .padding(horizontal = Espaciado.xl, vertical = Espaciado.md)
             ) {
                 Row(
@@ -598,7 +599,7 @@ fun PantallaHome(
                         imageVector = Icons.Filled.QrCodeScanner,
                         contentDescription = null,
                         tint = CyberCyan,
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(TamanosIcono.estandar)
                     )
                     Text(
                         text = "Apunta y escanea",

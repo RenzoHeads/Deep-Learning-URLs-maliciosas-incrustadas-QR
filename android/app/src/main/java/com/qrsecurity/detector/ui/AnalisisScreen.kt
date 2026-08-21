@@ -14,7 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
+
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.qrsecurity.detector.pipeline.Pipeline
 import com.qrsecurity.detector.pipeline.PipelineViewModel
+import com.qrsecurity.detector.ui.theme.Alphas
 import com.qrsecurity.detector.ui.theme.CyberCyan
 import com.qrsecurity.detector.ui.theme.CyberFondo
 import com.qrsecurity.detector.ui.theme.CyberGlass
@@ -154,7 +155,7 @@ fun PantallaAnalisis(
                         // U11: "url_demasiado_larga" decia "no contiene una
                         // URL" aunque el payload SI era una URL.
                         val mensaje = if (resultado.tipoContenido == "url_demasiado_larga") {
-                            "El QR contiene una URL demasiado larga (maximo 2048 caracteres)"
+                            "El QR contiene una URL demasiado larga (máximo 2048 caracteres)"
                         } else {
                             "El QR no contiene una URL"
                         }
@@ -231,12 +232,12 @@ fun PantallaAnalisis(
                 verticalArrangement = Arrangement.spacedBy(Espaciado.sm)
             ) {
                 Text(
-                    text = "URL DETECTADA",
+                    text = "URL detectada",
                     style = MaterialTheme.typography.labelMedium,
                     color = CyberTextoSecundario
                 )
                 Text(
-                    text = urlMostrada ?: "Analizando contenido...",
+                    text = urlMostrada ?: "Analizando contenido…",
                     style = MaterialTheme.typography.bodyLarge,
                     fontWeight = FontWeight.Medium,
                     color = CyberTextoPrincipal,
@@ -261,7 +262,7 @@ fun PantallaAnalisis(
                     strokeWidth = 2.dp
                 )
                 Text(
-                    text = "Analizando actividad...",
+                    text = "Analizando actividad…",
                     style = MaterialTheme.typography.bodyMedium,
                     color = CyberTextoSecundario
                 )
@@ -281,7 +282,7 @@ fun PantallaAnalisis(
             ) {
                 FilaCheck(
                     icono = Icons.Filled.Shield,
-                    titulo = "Reputacion",
+                    titulo = "Reputación",
                     estado = if (analizando) EstadoCheck.ACTIVO else EstadoCheck.PENDIENTE,
                     colorIcono = CyberCyan
                 )
@@ -309,32 +310,17 @@ fun PantallaAnalisis(
         )
 
         // ─── Boton Cancelar ───
-        Button(
+        BotonCyber(
+            texto = "Cancelar",
             onClick = {
                 pipelineViewModel.reiniciar()
                 onVolverHome()
             },
-            enabled = analizando,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(TamanosToque.boton),
-            shape = RoundedCornerShape(RadioBorde.lg),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = CyberGlassAlto,
-                contentColor = CyberTextoPrincipal
-            )
-        ) {
-            Icon(
-                imageVector = Icons.Filled.Close,
-                contentDescription = null,
-                modifier = Modifier.size(TamanosIcono.estandar)
-            )
-            Spacer(modifier = Modifier.width(Espaciado.sm))
-            Text(
-                text = "Cancelar",
-                style = MaterialTheme.typography.labelLarge
-            )
-        }
+            habilitado = analizando,
+            icono = Icons.Filled.Close,
+            contenedor = CyberGlassAlto,
+            contenido = CyberTextoPrincipal,
+        )
     }
     } // fin if (debeMostrarContenidoAnalizando)
 }
@@ -358,8 +344,8 @@ private fun FilaCheck(
         Box(
             modifier = Modifier
                 .size(Espaciado.gigante)
-                .clip(CircleShape)
-                .background(colorIcono.copy(alpha = 0.12f)),
+                .clip(RadioBorde.full)
+                .background(colorIcono.copy(Alphas.bajo)),
             contentAlignment = Alignment.Center
         ) {
             if (estado == EstadoCheck.ACTIVO) {
@@ -387,7 +373,7 @@ private fun FilaCheck(
         Spacer(modifier = Modifier.weight(1f))
         when (estado) {
             EstadoCheck.ACTIVO -> Text(
-                text = "Analizando...",
+                text = "Analizando…",
                 style = MaterialTheme.typography.labelMedium,
                 color = CyberCyan
             )

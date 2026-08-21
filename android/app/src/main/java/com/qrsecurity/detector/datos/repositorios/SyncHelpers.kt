@@ -4,6 +4,8 @@ import androidx.room.withTransaction
 import com.qrsecurity.detector.api.ClienteBackend
 import com.qrsecurity.detector.datos.local.BaseDatosSeguridad
 import com.qrsecurity.detector.datos.local.entidades.PendingOpEntity
+import com.qrsecurity.detector.datos.local.entidades.UrlCatalogoEntity
+import com.qrsecurity.detector.datos.local.sha256Hex
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.withContext
 
@@ -185,6 +187,107 @@ internal fun rellenarTablaTemporalIds(
                 chunk.joinToString(",") { "(?)" },
             chunk.toTypedArray()
         )
+    }
+}
+
+/**
+ * M4 audit fix — reconciliación en lote de `urls_catalogo` para las K
+ * URLs afectadas por un batch de sync. Reemplaza el loop N+1
+ * `for (url in urls) { buscarPorHash + contar + ultimoPorUrlLimpia + upsert }`
+ * (3K-4K queries) por un número fijo de queries batch con chunking:
+ *  - `contarPorUrlLimpiaBatch` (⌈K/500⌉ queries)
+ *  - `ultimoPorUrlLimpiaBatch` (⌈K/500⌉ queries)
+ *  - `buscarPorHashes` (⌈K/500⌉ queries)
+ *  - `upsertTodos` + `eliminarPorHashes` (1 cada uno)
+ *
+ * Para batches típicos (K ≤ 500) son 5 queries fijas.
+ *
+ * Se usa desde [RepositorioEscaneosSync.aplicarBatchEscaneos] y
+ * [RepositorioEscaneosSync.limpiarHuerfanos]. Debe llamarse DENTRO de la
+ * `db.withTransaction { }` existente (los batch upsert/delete son writes).
+ *
+ * @param urlsColeccion lista de URLs a reconciliar. Se deduplica a Set
+ *   para no repetir trabajo entre chunks.
+ * @param preservarVecesEscaneada true = si la entrada ya existe en el
+ *   catálogo, mantener su `vecesEscaneada` (semántica de
+ *   `aplicarBatchEscaneos`, donde el batch puede no traer todos los
+ *   escaneos de la URL); false = recalcular siempre `vecesEscaneada`
+ *   desde el conteo de filas vivas (semántica de `limpiarHuerfanos`).
+ */
+internal suspend fun BaseDatosSeguridad.reconciliarUrlsCatalogoBatch(
+    urlsColeccion: Collection<String>,
+    preservarVecesEscaneada: Boolean = true
+) {
+    val urls = urlsColeccion.toSet()
+    if (urls.isEmpty()) return
+    val urlList = urls.toList()
+
+    // Chunking a 500: Room expande `IN (:list)` a parámetros posicionales
+    // y SQLite viejo limita host params a ~999 — el mismo chunk que ya usa
+    // [rellenarTablaTemporalIds]. Para batches típicos (≤500) es 1 chunk.
+    val chunks = urlList.chunked(500)
+
+    // Batch 1: COUNT(*) por urlLimpia agrupado. URLs con 0 filas vivas no
+    // aparecen — el caller las detecta por ausencia en el mapa.
+    val conteoByUrl = chunks.flatMap { chunk ->
+        escaneoDao().contarPorUrlLimpiaBatch(chunk)
+    }.associate { it.urlLimpia to it.conteo }
+
+    // Batch 2: última fila viva por urlLimpia — patrón D-1 (subquery
+    // escalar indexada). Solo URLs con ≥1 fila viva.
+    val ultimas = chunks.flatMap { chunk ->
+        escaneoDao().ultimoPorUrlLimpiaBatch(chunk)
+    }.associateBy { it.urlLimpia }
+
+    // Batch 3: entradas existentes en urls_catalogo — para preservar
+    // `vecesEscaneada` si la entrada ya existe (semántica de
+    // `aplicarBatchEscaneos`).
+    // R5: precomputamos hashesByUrl una sola vez (antes se recalculaba
+    // sha256Hex(url) por cada iteración del loop de build).
+    val hashesByUrl = urlList.associateWith { sha256Hex(it) }
+    val hashes = hashesByUrl.values.toList()
+    val existentes = hashes.chunked(500).flatMap { hashChunk ->
+        urlCatalogoDao().buscarPorHashes(hashChunk)
+    }.associateBy { it.urlHash }
+
+    // Build batch operations
+    val toUpsert = mutableListOf<UrlCatalogoEntity>()
+    val toDeleteHashes = mutableListOf<String>()
+    for (url in urlList) {
+        val hash = hashesByUrl.getValue(url)
+        val conteo = conteoByUrl[url] ?: 0
+        if (conteo == 0) {
+            toDeleteHashes.add(hash)
+        } else {
+            val ultima = ultimas[url] ?: continue
+            // Preserva `vecesEscaneada` existente si la entrada ya está
+            // en catálogo y [preservarVecesEscaneada] es true; si no,
+            // usa el conteo actual (= veces que se escaneó en total
+            // según `escaneos`).
+            val vecesEscaneada = if (preservarVecesEscaneada) {
+                existentes[hash]?.vecesEscaneada ?: conteo
+            } else {
+                conteo
+            }
+            toUpsert.add(
+                UrlCatalogoEntity(
+                    urlHash = hash,
+                    urlLimpia = url,
+                    ultimoNivelAlerta = ultima.nivelAlerta,
+                    ultimaProbabilidad = ultima.probabilidad,
+                    ultimoEscaneoMillis = ultima.creadoEnMillis,
+                    vecesEscaneada = vecesEscaneada
+                )
+            )
+        }
+    }
+
+    // Batch 4 y 5: UPSERT + DELETE en una sola query cada uno.
+    if (toUpsert.isNotEmpty()) {
+        urlCatalogoDao().upsertTodos(toUpsert)
+    }
+    if (toDeleteHashes.isNotEmpty()) {
+        urlCatalogoDao().eliminarPorHashes(toDeleteHashes)
     }
 }
 

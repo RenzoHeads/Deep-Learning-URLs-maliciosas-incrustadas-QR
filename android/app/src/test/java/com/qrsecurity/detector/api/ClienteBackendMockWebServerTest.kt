@@ -136,69 +136,28 @@ class ClienteBackendMockWebServerTest {
         assertEquals("MALICIOSO", resultado.nivelAlerta)
     }
 
-    @Test
-    fun `registrarUsuario 200 OK deserializa RespuestaAuth`() = runTest {
-        val authJson = """
-            {
-              "id_usuario": "usr-001",
-              "token_api": "tok-abc-123",
-              "nombre_usuario": "tester",
-              "correo": "t@example.com",
-              "creado_en": "2025-01-01T00:00:00Z"
-            }
-        """.trimIndent()
-        server.enqueue(
-            MockResponse()
-                .setResponseCode(200)
-                .setBody(authJson)
-                .setHeader("Content-Type", "application/json")
-        )
-
-        val cliente = clienteConToken(token = null) // registrarUsuario no usa token
-        val resultado = cliente.registrarUsuario(
-            nombreUsuario = "tester",
-            password = "testpass123"
-        )
-
-        // POST /auth/registrar.
-        val request = server.takeRequest()
-        assertEquals("/auth/registrar", request.path)
-        assertEquals("POST", request.method)
-
-        // No debe haber Authorization header en registrar (es registro publico).
-        assertNull(
-            "registrarUsuario no debe enviar Authorization header",
-            request.getHeader("Authorization")
-        )
-
-        // DTO deserializado.
-        assertEquals("usr-001", resultado.idUsuario)
-        assertEquals("tok-abc-123", resultado.tokenApi)
-        assertEquals("tester", resultado.nombreUsuario)
-    }
-
     // ──────────────────────────────────────────────────────────────
     // 401 Unauthorized lanza HttpBackendException con codigo
     // ──────────────────────────────────────────────────────────────
 
     @Test
-    fun `login 401 lanza HttpBackendException con codigo 401`() = runTest {
+    fun `401 en endpoint authed lanza HttpBackendException con codigo 401`() = runTest {
         server.enqueue(
             MockResponse()
                 .setResponseCode(401)
-                .setBody("""{"detail": "Credenciales invalidas"}""")
+                .setBody("""{"detail": "Token de API invalido"}""")
                 .setHeader("Content-Type", "application/json")
         )
 
         val cliente = clienteConToken(token = null)
 
         try {
-            cliente.login(nombreUsuario = "wrong", password = "wrong")
-            fail("login con 401 debe lanzar HttpBackendException")
+            // Con el auth legacy eliminado (/auth/login), el 401 canónico es
+            // el de un JWT invalido/expirado en un endpoint authed.
+            cliente.listarEscaneosDelta(token = "", modificadosDesde = "")
+            fail("401 debe lanzar HttpBackendException")
         } catch (e: ClienteBackend.HttpBackendException) {
             assertEquals("codigo debe ser 401", 401, e.codigo)
-            // `mensaje` no es propiedad expuesta del HttpBackendException — 
-            // va al constructor de IOException. Accedemos via message de Throwable.
             assertNotNull("mensaje no vacio", e.message)
             assertTrue(
                 "IOException message debe contener 'Unauthorized' o '401'",
@@ -206,7 +165,7 @@ class ClienteBackendMockWebServerTest {
             )
             assertTrue(
                 "cuerpo debe contener el mensaje del backend",
-                e.cuerpo!!.contains("Credenciales invalidas")
+                e.cuerpo!!.contains("Token de API invalido")
             )
             assertNull("401 no lleva Retry-After normalmente", e.retryAfterSegundos)
         }
@@ -307,11 +266,9 @@ class ClienteBackendMockWebServerTest {
         val request = server.takeRequest()
         val authHeader = request.getHeader("Authorization")
         // Como pasamos token="" (blank) Y tokenProvider tambien null, el
-        // helper `get()` no agrega el header (token.isBlank() implicito
-        // porque lo pasamos="", y los helpers проверifican `token != null`
-        // entonces si pasamos "" — string vacio != null -> se adjunta
-        // "Bearer " — pero `registrarUsuario` none pasaria al helper con
-        // su token=null default.
+        // helper `get()` no agrega el header en el camino token=null; con
+        // "" (string vacio != null) si se adjunta "Bearer " con payload
+        // vacio (ver helper en ClienteBackendHttp.kt).
         //
         // Necesitamos invocar el endpoint via el metodo que acepta token
         // como String (no nulo) — el helper `get()` con token=null no

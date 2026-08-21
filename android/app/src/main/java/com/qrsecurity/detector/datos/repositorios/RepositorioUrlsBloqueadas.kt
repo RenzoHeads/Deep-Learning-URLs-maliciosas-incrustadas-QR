@@ -49,4 +49,15 @@ class RepositorioUrlsBloqueadas(
      */
     suspend fun obtenerPorUrl(url: String): UrlBloqueadaEntity? =
         withContext(ioDispatcher) { db.urlBloqueadaDao().obtenerPorUrl(url) }
+
+    /**
+     * Versión reactiva (Flow) de [obtenerPorUrl] — Audit A2+M1 fix.
+     *
+     * Emite el row coincidente (o null) cuando `urls_bloqueadas` o
+     * `pending_ops` cambian. Usado por [DetalleUrlViewModel] via `combine`
+     * para que el flag `urlBloqueada` del `Cargado` se actualice en vivo
+     * sin re-query en cada re-emisión de `observarPorId`.
+     */
+    fun observarPorUrl(url: String): Flow<UrlBloqueadaEntity?> =
+        db.urlBloqueadaDao().observarPorUrl(url)
 }

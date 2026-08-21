@@ -53,20 +53,21 @@ internal class DebouncerDeteccion(
 
     /**
      * Decide si una deteccion con timestamp [timestampMs] debe aceptarse:
-     * gate abierto Y ventana de debounce cumplida desde la ultima aceptada
-     * (update atomico del timestamp).
+     * gate abierto Y ventana de debounce cumplida desde la ultima aceptada.
+     *
+     * Bug de atomicidad: `getAndUpdate` con una lambda de efecto colateral
+     * (`aceptado = true`) puede re-ejecutar la lambda cuando su CAS interno
+     * falla — el flag quedaba sembrado con un `prev` stale y DOS threads
+     * terminaban aceptando el mismo timestamp. Bucle `compareAndSet` puro:
+     * un thread solo acepta si SU CAS commit-ea el timestamp; si otro ganó,
+     * re-lee `prev`, el delta vuelve a 0 y rechaza.
      */
     fun debeAceptar(timestampMs: Long): Boolean {
         if (!deteccionActiva) return false
-        var aceptado = false
-        ultimoTimestampAceptado.getAndUpdate { prev ->
-            if (timestampMs - prev >= debounceMs) {
-                aceptado = true
-                timestampMs
-            } else {
-                prev
-            }
+        while (true) {
+            val prev = ultimoTimestampAceptado.get()
+            if (timestampMs - prev < debounceMs) return false
+            if (ultimoTimestampAceptado.compareAndSet(prev, timestampMs)) return true
         }
-        return aceptado
     }
 }

@@ -36,6 +36,9 @@ serializationJson = "1.6.2"
 # OkHttp
 okhttp = "4.12.0"
 
+# Auth0 (login web / credenciales cifradas)
+auth0 = "3.21.0"
+
 # Security Crypto (EncryptedSharedPreferences)
 securityCrypto = "1.1.0-alpha06"
 
@@ -125,6 +128,9 @@ tensorflow-lite-gpu-api = { group = "org.tensorflow", name = "tensorflow-lite-gp
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 okhttp-logging-interceptor = { group = "com.squareup.okhttp3", name = "logging-interceptor", version.ref = "okhttp" }
 okhttp-mockwebserver = { group = "com.squareup.okhttp3", name = "mockwebserver", version.ref = "okhttp" }
+
+# ─── Auth0 ───
+auth0-android = { group = "com.auth0.android", name = "auth0", version.ref = "auth0" }
 
 # ─── Hilt ───
 hilt-android = { group = "com.google.dagger", name = "hilt-android", version.ref = "hilt" }

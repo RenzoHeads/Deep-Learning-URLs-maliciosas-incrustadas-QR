@@ -97,12 +97,18 @@ val EscaneoEntity.nivelAlertaEnum: NivelAlerta
     get() = NivelAlerta.de(nivelAlerta)
 
 /**
- * Convierte la probabilidad cruda del modelo [0,1] a un entero [0,100]
- * redondeado (no truncado). Centraliza `Math.round(probabilidad * 100f)`
- * que aparecia duplicado en `DetalleUrlTarjetas`,
- * `DetalleVersionAntiguaContenido` y `AnalisisAnterioresLineaTiempo`.
+ * Convierte la probabilidad cruda del modelo [0,1] al porcentaje de SEGURIDAD
+ * [0,100] redondeado — la métrica CANÓNICA de la app (ver [TarjetaVeredicto]:
+ * "el número SIEMPRE significa % seguro, más alto = más seguro").
+ *
+ * Auditoría UI 2 (fix de convención): el timeline de versiones anteriores
+ * mostraba el complemento crudo ("18% probabilidad" junto a un chip "Segura")
+ * mientras el gauge del detalle de esa misma versión mostraba "82%" — dos
+ * números distintos para el mismo escaneo. Ahora todas las superficies
+ * derivan de esta única función.
  *
  * WAVE 14 fix (M1): `Math.round` en vez de `.toInt()` para evitar el truncado
  * hacia 0 (p.ej. prob 0.999f ahora muestra "100%" no "99%").
  */
-fun probabilidadPct(probabilidad: Float): Int = Math.round(probabilidad * 100f)
+fun pctSeguro(probabilidad: Float): Int =
+    Math.round((1f - probabilidad.coerceIn(0f, 1f)) * 100f)

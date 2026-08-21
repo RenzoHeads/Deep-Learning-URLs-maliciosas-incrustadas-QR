@@ -15,11 +15,14 @@ import java.util.concurrent.TimeUnit
  * Cliente HTTP unificado contra el backend FastAPI de QR Guardian.
  *
  * Split para mantener cada archivo bajo 250 LOC:
- *  - Auth: [registrarUsuario] / [login] en `ClienteBackendAuth.kt`
  *  - Escaneos (historial + dedup) en `ClienteBackendEscaneos.kt`
  *  - URLs bloqueadas en `ClienteBackendUrlsBloqueadas.kt`
  *  - Helpers HTTP (post/get/delete/ejecutarYMapear/buildDeltaUrl) en
  *    `ClienteBackendHttp.kt`
+ *
+ * (El auth legacy usuario/password vivia en `ClienteBackendAuth.kt` —
+ * elimado junto con /auth/login y /auth/registrar tras migrar a Auth0;
+ * hoy el Bearer es el access token JWT que el SDK de Auth0 entrega.)
  *
  * Bug A15 fix: token via header `Authorization: Bearer <token>` (no query param).
  * Toda llamada de red se ejecuta en `Dispatchers.IO` mediante `withContext`.
@@ -98,15 +101,6 @@ class ClienteBackend(
     // ──────────────────────────────────────────────────────────────
     // Tipos de salida (DTOs serializables)
     // ──────────────────────────────────────────────────────────────
-
-    @Serializable
-    data class RespuestaAuth(
-        @SerialName("id_usuario") val idUsuario: String,
-        @SerialName("token_api") val tokenApi: String,
-        @SerialName("nombre_usuario") val nombreUsuario: String? = null,
-        val correo: String? = null,
-        @SerialName("creado_en") val creadoEn: String? = null
-    )
 
     @Serializable
     data class Escaneo(

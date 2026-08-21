@@ -28,6 +28,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowLog
 
 /**
  * U4: ``UnsatisfiedLinkError`` (JNI de TFLite) y ``OutOfMemoryError``
@@ -109,9 +110,16 @@ class PipelineErrorFatalTest {
             estado is Estado.Error
         )
         val error = estado as Estado.Error
+        // Contrato nuevo (rediseño UI): el usuario ve un mensaje legible; el
+        // detalle técnico (clase + mensaje del Throwable) va a logcat.
         assertTrue(
-            "El mensaje debe conservar la clase del Throwable",
-            error.mensaje.contains("OutOfMemoryError")
+            "El usuario debe ver el mensaje legible, fue: ${error.mensaje}",
+            error.mensaje.contains("No pudimos completar el análisis")
+        )
+        assertTrue(
+            "La clase del Throwable debe conservarse en logcat (tag Pipeline)",
+            ShadowLog.getLogs()
+                .any { it.tag == "Pipeline" && it.msg.contains("OutOfMemoryError") }
         )
     }
 }

@@ -1,10 +1,10 @@
 package com.qrsecurity.detector.ui
 
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.qrsecurity.detector.datos.local.entidades.EscaneoEntity
 import com.qrsecurity.detector.datos.repositorios.RepositorioEscaneos
-import com.qrsecurity.detector.datos.sync.MediadorSincronizacion
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -33,6 +33,10 @@ import javax.inject.Inject
  *   el chrome (top bar + URL title) — sin flash de datos ajenos. La nueva
  *   URL emite desde Room en <1ms y `estado.url` pasa a coincidir.
  */
+// M6 audit fix — @Immutable: emitida una vez y nunca mutada tras la emisión
+// (ver comentario en GrupoHistorial). Permite el skip de la pantalla cuando
+// el estado no cambia.
+@Immutable
 data class EstadoAnalisisAnteriores(
     val url: String?,
     val id: String?,
@@ -82,8 +86,7 @@ data class EstadoAnalisisAnteriores(
 @OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class AnalisisAnterioresViewModel @Inject constructor(
-    private val repoEscaneos: RepositorioEscaneos,
-    private val mediadorSync: MediadorSincronizacion
+    private val repoEscaneos: RepositorioEscaneos
 ) : ViewModel() {
 
     // ── Coordenadas del escaneo "principal" ──
@@ -142,14 +145,12 @@ class AnalisisAnterioresViewModel @Inject constructor(
             )
 
     /**
-     * Flow reactivo del sync one-shot — emite true mientras el SyncWorker
-     * esta ENQUEUED o RUNNING. La UI lo usa para mostrar un indicador de
-     * "sincronizando" NO bloqueante. `Eagerly` igual que
-     * [DatosTabsViewModel.syncEnCurso].
+     * F4.6 audit fix — eliminado `syncEnCurso` (StateFlow Eagerly propio):
+     * duplicaba la observación perpetua del WorkInfo Flow que
+     * [DatosTabsViewModel.syncEnCurso] ya mantiene activa desde el arranque
+     * (dos suscripciones al mismo Flow de WorkManager por proceso). La
+     * pantalla ahora consume `datosViewModel.syncEnCurso` directamente.
      */
-    val syncEnCurso: StateFlow<Boolean> =
-        mediadorSync.observarSyncEnCurso()
-            .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     /**
      * Establece el escaneo "principal" cuya lista de analisis anteriores

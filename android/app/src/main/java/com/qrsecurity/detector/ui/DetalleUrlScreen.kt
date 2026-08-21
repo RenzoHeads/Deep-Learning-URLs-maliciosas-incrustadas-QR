@@ -30,6 +30,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import com.qrsecurity.detector.datos.repositorios.RepositorioUrlsBloqueadas
+import com.qrsecurity.detector.ui.theme.CyberCyan
 import com.qrsecurity.detector.ui.theme.CyberFondo
 import com.qrsecurity.detector.ui.theme.CyberRojo
 import com.qrsecurity.detector.ui.theme.CyberTextoPrincipal
@@ -47,8 +48,13 @@ import com.qrsecurity.detector.ui.theme.Espaciado
  * temporal). Tras confirmar el desbloqueo se muestra [ModalDesbloqueoOk].
  *
  * Rediseño F3: UI premium dark-glassmorphism con URL card prominente,
- * gauge 140dp centrado con border glow, botones seccionados en grid 2-col,
- * y "Ver versiones" como glass card.
+ * gauge 120dp centrado con border glow, botones seccionados en grid 2-col,
+ * y tarjeta de versiones anteriores como glass card.
+ *
+ * Auditoría UI 2: la fecha/hora del análisis actual (que ya llegaba en el
+ * estado y se descartaba al renderizar) se muestra bajo la URL, y el título
+ * se acompaña del indicador "Última versión" para diferenciarlo del detalle
+ * de versiones anteriores.
  *
  * Descomposicion del archivo:
  *  - [DetalleUrlTarjetas]: tarjetas (URL, veredicto, versiones) + chip de estado.
@@ -278,7 +284,7 @@ fun PantallaDetalleUrl(
                         urlParaAbrir(it.escaneo.urlOriginal, it.escaneo.urlLimpia)
                     }
                     if (url == null) {
-                        onMensaje(TipoMensaje.ERROR, "Enlace con esquema no permitido")
+                        onMensaje(TipoMensaje.ERROR, "El enlace no se puede abrir de forma segura")
                     } else {
                         abrirEnNavegador(contexto, url)
                     }
@@ -313,15 +319,33 @@ private fun ContenidoDetalle(
         GlassPillBackButton(onBack = onBack)
 
         // ─── Title Block ───
-        Text(
-            text = "Detalle del análisis",
-            style = MaterialTheme.typography.headlineLarge,
-            fontWeight = FontWeight.Bold,
-            color = CyberTextoPrincipal
-        )
+        Column(verticalArrangement = Arrangement.spacedBy(Espaciado.xs)) {
+            Text(
+                text = "Detalle del análisis",
+                style = MaterialTheme.typography.headlineLarge,
+                color = CyberTextoPrincipal
+            )
+            if (estado.esUltimaVersion) {
+                // Auditoría UI 2: deja claro de un vistazo que esta pantalla
+                // muestra la versión vigente (frente al detalle de una
+                // versión anterior, con su propio título diferenciado).
+                Text(
+                    text = "Última versión del escaneo",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = CyberCyan
+                )
+            }
+        }
 
         // ─── URL Card ───
-        TarjetaUrl(escaneo = escaneo, urlBloqueada = estado.urlBloqueada)
+        // Auditoría UI 2: creadoEnMillis ya existía en el estado pero nunca
+        // se renderizaba — se presenta como "Analizado: dd/MM/yyyy · HH:mm".
+        TarjetaUrl(
+            escaneo = escaneo,
+            urlBloqueada = estado.urlBloqueada,
+            fechaAnalisis = escaneo.creadoEnMillis
+        )
 
         // ─── Verdict Card ───
         TarjetaVeredicto(escaneo = escaneo)

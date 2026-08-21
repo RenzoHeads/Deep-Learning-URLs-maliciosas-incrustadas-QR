@@ -11,11 +11,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -25,9 +22,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.qrsecurity.detector.ui.theme.Borde
 import com.qrsecurity.detector.ui.theme.CyberFondo
 import com.qrsecurity.detector.ui.theme.CyberGlass
 import com.qrsecurity.detector.ui.theme.CyberGlassBorde
@@ -37,7 +34,6 @@ import com.qrsecurity.detector.ui.theme.Espaciado
 import com.qrsecurity.detector.ui.theme.PencilModalFondo
 import com.qrsecurity.detector.ui.theme.PencilOverlay
 import com.qrsecurity.detector.ui.theme.RadioBorde
-import com.qrsecurity.detector.ui.theme.TamanosIcono
 import com.qrsecurity.detector.ui.theme.TamanosToque
 
 /**
@@ -63,17 +59,21 @@ import com.qrsecurity.detector.ui.theme.TamanosToque
  * [ModalDesbloqueoOk] NO usa esta plantilla — es un modal de exito (icon
  * verde + 1 boton "Listo"), diferente shape.
  */
+/**
+ * Contenedor visual unificado de TODOS los modales — overlay scrim + columna
+ * glass centrada (radio xl, fondo [PencilModalFondo], hairline glass).
+ *
+ * Extraído de [PlantillaModalConfirmacion] para que los modales de éxito
+ * (ej. [ModalDesbloqueoOk]) compartan exactamente el mismo contenedor en
+ * vez de clonarlo a mano.
+ *
+ * @param modifier Modifier externo del overlay.
+ * @param contenido Contenido de la columna glass (ColumnScope).
+ */
 @Composable
-internal fun PlantillaModalConfirmacion(
-    titulo: String,
-    cuerpo: String,
-    consecuencias: List<String>,
-    textoBoton: String,
-    colorBoton: Color,
-    iconoBoton: ImageVector? = null,
-    onConfirmar: () -> Unit,
-    onCancelar: () -> Unit,
-    modifier: Modifier = Modifier
+internal fun ContenedorModalCyber(
+    modifier: Modifier = Modifier,
+    contenido: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit,
 ) {
     Box(
         modifier = modifier.fillMaxSize().background(PencilOverlay),
@@ -86,18 +86,34 @@ internal fun PlantillaModalConfirmacion(
                 .clip(RoundedCornerShape(RadioBorde.xl))
                 .background(PencilModalFondo)
                 .border(
-                    width = 1.dp,
+                    width = Borde.fino,
                     color = CyberGlassBorde,
                     shape = RoundedCornerShape(RadioBorde.xl)
                 )
                 .padding(Espaciado.xxl),
             verticalArrangement = Arrangement.spacedBy(Espaciado.lg),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
+            horizontalAlignment = Alignment.CenterHorizontally,
+            content = contenido
+        )
+    }
+}
+
+@Composable
+internal fun PlantillaModalConfirmacion(
+    titulo: String,
+    cuerpo: String,
+    consecuencias: List<String>,
+    textoBoton: String,
+    colorBoton: Color,
+    iconoBoton: ImageVector? = null,
+    onConfirmar: () -> Unit,
+    onCancelar: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    ContenedorModalCyber(modifier = modifier) {
             Text(
                 text = titulo,
                 style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
                 color = CyberTextoPrincipal,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth()
@@ -118,29 +134,13 @@ internal fun PlantillaModalConfirmacion(
                 }
             }
             Spacer(modifier = Modifier.height(Espaciado.xs))
-            Button(
+            BotonCyber(
+                texto = textoBoton,
                 onClick = onConfirmar,
-                modifier = Modifier.fillMaxWidth().height(TamanosToque.boton),
-                shape = RoundedCornerShape(RadioBorde.lg),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = colorBoton,
-                    contentColor = CyberFondo
-                )
-            ) {
-                if (iconoBoton != null) {
-                    Icon(
-                        imageVector = iconoBoton,
-                        contentDescription = null,
-                        modifier = Modifier.size(TamanosIcono.estandar)
-                    )
-                    Spacer(modifier = Modifier.size(Espaciado.sm))
-                }
-                Text(
-                    text = textoBoton,
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.Bold
-                )
-            }
+                icono = iconoBoton,
+                contenedor = colorBoton,
+                contenido = CyberFondo
+            )
             OutlinedButton(
                 onClick = onCancelar,
                 modifier = Modifier.fillMaxWidth().height(TamanosToque.boton),
@@ -156,6 +156,5 @@ internal fun PlantillaModalConfirmacion(
                     style = MaterialTheme.typography.labelLarge
                 )
             }
-        }
     }
 }

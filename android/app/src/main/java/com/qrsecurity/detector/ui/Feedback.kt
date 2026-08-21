@@ -19,8 +19,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 
-import androidx.compose.ui.unit.dp
-import com.qrsecurity.detector.ui.theme.Elevacion
+import com.qrsecurity.detector.ui.theme.Borde
 import com.qrsecurity.detector.ui.theme.Espaciado
 import com.qrsecurity.detector.ui.theme.RadioBorde
 import com.qrsecurity.detector.ui.theme.CyberCyan
@@ -70,7 +69,7 @@ fun SnackbarHostCyber(
             contentColor = CyberTextoPrincipal,
             shape = RoundedCornerShape(RadioBorde.lg),
             modifier = Modifier.border(
-                width = Elevacion.sutil,
+                width = Borde.fino,
                 color = CyberGlassBorde,
                 shape = RoundedCornerShape(RadioBorde.lg)
             )

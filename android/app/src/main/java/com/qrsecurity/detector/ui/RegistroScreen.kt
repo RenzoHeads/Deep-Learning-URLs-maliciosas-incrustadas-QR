@@ -1,37 +1,22 @@
 package com.qrsecurity.detector.ui
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Email
-import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.Security
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -43,30 +28,22 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.VisualTransformation
-import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle.State.STARTED
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import com.qrsecurity.detector.ui.theme.CyberCyan
-import com.qrsecurity.detector.ui.theme.CyberFondo
 import com.qrsecurity.detector.ui.theme.CyberGlass
 import com.qrsecurity.detector.ui.theme.CyberTextoPrincipal
 import com.qrsecurity.detector.ui.theme.CyberTextoSecundario
 import com.qrsecurity.detector.ui.theme.Elevacion
 import com.qrsecurity.detector.ui.theme.Espaciado
-import com.qrsecurity.detector.ui.theme.PencilBrandMark
 import com.qrsecurity.detector.ui.theme.RadioBorde
-import com.qrsecurity.detector.ui.theme.TamanosIcono
-import com.qrsecurity.detector.ui.theme.TamanosToque
 
 /**
- * Pantalla de Registro (Pencil frame fZjhl).
+ * Pantalla de Registro (Pencil frame fZjhl) — alta embebida en Auth0.
  *
  * F3.1: UI Compose que replica el layout de Pencil fZjhl. Patron UDF:
  * - estado observado desde [RegistroViewModel.uiState] via
@@ -77,8 +54,9 @@ import com.qrsecurity.detector.ui.theme.TamanosToque
  * - acciones despachadas via
  *   `viewModel.onAction(RegistroAction.Registrar(...))`.
  *
- * Los 4 campos viven en `rememberSaveable`; los 2 toggles de visibilidad
- * de contrasena viven en `remember`.
+ * El alta es 100% nativa (sin navegador): correo+password van por TLS
+ * directo a Auth0, que crea la cuenta y deja la sesion iniciada. La
+ * password jamas se persiste en el dispositivo.
  *
  * @param onExito Callback tras registro exitoso (navega a HOME).
  * @param onVolver Callback para volver a la pantalla de login.
@@ -107,7 +85,7 @@ fun PantallaRegistro(
     }
 
     var correo by rememberSaveable { mutableStateOf("") }
-    var usuario by rememberSaveable { mutableStateOf("") }
+    var nombre by rememberSaveable { mutableStateOf("") }
     // Audit fix S3: las contraseñas con `remember` (NO rememberSaveable) —
     // no viajan al Bundle de instancia ni sobreviven process death en claro.
     var password by remember { mutableStateOf("") }
@@ -124,7 +102,7 @@ fun PantallaRegistro(
     ) {
         // ─── Brand Header ───
         BrandHeader(
-            subtitulo = "Proteccion inteligente",
+            subtitulo = "Protección inteligente",
         )
 
         // ─── Registration Intro ───
@@ -135,7 +113,7 @@ fun PantallaRegistro(
                 color = CyberTextoPrincipal
             )
             Text(
-                text = "Registrate para analizar enlaces y navegar con confianza.",
+                    text = "Regístrate para analizar enlaces y navegar con confianza.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = CyberTextoSecundario
             )
@@ -155,41 +133,23 @@ fun PantallaRegistro(
                 verticalArrangement = Arrangement.spacedBy(Espaciado.lg)
             ) {
                 // Correo electronico
-                OutlinedTextField(
+                CampoTexto(
                     value = correo,
                     onValueChange = { correo = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("correo@ejemplo.com") },
-                    leadingIcon = {
-                        Icon(
-                            imageVector = Icons.Filled.Email,
-                            contentDescription = null,
-                            modifier = Modifier.size(TamanosIcono.estandar)
-                        )
-                    },
-                    singleLine = true,
-                    shape = RoundedCornerShape(RadioBorde.md),
+                    label = "Correo",
+                    placeholder = "correo@ejemplo.com",
+                    icono = Icons.Filled.Email,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
-                    colors = coloresCampoTexto()
                 )
 
-                // Usuario
-                OutlinedTextField(
-                    value = usuario,
-                    onValueChange = { usuario = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("tu_usuario") },
-                    leadingIcon = {
-                        Icon(
-                            imageVector = Icons.Filled.Person,
-                            contentDescription = null,
-                            modifier = Modifier.size(TamanosIcono.estandar)
-                        )
-                    },
-                    singleLine = true,
-                    shape = RoundedCornerShape(RadioBorde.md),
+                // Nombre (opcional — display name)
+                CampoTexto(
+                    value = nombre,
+                    onValueChange = { nombre = it },
+                    label = "Nombre (opcional)",
+                    placeholder = "Tu nombre",
+                    icono = Icons.Filled.Person,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
-                    colors = coloresCampoTexto()
                 )
 
                 // Contrasena
@@ -198,6 +158,8 @@ fun PantallaRegistro(
                     onValueChange = { password = it },
                     mostrarPassword = mostrarPassword,
                     onTogglePassword = { mostrarPassword = !mostrarPassword },
+                    placeholder = "Crea una contraseña (mín. 15)",
+                    label = "Contraseña",
                 )
 
                 // Confirmar contrasena
@@ -206,26 +168,26 @@ fun PantallaRegistro(
                     onValueChange = { confirmarPassword = it },
                     mostrarPassword = mostrarConfirmarPassword,
                     onTogglePassword = { mostrarConfirmarPassword = !mostrarConfirmarPassword },
-                    placeholder = "confirmar contrasena",
+                    placeholder = "Confirmar contraseña",
+                    label = "Confirmar contraseña",
+                )
+
+                BotonSubmit(
+                    texto = "Crear cuenta",
+                    procesando = uiState.procesando,
+                    onClick = {
+                        viewModel.onAction(
+                            RegistroAction.Registrar(
+                                correo = correo,
+                                nombre = nombre,
+                                password = password,
+                                confirmarPassword = confirmarPassword
+                            )
+                        )
+                    },
                 )
             }
         }
-
-        // ─── Registration Actions ───
-        BotonSubmit(
-            texto = "Crear cuenta",
-            procesando = uiState.procesando,
-            onClick = {
-                viewModel.onAction(
-                    RegistroAction.Registrar(
-                        nombreUsuario = usuario,
-                        correo = correo,
-                        password = password,
-                        confirmarPassword = confirmarPassword
-                    )
-                )
-            },
-        )
 
         // Login link row
         Row(
@@ -234,7 +196,7 @@ fun PantallaRegistro(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = "Ya tienes una cuenta?",
+                text = "¿Ya tienes una cuenta?",
                 style = MaterialTheme.typography.bodyMedium,
                 color = CyberTextoSecundario
             )
@@ -246,7 +208,7 @@ fun PantallaRegistro(
                 )
             ) {
                 Text(
-                    text = "Iniciar sesion",
+                    text = "Iniciar sesión",
                     style = MaterialTheme.typography.labelLarge,
                     color = CyberCyan
                 )

@@ -8,7 +8,6 @@ import com.qrsecurity.detector.datos.local.sha256Hex
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 
@@ -50,7 +49,12 @@ class RepositorioEscaneos(
 
     // ── Observacion reactiva (UI usa estos Flows) ──
 
-    fun observarTodos(): Flow<List<EscaneoEntity>> = db.escaneoDao().observarTodosUnicos()
+    /**
+     * Historial deduplicado acotado a las [limite] URLs más recientes
+     * (M5 audit fix — ver [EscaneoDao.observarTodosUnicos]).
+     */
+    fun observarTodos(limite: Int): Flow<List<EscaneoEntity>> =
+        db.escaneoDao().observarTodosUnicos(limite)
 
     /**
      * Devuelve el Flow reactivo con TODOS los reescaneos de [urlLimpia]
@@ -72,10 +76,14 @@ class RepositorioEscaneos(
     /**
      * Snapshot puntual (no Flow) del total de reescaneos de una URL,
      * excluyendo [idActual]. Usado por [DetalleUrlViewModel].
+     *
+     * F4.5 audit fix — delega en `EscaneoDao.contarReescaneos` (COUNT one-shot)
+     * en vez de `observarTotalReescaneos(...).first()`, que registraba un
+     * observador del InvalidationTracker solo para descartarlo.
      */
     suspend fun contarReescaneosSnapshot(urlLimpia: String, idActual: String): Int =
         withContext(ioDispatcher) {
-            db.escaneoDao().observarTotalReescaneos(urlLimpia, idActual).first()
+            db.escaneoDao().contarReescaneos(urlLimpia, idActual)
         }
 
     /**
@@ -87,6 +95,26 @@ class RepositorioEscaneos(
         // (re-escanear/abrir) sobre un escaneo ya eliminado por sync.
         val escaneo = db.escaneoDao().obtenerPorId(id) ?: return@withContext false
         db.escaneoDao().esUltimaVersion(escaneo.urlLimpia, escaneo.creadoEnMillis, id)
+    }
+
+    /**
+     * Sobrecarga directa sin re-fetch — Audit A2.a fix.
+     *
+     * Elimina el `obtenerPorId(id)` redundante dentro de [esUltimaVersion(id)]
+     * cuando el caller YA tiene el `EscaneoEntity` (p.ej., `DetalleUrlViewModel`
+     * lo recibe como emisión de `observarPorId`). Delega directamente en el
+     * DAO (`EscaneoDao.esUltimaVersion(urlLimpia, creadoEnMillis, id)`), que
+     * hace el SELECT `NOT EXISTS` en una sola query.
+     *
+     * Mantiene la misma semántica que [esUltimaVersion(id)] — pero ahora es
+     * una sola consulta O(log n) en vez de dos (lookup + comparación).
+     */
+    suspend fun esUltimaVersion(
+        urlLimpia: String,
+        creadoEnMillis: Long,
+        id: String
+    ): Boolean = withContext(ioDispatcher) {
+        db.escaneoDao().esUltimaVersion(urlLimpia, creadoEnMillis, id)
     }
 
     /**

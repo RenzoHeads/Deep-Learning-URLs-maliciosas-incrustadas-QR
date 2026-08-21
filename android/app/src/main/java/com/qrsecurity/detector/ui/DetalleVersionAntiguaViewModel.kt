@@ -147,10 +147,10 @@ class DetalleVersionAntiguaViewModel @Inject constructor(
                 repositorioEscaneos.eliminarLocal(id)
                 mediadorSincronizacion.dispararSyncUnica()
                 cacheDetalle.invalidar(id)
-                _mensaje.send(MensajeUi(TipoMensaje.EXITO, "Versión eliminada del historial"))
+                _mensaje.send(MensajeUi(TipoMensaje.EXITO, "Versión eliminada del historial."))
                 _eliminarCompletado.send(true)
             } catch (e: Exception) {
-                _mensaje.send(MensajeUi(TipoMensaje.ERROR, "Error al eliminar la versión"))
+                _mensaje.send(MensajeUi(TipoMensaje.ERROR, "No pudimos eliminar la versión. Inténtalo de nuevo."))
             }
         }
     }

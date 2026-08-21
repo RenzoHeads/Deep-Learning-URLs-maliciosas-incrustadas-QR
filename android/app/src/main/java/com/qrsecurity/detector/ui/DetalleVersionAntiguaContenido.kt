@@ -13,14 +13,12 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
+
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Schedule
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -28,10 +26,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
 import com.qrsecurity.detector.datos.local.entidades.EscaneoEntity
+import com.qrsecurity.detector.ui.theme.Borde
 import com.qrsecurity.detector.ui.theme.CyberCyan
 import com.qrsecurity.detector.ui.theme.CyberGlass
 import com.qrsecurity.detector.ui.theme.CyberGlassAlto
@@ -42,7 +39,6 @@ import com.qrsecurity.detector.ui.theme.CyberTextoSecundario
 import com.qrsecurity.detector.ui.theme.Espaciado
 import com.qrsecurity.detector.ui.theme.RadioBorde
 import com.qrsecurity.detector.ui.theme.TamanosIcono
-import com.qrsecurity.detector.ui.theme.TamanosToque
 
 /**
  * Contenido principal del detalle de version antigua — extraido a archivo
@@ -56,8 +52,10 @@ import com.qrsecurity.detector.ui.theme.TamanosToque
  *    actual de la URL — preserva el comportamiento del antiguo ChipNivelAlerta).
  *  - [TarjetaVeredicto] (gauge + amenaza) — misma visualizacion que DetalleUrl.
  *
- * Componente unico (no aparece en DetalleUrl): Date card — diferencia visual
- * clave entre versiones del mismo escaneo.
+ * Componente unico (no aparece en DetalleUrl): Date card dedicada — en
+ * DetalleUrl la fecha va inline ("Analizado: …") dentro de [TarjetaUrl];
+ * aquí es una card propia y el diferenciador visual de versión antigua,
+ * junto con el título de pantalla.
  */
 
 @Composable
@@ -77,10 +75,12 @@ internal fun ContenidoDetalleVersionAntigua(
         GlassPillBackButton(onBack = onBack)
 
         // ─── Title Block ───
+        // Auditoría UI 2: título diferenciado del detalle de la versión
+        // vigente ("Detalle del análisis") — el usuario identifica de un
+        // vistazo que está viendo una versión anterior.
         Text(
-            text = "Detalle del análisis",
+            text = "Versión anterior del análisis",
             style = MaterialTheme.typography.headlineLarge,
-            fontWeight = FontWeight.Bold,
             color = CyberTextoPrincipal
         )
 
@@ -91,14 +91,15 @@ internal fun ContenidoDetalleVersionAntigua(
         TarjetaUrl(escaneo = escaneo, urlBloqueada = false)
 
         // ─── Date Card ───
-        // Diferenciador clave entre versiones: DetalleUrl no lo muestra
-        // porque para la ultima version no es informativo.
+        // Diferenciador clave entre versiones: DetalleUrl muestra la fecha
+        // inline en TarjetaUrl ("Analizado: …"); aquí la versión antigua
+        // conserva su card de fecha dedicada (formato largo).
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(RadioBorde.xxl))
                 .background(CyberGlass)
-                .border(width = 1.dp, color = CyberGlassBorde, shape = RoundedCornerShape(RadioBorde.xxl))
+                .border(width = Borde.fino, color = CyberGlassBorde, shape = RoundedCornerShape(RadioBorde.xxl))
                 .padding(Espaciado.lg),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(Espaciado.md)
@@ -106,7 +107,7 @@ internal fun ContenidoDetalleVersionAntigua(
             Box(
                 modifier = Modifier
                     .size(TamanosIcono.mediano)
-                    .clip(CircleShape)
+                    .clip(RadioBorde.full)
                     .background(CyberGlassAlto),
                 contentAlignment = Alignment.Center
             ) {
@@ -140,26 +141,11 @@ internal fun ContenidoDetalleVersionAntigua(
         // Unica accion disponible en esta pantalla. Elimina SOLO esta
         // version (por id), no todas las versiones de la URL.
         Spacer(modifier = Modifier.height(Espaciado.lg))
-        Button(
+        BotonCyber(
+            texto = "Eliminar esta versión",
             onClick = onSolicitarEliminar,
-            modifier = Modifier.fillMaxWidth().height(TamanosToque.boton),
-            shape = RoundedCornerShape(RadioBorde.lg),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = CyberRojo,
-                contentColor = Color.White
-            )
-        ) {
-            Icon(
-                imageVector = Icons.Filled.Delete,
-                contentDescription = null,
-                modifier = Modifier.size(TamanosIcono.estandar)
-            )
-            Spacer(modifier = Modifier.size(Espaciado.sm))
-            Text(
-                text = "Eliminar esta versión",
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Bold
-            )
-        }
+            icono = Icons.Filled.Delete,
+            contenedor = CyberRojo
+        )
     }
 }

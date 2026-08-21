@@ -7,7 +7,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -26,7 +26,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
+import com.qrsecurity.detector.ui.theme.Alphas
+import com.qrsecurity.detector.ui.theme.Borde
 import com.qrsecurity.detector.ui.theme.CyberCyan
 import com.qrsecurity.detector.ui.theme.CyberFondo
 import com.qrsecurity.detector.ui.theme.CyberGlass
@@ -86,7 +87,7 @@ internal fun SeccionAcciones(
                     } else {
                         // La pantalla decide: nivel SEGURO → abre directo;
                         // SOSPECHOSO/MALICIOSO → modal de confirmación.
-                        onAbrirEnlace { onMensaje(TipoMensaje.ERROR, "Enlace con esquema no permitido") }
+                        onAbrirEnlace { onMensaje(TipoMensaje.ERROR, "El enlace no se puede abrir de forma segura") }
                     }
                 }
             )
@@ -107,13 +108,13 @@ internal fun SeccionAcciones(
                 },
                 modifier = Modifier
                     .weight(1f)
-                    .height(TamanosToque.boton),
+                    .heightIn(min = TamanosToque.boton),
                 shape = RoundedCornerShape(RadioBorde.lg),
                 colors = ButtonDefaults.outlinedButtonColors(
                     containerColor = CyberGlass,
                     contentColor = CyberTextoPrincipal
                 ),
-                border = BorderStroke(1.dp, CyberGlassBorde)
+                border = BorderStroke(Borde.fino, CyberGlassBorde)
             ) {
                 Icon(
                     imageVector = Icons.Filled.Share,
@@ -157,13 +158,13 @@ internal fun SeccionAcciones(
             onClick = onSolicitarEliminar,
             modifier = Modifier
                 .fillMaxWidth()
-                .height(TamanosToque.boton),
+                .heightIn(min = TamanosToque.boton),
             shape = RoundedCornerShape(RadioBorde.lg),
             colors = ButtonDefaults.outlinedButtonColors(
-                containerColor = CyberRojo.copy(alpha = 0.08f),
+                containerColor = CyberRojo.copy(Alphas.leve),
                 contentColor = CyberRojo
             ),
-            border = BorderStroke(1.dp, CyberRojo.copy(alpha = 0.3f))
+            border = BorderStroke(Borde.fino, CyberRojo.copy(Alphas.notorio))
         ) {
             Icon(
                 imageVector = Icons.Filled.Delete,
@@ -191,9 +192,12 @@ internal fun BotonPrimario(
     Button(
         onClick = onClick,
         enabled = habilitado,
+        // heightIn (no height fijo): el contenido apilado de 2 líneas crece
+        // con la escala de fuente sin recortarse; 56dp sigue siendo el mínimo
+        // táctil.
         modifier = Modifier
             .fillMaxWidth()
-            .height(TamanosToque.boton),
+            .heightIn(min = TamanosToque.boton),
         shape = RoundedCornerShape(RadioBorde.lg),
         colors = ButtonDefaults.buttonColors(
             containerColor = if (habilitado) CyberCyan else CyberGlass,
@@ -224,7 +228,7 @@ internal fun BotonPrimario(
             Text(
                 text = subEtiqueta,
                 style = MaterialTheme.typography.bodySmall,
-                color = if (habilitado) CyberFondo.copy(alpha = 0.8f) else CyberTextoSecundario
+                color = if (habilitado) CyberFondo.copy(Alphas.alto) else CyberTextoSecundario
             )
         }
     }
@@ -242,7 +246,7 @@ internal fun BotonPrimario(
  *
  * El `when` fuerza un solo vinyl para cada uno de los 3 valores
  * (icono/etiqueta/callback) segun [bloqueada]; al anyadir un nuevo estado
- * (p.ej. "desbloqueado-temporal") el `when` se vuelve in-exhaustivo y el
+ * (p. ej. "desbloqueado-temporal") el `when` se vuelve in-exhaustivo y el
  * compilador lo exige aclarar explicitamente.
  *
  * @param modifier Modifier externo — permite al llamador aplicar
@@ -268,13 +272,13 @@ private fun BotonToggleBloqueo(
     OutlinedButton(
         onClick = onClick,
         modifier = modifier
-            .height(TamanosToque.boton),
+            .heightIn(min = TamanosToque.boton),
         shape = RoundedCornerShape(RadioBorde.lg),
         colors = ButtonDefaults.outlinedButtonColors(
-            containerColor = CyberRojo.copy(alpha = 0.12f),
+            containerColor = CyberRojo.copy(Alphas.bajo),
             contentColor = CyberRojo
         ),
-        border = BorderStroke(1.dp, CyberRojo.copy(alpha = 0.4f))
+        border = BorderStroke(Borde.fino, CyberRojo.copy(Alphas.fuerte))
     ) {
         Icon(
             imageVector = icono,

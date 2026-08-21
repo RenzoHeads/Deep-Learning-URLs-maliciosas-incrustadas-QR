@@ -2,13 +2,15 @@ package com.qrsecurity.detector.ui
 
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
@@ -33,10 +35,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavType
@@ -48,13 +48,17 @@ import androidx.navigation.navArgument
 import android.net.Uri
 import com.qrsecurity.detector.pipeline.PipelineViewModel
 import com.qrsecurity.detector.sesion.SessionViewModel
+import com.qrsecurity.detector.ui.theme.Alphas
+import com.qrsecurity.detector.ui.theme.Borde
 import com.qrsecurity.detector.ui.theme.CyberCyan
-import com.qrsecurity.detector.ui.theme.CyberCyanClaro
 import com.qrsecurity.detector.ui.theme.CyberFondo
 import com.qrsecurity.detector.ui.theme.CyberGlass
 import com.qrsecurity.detector.ui.theme.CyberGlassBorde
 import com.qrsecurity.detector.ui.theme.CyberTextoSecundario
 import com.qrsecurity.detector.ui.theme.Elevacion
+import com.qrsecurity.detector.ui.theme.Espaciado
+import com.qrsecurity.detector.ui.theme.RadioBorde
+import com.qrsecurity.detector.ui.theme.TamanosIcono
 import kotlinx.coroutines.launch
 
 // ──────────────────────────────────────────────────────────────────
@@ -125,7 +129,13 @@ fun NavGuardian() {
             snackbarHostState.showSnackbar(
                 message = texto,
                 actionLabel = tipo.name,
-                duration = SnackbarDuration.Short,
+                // Los errores suelen ser largos ("No pudimos conectar…") —
+                // con Short el usuario no alcanzaba a leerlos.
+                duration = if (tipo == TipoMensaje.ERROR) {
+                    SnackbarDuration.Long
+                } else {
+                    SnackbarDuration.Short
+                },
             )
         }
     }
@@ -369,6 +379,7 @@ private fun NavGuardianRutas(
                     navController.navigate(Rutas.DETALLE_VERSION_ANTIGUA.replace("{id}", idEscaneo))
                 },
                 viewModel = viewModels.analisisAnterioresViewModel,
+                datosViewModel = viewModels.datosViewModel,
             )
         }
         composable(Rutas.AJUSTES) {
@@ -426,7 +437,19 @@ private fun SplashCargaSesion() {
 }
 
 // ──────────────────────────────────────────────────────────────────
-// Bottom Navigation Bar — 3 tabs: Inicio, Historial, Ajustes.
+// Bottom Navigation Bar — pill flotante desmontada (rediseño UI):
+// 3 tabs (Inicio, Historial, Ajustes), misma navegación funcional.
+//
+// - Margen lateral/inferior de 16dp + radio 20dp → barra "flotante".
+// - navigationBarsPadding() ANTES del margen: sin él, la pill quedaba
+//   tapada por la barra de gestos/botones del sistema (el NavigationBar
+//   M3 por defecto ya la respeta; al volverla flotante hay que pedirla
+//   explícitamente).
+// - Iconos SIEMPRE 24dp (filled activo / outlined inactivo) — antes
+//   animaban entre 22-26dp, fuera de la escala TamanosIcono.
+// - Labels sentence case labelMedium (antes MAYÚSCULAS con letterSpacing
+//   hardcodeado de 0.5sp).
+// - Activo: teal CyberCyan + indicador pill teal al 12%.
 // ──────────────────────────────────────────────────────────────────
 @Composable
 private fun BarraNavegacionInferior(
@@ -434,10 +457,22 @@ private fun BarraNavegacionInferior(
     onNavegar: (String) -> Unit,
 ) {
     NavigationBar(
-        containerColor = CyberGlass.copy(alpha = 0.92f),
+        containerColor = CyberGlass.copy(Alphas.alto),
         contentColor = CyberTextoSecundario,
-        tonalElevation = Elevacion.flotante,
-        modifier = Modifier.border(BorderStroke(Elevacion.sutil, CyberGlassBorde)),
+        tonalElevation = Elevacion.ninguna,
+        windowInsets = WindowInsets(0, 0, 0, 0),
+        modifier = Modifier
+            .navigationBarsPadding()
+            .padding(
+                start = Espaciado.lg,
+                end = Espaciado.lg,
+                bottom = Espaciado.lg,
+            )
+            .clip(RoundedCornerShape(RadioBorde.xxl))
+            .border(
+                border = BorderStroke(Borde.fino, CyberGlassBorde),
+                shape = RoundedCornerShape(RadioBorde.xxl),
+            ),
     ) {
         val rutas = listOf(
             Triple(Rutas.HOME, "Inicio", Icons.Filled.Home),
@@ -451,10 +486,6 @@ private fun BarraNavegacionInferior(
                 Rutas.HISTORIAL -> Icons.Outlined.History
                 else -> Icons.Outlined.Settings
             }
-            val tamanoIcono by animateFloatAsState(
-                targetValue = if (seleccionado) 26f else 22f,
-                label = "navIconSize",
-            )
             NavItem(
                 selected = seleccionado,
                 onClick = { onNavegar(ruta) },
@@ -462,23 +493,21 @@ private fun BarraNavegacionInferior(
                     Icon(
                         imageVector = if (seleccionado) iconoFilled else iconoOutline,
                         contentDescription = etiqueta,
-                        modifier = Modifier.size(tamanoIcono.dp),
+                        modifier = Modifier.size(TamanosIcono.estandar),
                     )
                 },
                 label = {
                     Text(
-                        text = etiqueta.uppercase(),
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Medium,
-                        letterSpacing = 0.5.sp,
+                        text = etiqueta,
+                        style = MaterialTheme.typography.labelMedium,
                     )
                 },
                 colors = NavItemDefaults.colors(
-                    selectedIconColor = CyberCyanClaro,
-                    selectedTextColor = CyberCyanClaro,
+                    selectedIconColor = CyberCyan,
+                    selectedTextColor = CyberCyan,
                     unselectedIconColor = CyberTextoSecundario,
                     unselectedTextColor = CyberTextoSecundario,
-                    indicatorColor = CyberCyan.copy(alpha = 0.15f),
+                    indicatorColor = CyberCyan.copy(Alphas.bajo),
                 ),
             )
         }

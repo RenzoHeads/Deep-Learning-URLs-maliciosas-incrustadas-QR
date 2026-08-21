@@ -88,6 +88,65 @@ interface PendingOpDao {
     @Query("SELECT * FROM pending_ops WHERE id = :id")
     suspend fun getById(id: Long): PendingOpEntity?
 
+    // -----------------------------------------------------------------
+    // A3-a audit fix — variantes BATCH de las primitivas de claim.
+    //
+    // `procesarPendingOps` original reclamaba UN op por iteracion (3 SQL
+    // sentencias en una tx). Con N ops encolados, el overhead de WAL
+    // fsync por tx dominaba el costo del replay. Las 3 variantes
+    // siguientes permiten reclamar K ops en una sola tx y procesarlos
+    // secuencialmente fuera de ella, amortizando el fsync.
+    //
+    // Las variantes SINGLE (minPendingId, markInProgress, getById) se
+    // mantienen intactas: los tests las usan directamente y documentan
+    // el contrato atomico del claim original.
+    //
+    // Tradeoff de la variant batch: si el worker muere tras procesar
+    // solo el primer op del batch, los K-1 restantes tienen `intentos`
+    // ya incrementado pese a no haber sido realmente procesados
+    // ("phantom bump"). El riesgo es(acotado por `BATCH_SIZE_PUSH` (8)
+    // y tolerado por `MAX_INTENTOS_OP` (10) — un op sobrevive a >=10
+    // claims fantasma consecutivos, escenario solo realizable si el
+    // worker es asesinado por el SO en >50% de sus runs, lo cual es
+    // excepcional. El orden oldest-first se preserva via
+    // `ORDER BY creadoEnMillis ASC, id ASC` en ambos SELECT.
+    // -----------------------------------------------------------------
+
+    /**
+     * A3-a — primitiva 1/3 del claim BATCH: devuelve hasta [limit] ids
+     * de ops no fallidos, oldest-first. Espejo batcheable de
+     * [minPendingId].
+     */
+    @Query(
+        "SELECT id FROM pending_ops WHERE fallida = 0 " +
+            "ORDER BY creadoEnMillis ASC, id ASC LIMIT :limit"
+    )
+    suspend fun minPendingIds(limit: Int): List<Long>
+
+    /**
+     * A3-a — primitiva 2/3 del claim BATCH: incrementa `intentos` para
+     * todos los [ids] reclamados. Devuelve filas-afectadas totales
+     * (puede ser < `ids.size` si otra tx concurrente marco algun id
+     * como fallida entre el SELECT y el UPDATE). Espejo batcheable de
+     * [markInProgress].
+     */
+    @Query(
+        "UPDATE pending_ops SET intentos = intentos + 1 " +
+            "WHERE id IN (:ids) AND fallida = 0"
+    )
+    suspend fun markInProgressBatch(ids: List<Long>): Int
+
+    /**
+     * A3-a — primitiva 3/3 del claim BATCH: devuelve los ops completos
+     * para [ids], oldest-first (mismo orden que [minPendingIds]).
+     * Espejo batcheable de [getById].
+     */
+    @Query(
+        "SELECT * FROM pending_ops WHERE id IN (:ids) " +
+            "ORDER BY creadoEnMillis ASC, id ASC"
+    )
+    suspend fun getByIds(ids: List<Long>): List<PendingOpEntity>
+
     /**
      * M-21 — dedup query: devuelve el op pendiente existente para el
      * mismo `(tabla, idLocal, tipoOperacion)`, o null si no hay. Usa el

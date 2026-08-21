@@ -1,8 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="black">#FF000000</color>
-    <color name="white">#FFFFFFFF</color>
-    <color name="gray_light">#FFF5F5F5</color>
-    <color name="gray_dark">#FF121212</color>
+    <!-- La paleta de la UI vive en ui/theme/Color.kt (Compose).
+         black/white/gray_* no tenían referencias y fueron purgados. -->
     <color name="ic_launcher_background">#0A0E1A</color>
 </resources>

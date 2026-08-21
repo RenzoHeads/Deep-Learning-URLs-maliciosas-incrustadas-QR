@@ -162,7 +162,12 @@ class FixtureSyncWorker {
             db = db,
             sesionUsuario = sesionUsuario,
             pipeline = pipeline,
-            cacheDetalleEscaneos = CacheDetalleEscaneos()
+            cacheDetalleEscaneos = CacheDetalleEscaneos(),
+            credentialsManager = com.auth0.android.authentication.storage.SecureCredentialsManager(
+                appContext,
+                com.auth0.android.Auth0.getInstance(appContext),
+                com.auth0.android.authentication.storage.SharedPreferencesStorage(appContext)
+            )
         )
     }
 

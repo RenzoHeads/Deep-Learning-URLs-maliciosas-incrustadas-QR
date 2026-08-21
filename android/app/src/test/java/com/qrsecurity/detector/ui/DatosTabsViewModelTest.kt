@@ -298,11 +298,55 @@ class DatosTabsViewModelTest {
 
         val grupos = agruparHistorialPorFecha(entidades, ahora = ahora)
 
-        assertEquals(listOf("Hoy", "Anteriores"), grupos.map { it.titulo })
+        // Auditoría UI 2: el genérico "Anteriores" se reemplazó por grupos
+        // por día calendario con fecha concreta "dd/MM/yyyy".
+        assertEquals(listOf("Hoy", formatoFechaCorta(haceTresDias)), grupos.map { it.titulo })
         assertEquals(
             "La fila con fecha futura debe pintarse en Hoy",
             listOf("futuro"),
             grupos.first { it.titulo == "Hoy" }.escaneos.map { it.id }
         )
     }
+
+    @Test
+    fun agruparHistorial_anteayerYDiasAnteriores_grupoPorDiaConFechaConcreta() {
+        // Auditoría UI 2: jerarquía temporal útil — Hoy/Ayer/Anteayer relativos
+        // y a partir de ahí un grupo por día calendario titulado con la fecha
+        // concreta, ordenado del más reciente al más antiguo.
+        val ahora = System.currentTimeMillis()
+        val hace2Dias = ahora - 2L * 24 * 3_600_000L
+        val hace3Dias = ahora - 3L * 24 * 3_600_000L
+        val hace5Dias = ahora - 5L * 24 * 3_600_000L
+        val entidades = listOf(
+            escaneoDePrueba("hace5-1", hace5Dias),
+            escaneoDePrueba("anteayer-1", hace2Dias),
+            escaneoDePrueba("hace3-1", hace3Dias)
+        )
+
+        val grupos = agruparHistorialPorFecha(entidades, ahora = ahora)
+
+        assertEquals(
+            listOf("Anteayer", formatoFechaCorta(hace3Dias), formatoFechaCorta(hace5Dias)),
+            grupos.map { it.titulo }
+        )
+        assertEquals(
+            "Cada grupo de día contiene exactamente su escaneo",
+            listOf(listOf("hace3-1"), listOf("hace5-1")),
+            grupos.drop(1).map { grupo -> grupo.escaneos.map { it.id } }
+        )
+    }
+
+    /** Entidad mínima para tests de agrupación — solo id y fecha varían. */
+    private fun escaneoDePrueba(id: String, creadoEnMillis: Long) = EscaneoEntity(
+        id = id,
+        urlOriginal = "https://$id.example.com",
+        urlLimpia = "$id.example.com",
+        probabilidad = 0.5f,
+        nivelAlerta = "SOSPECHOSO",
+        delegado = null,
+        esMalicioso = false,
+        creadoEnMillis = creadoEnMillis,
+        dirty = false,
+        syncedAtMillis = creadoEnMillis
+    )
 }

@@ -1,5 +1,6 @@
 package com.qrsecurity.detector.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -9,11 +10,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
+
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -21,6 +22,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Button
@@ -37,14 +39,21 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 
+import com.qrsecurity.detector.ui.theme.Alphas
+import com.qrsecurity.detector.ui.theme.Borde
 import com.qrsecurity.detector.ui.theme.CyberCyan
 import com.qrsecurity.detector.ui.theme.CyberFondo
 import com.qrsecurity.detector.ui.theme.CyberGlass
+import com.qrsecurity.detector.ui.theme.CyberGlassAlto
 import com.qrsecurity.detector.ui.theme.CyberGlassVariant
 import com.qrsecurity.detector.ui.theme.CyberTextoPrincipal
 import com.qrsecurity.detector.ui.theme.CyberTextoSecundario
@@ -88,7 +97,7 @@ import com.qrsecurity.detector.ui.theme.TamanosToque
 internal fun GlassPillBackButton(onBack: () -> Unit) {
     Row(
         modifier = Modifier
-            .clip(RoundedCornerShape(50))
+            .clip(RadioBorde.pill)
             .background(CyberGlass)
             .clickable(onClick = onBack)
             .padding(horizontal = Espaciado.md, vertical = Espaciado.sm),
@@ -169,6 +178,257 @@ internal fun ContenidoNoEncontradoComun(
 }
 
 /**
+ * Estado vacío unificado — icono en círculo glass + título + descripción
+ * opcional + CTA opcional.
+ *
+ * Antes cada pantalla armaba su propio empty state con jerarquías distintas
+ * (Historial: icono 40dp suelto + bodyMedium + botón; AnalisisAnteriores:
+ * círculo 64dp + titleMedium; NoEncontrado: solo texto). Este componente
+ * fija una única receta para todas.
+ *
+ * @param icono Icono dentro del círculo glass (64dp contenedor, 40dp icono).
+ * @param titulo Título principal (titleMedium SemiBold).
+ * @param descripcion Línea secundaria opcional (bodyMedium secundario).
+ * @param textoBoton Si no es null, renderiza un [BotonCyber] como CTA.
+ * @param iconoBoton Icono opcional del CTA.
+ * @param onClick Callback del CTA.
+ * @param modifier Modifier externo (default fillMaxWidth).
+ */
+@Composable
+internal fun EstadoVacio(
+    icono: ImageVector,
+    titulo: String,
+    descripcion: String? = null,
+    textoBoton: String? = null,
+    iconoBoton: ImageVector? = null,
+    onClick: () -> Unit = {},
+    modifier: Modifier = Modifier.fillMaxWidth(),
+) {
+    Column(
+        modifier = modifier.padding(vertical = Espaciado.giganteM),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(Espaciado.md)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(TamanosIcono.grande)
+                .clip(RadioBorde.full)
+                .background(CyberGlass),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = icono,
+                contentDescription = null,
+                tint = CyberTextoSecundario,
+                modifier = Modifier.size(TamanosIcono.mediano)
+            )
+        }
+        Text(
+            text = titulo,
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = CyberTextoPrincipal,
+            textAlign = TextAlign.Center
+        )
+        if (descripcion != null) {
+            Text(
+                text = descripcion,
+                style = MaterialTheme.typography.bodyMedium,
+                color = CyberTextoSecundario,
+                textAlign = TextAlign.Center
+            )
+        }
+        if (textoBoton != null) {
+            BotonCyber(
+                texto = textoBoton,
+                onClick = onClick,
+                icono = iconoBoton
+            )
+        }
+    }
+}
+
+/**
+ * Indicador de sincronización unificado — pill glass con icono Sync + texto.
+ *
+ * Antes existían 3 variantes: pill "Sincronizando…" (Historial), fila de
+ * texto "Sincronizando datos…" sin pill (Ajustes) y spinner 16dp mudo
+ * (AnalisisAnteriores). Unifica la primera y la segunda; la tercera (spinner
+ * compacto inline) se mantiene en su pantalla con tamaño tokenizado.
+ *
+ * @param texto Texto junto al icono (default "Sincronizando…").
+ */
+@Composable
+internal fun EstadoSincronizacion(
+    texto: String = "Sincronizando…"
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Espaciado.xs),
+        modifier = Modifier
+            .background(CyberGlassAlto, RoundedCornerShape(RadioBorde.lg))
+            .padding(horizontal = Espaciado.md, vertical = Espaciado.sm)
+    ) {
+        Icon(
+            imageVector = Icons.Filled.Sync,
+            contentDescription = "Sincronizando",
+            tint = CyberCyan,
+            modifier = Modifier.size(TamanosIcono.estandar)
+        )
+        Text(
+            text = texto,
+            style = MaterialTheme.typography.labelSmall,
+            color = CyberTextoSecundario
+        )
+    }
+}
+
+/**
+ * Chip base del design system — receta única para chips de estado/nivel:
+ * fondo Alphas.medio del color semántico, radio sm, padding md/xs y
+ * labelMedium Bold.
+ *
+ * Auditoría UI 2: el mismo chip de veredicto vivía con 3 recetas distintas
+ * (ChipEstadoUrl en DetalleUrlTarjetas, el chip del timeline y la pill del
+ * subtítulo del veredicto) que diferían en padding (sm/xs vs md/xs) y en
+ * tipografía (labelSmall vs labelMedium). Esta es la receta única; el set
+ * de etiquetas (etiquetaHistorial vs etiquetaLineaTiempo) sigue
+ * decidiéndose en cada caller.
+ *
+ * @param texto Etiqueta corta del chip.
+ * @param color Color semántico (nivel de alerta o acento).
+ */
+@Composable
+internal fun ChipNivel(
+    texto: String,
+    color: Color,
+    modifier: Modifier = Modifier
+) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(RadioBorde.sm))
+            .background(color.copy(Alphas.medio))
+            .padding(horizontal = Espaciado.md, vertical = Espaciado.xs)
+    ) {
+        Text(
+            text = texto,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+            color = color
+        )
+    }
+}
+
+/**
+ * Botón primario unificado del design system — full-width, 56dp, radio lg,
+ * color de contenedor parametrizable (teal para acciones, rojo para
+ * destructivas).
+ *
+ * Sustituye el patrón `height(TamanosToque.boton) + shape(RadioBorde.lg) +
+ * colors(CyberCyan/CyberFondo)` que estaba copiado verbatim en 6 pantallas
+ * (modal de confirmación, modal "Listo", empty state de Historial, botón
+ * destructivo de versión antigua, etc.). No reemplaza a [BotonSubmit]
+ * (que añade estado `procesando`) ni a [BotonPrimario] de DetalleUrlAcciones
+ * (CTA con icono + sublabel) — ambos son casos específicos.
+ *
+ * @param texto Label del botón (labelLarge Bold).
+ * @param onClick Callback de pulsación.
+ * @param icono Icono opcional antes del texto.
+ * @param contenedor Color de fondo (default teal [CyberCyan]).
+ * @param contenido Color de texto/icono (default [CyberFondo]).
+ * @param habilitado Estado enabled del botón.
+ * @param modifier Modifier externo (default fillMaxWidth).
+ */
+@Composable
+internal fun BotonCyber(
+    texto: String,
+    onClick: () -> Unit,
+    icono: ImageVector? = null,
+    contenedor: Color = CyberCyan,
+    contenido: Color = CyberFondo,
+    habilitado: Boolean = true,
+    modifier: Modifier = Modifier.fillMaxWidth(),
+) {
+    Button(
+        onClick = onClick,
+        enabled = habilitado,
+        modifier = modifier.heightIn(min = TamanosToque.boton),
+        shape = RoundedCornerShape(RadioBorde.lg),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = contenedor,
+            contentColor = contenido
+        )
+    ) {
+        if (icono != null) {
+            Icon(
+                imageVector = icono,
+                contentDescription = null,
+                modifier = Modifier.size(TamanosIcono.estandar)
+            )
+            Spacer(modifier = Modifier.width(Espaciado.sm))
+        }
+        Text(
+            text = texto,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold
+        )
+    }
+}
+
+/**
+ * Variante outline de [BotonCyber] — mismo target táctil mínimo (56dp),
+ * radio lg y labelLarge Bold, con borde fino y contenido en el color de
+ * acento sobre CyberGlass.
+ *
+ * Auditoría UI 2: reemplaza la receta duplicada a mano del CTA "Reescanear
+ * ahora" en [PantallaAnalisisAnteriores] (OutlinedButton + BorderStroke +
+ * colors inline replicando esta misma geometría). El alto es un mínimo, no
+ * un techo: con escala de fuente grande el contenido crece sin recortarse.
+ *
+ * @param texto Label del botón (labelLarge Bold).
+ * @param onClick Callback de pulsación.
+ * @param icono Icono opcional antes del texto.
+ * @param colorAcento Color de borde y contenido (default teal [CyberCyan]).
+ * @param habilitado Estado enabled del botón.
+ * @param modifier Modifier externo (default fillMaxWidth).
+ */
+@Composable
+internal fun BotonCyberOutline(
+    texto: String,
+    onClick: () -> Unit,
+    icono: ImageVector? = null,
+    colorAcento: Color = CyberCyan,
+    habilitado: Boolean = true,
+    modifier: Modifier = Modifier.fillMaxWidth()
+) {
+    OutlinedButton(
+        onClick = onClick,
+        enabled = habilitado,
+        modifier = modifier.heightIn(min = TamanosToque.boton),
+        shape = RoundedCornerShape(RadioBorde.lg),
+        colors = ButtonDefaults.outlinedButtonColors(
+            containerColor = CyberGlass,
+            contentColor = colorAcento
+        ),
+        border = BorderStroke(Borde.fino, colorAcento)
+    ) {
+        if (icono != null) {
+            Icon(
+                imageVector = icono,
+                contentDescription = null,
+                modifier = Modifier.size(TamanosIcono.estandar)
+            )
+            Spacer(modifier = Modifier.width(Espaciado.sm))
+        }
+        Text(
+            text = texto,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold
+        )
+    }
+}
+
+/**
  * Colores compartidos del [androidx.compose.material3.OutlinedTextField] en
  * los formularios (Login/Registro): superficie oscura (CyberGlassVariant),
  * borde cyan al enfocar, cursor cyan.
@@ -186,6 +446,99 @@ internal fun coloresCampoTexto() = OutlinedTextFieldDefaults.colors(
     focusedTextColor = CyberTextoPrincipal,
     unfocusedTextColor = CyberTextoPrincipal
 )
+
+/**
+ * Campo de texto con etiqueta opcional — [OutlinedTextField] con la receta
+ * visual de los formularios (superficie glass, radio md, colores de
+ * [coloresCampoTexto]) y label superior al estilo de [CampoPassword].
+ *
+ * Da paridad Login/Registro: antes Registro mostraba sus campos de
+ * correo/usuario sin label mientras Login sí usaba labels.
+ *
+ * @param value Valor actual del campo.
+ * @param onValueChange Callback de cambio de valor.
+ * @param placeholder Texto placeholder.
+ * @param label Etiqueta opcional sobre el campo. `null` omite la etiqueta.
+ * @param icono Icono inicial opcional (leading).
+ * @param keyboardOptions Configuración de teclado (ej. [KeyboardType.Email]).
+ * @param modifier Modifier externo (default [Modifier.fillMaxWidth]).
+ */
+@Composable
+internal fun CampoTexto(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    label: String? = null,
+    icono: ImageVector? = null,
+    keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
+    modifier: Modifier = Modifier.fillMaxWidth(),
+) {
+    if (label != null) {
+        Column(
+            modifier = modifier,
+            verticalArrangement = Arrangement.spacedBy(Espaciado.xs)
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                color = CyberTextoSecundario
+            )
+            CampoTextoInput(
+                value = value,
+                onValueChange = onValueChange,
+                placeholder = placeholder,
+                icono = icono,
+                keyboardOptions = keyboardOptions,
+            )
+        }
+    } else {
+        CampoTextoInput(
+            value = value,
+            onValueChange = onValueChange,
+            placeholder = placeholder,
+            icono = icono,
+            keyboardOptions = keyboardOptions,
+            modifier = modifier,
+        )
+    }
+}
+
+/**
+ * Implementación interna del campo de texto sin etiqueta — extraída para
+ * evitar duplicar el [OutlinedTextField] entre las ramas con/sin label de
+ * [CampoTexto] (mismo patrón que [CampoPasswordInput]).
+ */
+@Composable
+private fun CampoTextoInput(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    icono: ImageVector?,
+    keyboardOptions: KeyboardOptions,
+    modifier: Modifier = Modifier.fillMaxWidth(),
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = modifier,
+        placeholder = { Text(placeholder) },
+        leadingIcon = if (icono != null) {
+            {
+                Icon(
+                    imageVector = icono,
+                    contentDescription = null,
+                    modifier = Modifier.size(TamanosIcono.estandar)
+                )
+            }
+        } else {
+            null
+        },
+        singleLine = true,
+        shape = RoundedCornerShape(RadioBorde.md),
+        keyboardOptions = keyboardOptions,
+        colors = coloresCampoTexto()
+    )
+}
 
 
 // ---------------------------------------------------------------------------
@@ -206,7 +559,7 @@ internal fun MarcaIconoBrand(modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
             .size(Espaciado.gigante)
-            .clip(CircleShape)
+            .clip(RadioBorde.full)
             .background(PencilBrandMark),
         contentAlignment = Alignment.Center
     ) {
@@ -268,7 +621,7 @@ internal fun BrandHeader(
 }
 
 /**
- * Campo de contrasena con toggle de visibilidad — [OutlinedTextField] con
+ * Campo de contraseña con toggle de visibilidad — [OutlinedTextField] con
  * icono [Icons.Filled.Lock], trailing icon button que alterna entre
  * [Icons.Filled.Visibility] / [Icons.Filled.VisibilityOff], y
  * [PasswordVisualTransformation] cuando esta oculta.
@@ -280,9 +633,9 @@ internal fun BrandHeader(
  *
  * @param value Valor actual del campo.
  * @param onValueChange Callback de cambio de valor.
- * @param mostrarPassword Si la contrasena se muestra en texto plano.
+ * @param mostrarPassword Si la contraseña se muestra en texto plano.
  * @param onTogglePassword Callback del boton de toggle de visibilidad.
- * @param placeholder Texto placeholder (default "contrasena").
+ * @param placeholder Texto placeholder (default "contraseña").
  * @param label Etiqueta opcional sobre el campo (Login la usa, Registro no).
  *     `null` omite la etiqueta.
  * @param modifier Modifier externo (default [Modifier.fillMaxWidth]).
@@ -293,7 +646,7 @@ internal fun CampoPassword(
     onValueChange: (String) -> Unit,
     mostrarPassword: Boolean,
     onTogglePassword: () -> Unit,
-    placeholder: String = "contrasena",
+    placeholder: String = "Contraseña",
     label: String? = null,
     modifier: Modifier = Modifier.fillMaxWidth(),
 ) {
@@ -328,7 +681,7 @@ internal fun CampoPassword(
 }
 
 /**
- * Implementacion interna del campo de contrasena sin etiqueta — extraida
+ * Implementacion interna del campo de contraseña sin etiqueta — extraida
  * para evitar duplicar el [OutlinedTextField] entre las ramas con/sin label
  * de [CampoPassword].
  */
@@ -357,7 +710,7 @@ private fun CampoPasswordInput(
             IconButton(onClick = onTogglePassword) {
                 Icon(
                     imageVector = if (mostrarPassword) Icons.Filled.Visibility else Icons.Filled.VisibilityOff,
-                    contentDescription = if (mostrarPassword) "Ocultar contrasena" else "Mostrar contrasena",
+                    contentDescription = if (mostrarPassword) "Ocultar contraseña" else "Mostrar contraseña",
                     modifier = Modifier.size(TamanosIcono.estandar)
                 )
             }
@@ -398,7 +751,7 @@ internal fun BotonSubmit(
         enabled = !procesando,
         modifier = Modifier
             .fillMaxWidth()
-            .height(TamanosToque.boton),
+            .heightIn(min = TamanosToque.boton),
         shape = RoundedCornerShape(RadioBorde.lg),
         colors = ButtonDefaults.buttonColors(
             containerColor = CyberCyan,
@@ -427,30 +780,3 @@ internal fun BotonSubmit(
         }
     }
 }
-
-/**
- * Mapea un codigo HTTP de error del backend a un mensaje UX legible.
- *
- * Consolida `manejarErrorBackend` (LoginViewModel L151-154) y
- * `manejarErrorRegistro` (RegistroViewModel L152-155). Ambos eran
- * `when (codigo)` con un solo caso especifico (401 vs 409) y un fallback
- * generico. La unica diferencia era el mensaje del caso especifico, que
- * ahora se pasa como parametro.
- *
- * @param codigo Codigo HTTP del error (p.ej. 401, 409).
- * @param cuerpo Cuerpo de la respuesta del backend (para el fallback).
- * @param message Mensaje de la excepcion (para el fallback).
- * @param mensajesEspecificos Mapa de codigo HTTP a mensaje UX. Solo se
- *     consulta para codigos que el caller quiera personalizar (p.ej.
- *     `mapOf(401 to "Usuario o contrasena incorrectos.")` para Login,
- *     `mapOf(409 to "El usuario ya existe. Intenta con otro.")` para
- *     Registro).
- * @return Mensaje UX a mostrar al usuario.
- */
-internal fun manejarErrorAutenticacion(
-    codigo: Int,
-    cuerpo: String?,
-    message: String?,
-    mensajesEspecificos: Map<Int, String>,
-): String = mensajesEspecificos[codigo]
-    ?: "Error $codigo: ${cuerpo ?: message}"

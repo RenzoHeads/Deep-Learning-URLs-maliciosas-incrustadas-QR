@@ -10,7 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
+
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
@@ -25,8 +25,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
 import com.qrsecurity.detector.datos.local.entidades.EscaneoEntity
+import com.qrsecurity.detector.ui.theme.Alphas
+import com.qrsecurity.detector.ui.theme.Borde
 import com.qrsecurity.detector.ui.theme.CyberCyan
 import com.qrsecurity.detector.ui.theme.CyberGlass
 import com.qrsecurity.detector.ui.theme.CyberGlassAlto
@@ -46,33 +47,48 @@ import com.qrsecurity.detector.ui.theme.TamanosIcono
  * EscaneoEntity puro.
  *
  * Componentes:
- *  - [TarjetaUrl]: glass card con QR icon + URL + chip de estado.
- *  - [ChipEstadoUrl]: chip de nivel-alerta (o "BLOQUEADA" si aplica).
- *  - [TarjetaVeredicto]: gauge 140dp + amenaza label + subtitulo pill.
- *  - [TarjetaVersiones]: glass card clickable "Ver versiones de este analisis".
+ *  - [TarjetaUrl]: glass card con QR icon + URL (hasta 4 líneas) + chip de
+ *    estado + fecha "Analizado:" opcional.
+ *  - [ChipEstadoUrl]: chip de nivel-alerta (o "BLOQUEADA" si aplica) sobre
+ *    la receta única [ChipNivel].
+ *  - [TarjetaVeredicto]: gauge hero (120dp) + amenaza label + subtitulo pill.
+ *  - [TarjetaVersiones]: glass card clickable "Versiones anteriores".
  */
 
-/** Tarjeta URL — glass card con QR icon en circulo + URL + chip de estado. */
+/**
+ * Tarjeta URL — glass card con QR icon en circulo + URL + chip de estado.
+ *
+ * Auditoría UI 2: el chip ya no compite por ancho con la URL. La URL vive en
+ * su propia columna (weight 1f) con hasta 4 líneas antes del ellipsis — el
+ * contenedor se adapta al contenido en vez de mutilar la URL para caber en
+ * una card chica. [fechaAnalisis] añade la línea "Analizado: dd/MM/yyyy ·
+ * HH:mm" (solo DetalleUrl la pasa; DetalleVersionAntigua conserva su tarjeta
+ * de fecha dedicada).
+ */
 @Composable
-internal fun TarjetaUrl(escaneo: EscaneoEntity, urlBloqueada: Boolean) {
+internal fun TarjetaUrl(
+    escaneo: EscaneoEntity,
+    urlBloqueada: Boolean,
+    fechaAnalisis: Long? = null
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(RadioBorde.xxl))
             .background(CyberGlass)
             .border(
-                width = 1.dp,
+                width = Borde.fino,
                 color = CyberGlassBorde,
                 shape = RoundedCornerShape(RadioBorde.xxl)
             )
             .padding(Espaciado.lg),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalAlignment = Alignment.Top,
         horizontalArrangement = Arrangement.spacedBy(Espaciado.md)
     ) {
         Box(
             modifier = Modifier
                 .size(TamanosIcono.mediano)
-                .clip(CircleShape)
+                .clip(RadioBorde.full)
                 .background(CyberGlassAlto),
             contentAlignment = Alignment.Center
         ) {
@@ -83,51 +99,55 @@ internal fun TarjetaUrl(escaneo: EscaneoEntity, urlBloqueada: Boolean) {
                 modifier = Modifier.size(TamanosIcono.estandar)
             )
         }
-        Text(
-            text = escaneo.urlOriginal.ifBlank { escaneo.urlLimpia },
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.Medium,
-            color = CyberTextoPrincipal,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f)
-        )
-        ChipEstadoUrl(nivelAlerta = escaneo.nivelAlertaEnum, urlBloqueada = urlBloqueada)
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(Espaciado.sm)
+        ) {
+            Text(
+                text = escaneo.urlOriginal.ifBlank { escaneo.urlLimpia },
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                color = CyberTextoPrincipal,
+                maxLines = 4,
+                overflow = TextOverflow.Ellipsis
+            )
+            ChipEstadoUrl(nivelAlerta = escaneo.nivelAlertaEnum, urlBloqueada = urlBloqueada)
+            if (fechaAnalisis != null) {
+                Text(
+                    text = "Analizado: ${formatoFechaHoraCorta(fechaAnalisis)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = CyberTextoSecundario
+                )
+            }
+        }
     }
 }
 
 /**
- * Chip de estado de la URL. Muestra "BLOQUEADA" si [urlBloqueada] es true
- * (predomina sobre el nivelAlerta); si no, muestra el [NivelAlerta.id] con
- * el color del nivel. BLOQUEADA reusa el color de MALICIOSO (rojo) por
- * consistencia visual.
+ * Chip de estado de la URL. Muestra "Bloqueada" si [urlBloqueada] es true
+ * (predomina sobre el nivelAlerta); si no, muestra la etiqueta sentence case
+ * del [NivelAlerta] ("Maliciosa" | "Sospechosa" | "Segura") con el color del
+ * nivel. "Bloqueada" reusa el color de MALICIOSO (rojo) por consistencia
+ * visual. Unificado con FilaEscaneo y el timeline vía [NivelAlerta.etiquetaHistorial].
+ *
+ * Auditoría UI 2: la geometría (radio, padding, alphas, tipografía) delega a
+ * [ChipNivel] — receta única del design system compartida con el chip del
+ * timeline y la pill del veredicto.
  */
 @Composable
 internal fun ChipEstadoUrl(nivelAlerta: NivelAlerta, urlBloqueada: Boolean = false) {
-    // BLOQUEADA predomina; reusa el color de MALICIOSO. Si no, muestra el id
-    // del nivelAlerta tal cual ("MALICIOSO" | "SOSPECHOSO" | "SEGURO").
+    // BLOQUEADA predomina; reusa el color de MALICIOSO. Si no, muestra la
+    // etiqueta sentence case del nivelAlerta (coincide con el historial).
     val (texto, nivel) = if (urlBloqueada) {
-        "BLOQUEADA" to NivelAlerta.MALICIOSO
+        "Bloqueada" to NivelAlerta.MALICIOSO
     } else {
-        nivelAlerta.id to nivelAlerta
+        nivelAlerta.etiquetaHistorial to nivelAlerta
     }
-    Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(RadioBorde.sm))
-            .background(nivel.color.copy(alpha = 0.18f))
-            .padding(horizontal = Espaciado.md, vertical = Espaciado.xs)
-    ) {
-        Text(
-            text = texto,
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.Bold,
-            color = nivel.color
-        )
-    }
+    ChipNivel(texto = texto, color = nivel.color)
 }
 
 /**
- * Tarjeta de veredicto — gauge 140dp centrado + label + subtitulo pill,
+ * Tarjeta de veredicto — gauge 120dp centrado + label + subtitulo pill,
  * con border glow del color del veredicto. Toma [EscaneoEntity] para
  * ser reutilizada por DetalleUrl y DetalleVersionAntigua sin un wrapper de
  * UiState. Color/etiqueta/subitulo derivan de [EscaneoEntity.nivelAlertaEnum].
@@ -143,7 +163,7 @@ internal fun ChipEstadoUrl(nivelAlerta: NivelAlerta, urlBloqueada: Boolean = fal
 @Composable
 internal fun TarjetaVeredicto(escaneo: EscaneoEntity) {
     val nivel = escaneo.nivelAlertaEnum
-    val pctSeguridad = Math.round((1f - escaneo.probabilidad.coerceIn(0f, 1f)) * 100f)
+    val pctSeguridad = pctSeguro(escaneo.probabilidad)
 
     Column(
         modifier = Modifier
@@ -151,8 +171,8 @@ internal fun TarjetaVeredicto(escaneo: EscaneoEntity) {
             .clip(RoundedCornerShape(RadioBorde.xxl))
             .background(CyberGlass)
             .border(
-                width = 1.dp,
-                color = nivel.color.copy(alpha = 0.25f),
+                width = Borde.fino,
+                color = nivel.color.copy(Alphas.notorio),
                 shape = RoundedCornerShape(RadioBorde.xxl)
             )
             .padding(Espaciado.xxl),
@@ -165,7 +185,7 @@ internal fun TarjetaVeredicto(escaneo: EscaneoEntity) {
             colorTrack = CyberGlassBorde,
             valorTexto = "$pctSeguridad%",
             colorTexto = CyberTextoPrincipal,
-            modifier = Modifier.size(140.dp)
+            modifier = Modifier.size(TamanosIcono.heroContenedor)
         )
         Text(
             text = nivel.etiquetaAmenaza,
@@ -173,24 +193,13 @@ internal fun TarjetaVeredicto(escaneo: EscaneoEntity) {
             fontWeight = FontWeight.Bold,
             color = CyberTextoPrincipal
         )
-        Box(
-            modifier = Modifier
-                .clip(RoundedCornerShape(RadioBorde.sm))
-                .background(nivel.color.copy(alpha = 0.16f))
-                .padding(horizontal = Espaciado.md, vertical = Espaciado.xs)
-        ) {
-            Text(
-                text = nivel.subtituloAmenaza,
-                style = MaterialTheme.typography.labelMedium,
-                color = nivel.color
-            )
-        }
+        ChipNivel(texto = nivel.subtituloAmenaza, color = nivel.color)
     }
 }
 
 /**
- * Tarjeta "Ver versiones" — glass card con History icon, contador de
- * versiones y arrow. Reemplaza el text link del diseno anterior.
+ * Tarjeta "Versiones anteriores" — glass card con History icon, contador de
+ * versiones y arrow. Entrada al historial de versiones de la URL.
  */
 @Composable
 internal fun TarjetaVersiones(
@@ -203,7 +212,7 @@ internal fun TarjetaVersiones(
             .clip(RoundedCornerShape(RadioBorde.xxl))
             .background(CyberGlass)
             .border(
-                width = 1.dp,
+                width = Borde.fino,
                 color = CyberGlassBorde,
                 shape = RoundedCornerShape(RadioBorde.xxl)
             )
@@ -215,7 +224,7 @@ internal fun TarjetaVersiones(
         Box(
             modifier = Modifier
                 .size(TamanosIcono.mediano)
-                .clip(CircleShape)
+                .clip(RadioBorde.full)
                 .background(CyberGlassAlto),
             contentAlignment = Alignment.Center
         ) {
@@ -231,7 +240,7 @@ internal fun TarjetaVersiones(
             verticalArrangement = Arrangement.spacedBy(Espaciado.xs)
         ) {
             Text(
-                text = "Ver versiones de este análisis",
+                text = "Versiones anteriores del análisis",
                 style = MaterialTheme.typography.bodyMedium,
                 fontWeight = FontWeight.SemiBold,
                 color = CyberTextoPrincipal

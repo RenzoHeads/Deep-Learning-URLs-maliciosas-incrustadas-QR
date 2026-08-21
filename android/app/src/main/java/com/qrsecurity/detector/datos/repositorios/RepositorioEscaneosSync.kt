@@ -3,7 +3,6 @@ package com.qrsecurity.detector.datos.repositorios
 import androidx.room.withTransaction
 import com.qrsecurity.detector.api.ClienteBackend
 import com.qrsecurity.detector.api.listarEscaneosDelta
-import com.qrsecurity.detector.datos.local.sha256Hex
 import kotlinx.coroutines.withContext
 import com.qrsecurity.detector.datos.local.entidades.PendingOpEntity
 
@@ -63,11 +62,12 @@ internal suspend fun RepositorioEscaneos.aplicarBatchEscaneos(
         db.escaneoDao().insertarTodos(entidades)
     }
 
-    // D-3 sibling fix: sync urls_catalogo for each affected URL
-    for (urlLimpia in urlLimpiaAfectadas) {
-        val existente = db.urlCatalogoDao().buscarPorHash(sha256Hex(urlLimpia))
-        db.reconciliarUrlsCatalogo(urlLimpia, vecesEscaneadaOverride = existente?.vecesEscaneada)
-    }
+    // D-3 sibling fix + M4 audit fix: sync urls_catalogo para todas las
+    // URLs afectadas — 5 queries fijas via [reconciliarUrlsCatalogoBatch]
+    // en vez del loop N+1 (3-4 queries por URL). Preserva el contador
+    // existente: el batch PULL puede no contener TODOS los escaneos de la
+    // URL, así que `vecesEscaneada` del catálogo sigue siendo la fuente.
+    db.reconciliarUrlsCatalogoBatch(urlLimpiaAfectadas, preservarVecesEscaneada = true)
 
     // Bug A1 fix: cursor keyset compuesto "ts|id" (ver [CursorDelta]).
     val ultima = delta.last()
@@ -109,10 +109,11 @@ suspend fun RepositorioEscaneos.limpiarHuerfanos(idsServidor: List<String>) =
                     "AND NOT EXISTS (SELECT 1 FROM _tmp_ids_serv t WHERE t.id = escaneos.id)"
             )
 
-            // D-3 sibling fix: reconcile urls_catalogo
-            for (urlLimpia in urlLimpiaAfectadas) {
-                db.reconciliarUrlsCatalogo(urlLimpia)
-            }
+            // D-3 sibling fix + M4 audit fix: reconcile urls_catalogo —
+            // batch en vez del loop N+1. Aquí NO preservamos el contador:
+            // la limpieza de huérfanos es una reconciliación total, el
+            // conteo de filas vivas es la verdad.
+            db.reconciliarUrlsCatalogoBatch(urlLimpiaAfectadas, preservarVecesEscaneada = false)
 
             sqliteDb.execSQL("DROP TABLE IF EXISTS _tmp_ids_serv")
         }

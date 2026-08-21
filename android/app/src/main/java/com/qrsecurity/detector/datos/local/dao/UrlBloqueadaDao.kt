@@ -58,6 +58,28 @@ interface UrlBloqueadaDao {
     suspend fun obtenerPorUrl(url: String): UrlBloqueadaEntity?
 
     /**
+     * Versión reactiva (Flow) de [obtenerPorUrl] — Audit A2+M1 fix.
+     *
+     * Emite el row coincidente (o null) cada vez que la tabla
+     * `urls_bloqueadas` o `pending_ops` se invalida, eliminando el
+     * re-query one-shot que hacía [DetalleUrlViewModel] en cada emisión de
+     * `observarPorId`. El filtro `id NOT IN (DELETEs pendientes)` es el mismo
+     * que [observarTodos] — mantiene consistencia con la lista de
+     * BloqueadasScreen (una URL con DELETE pendiente ya NO esta bloqueada
+     * para el usuario, aunque el row siga en la tabla hasta que el sync lo
+     * confirme). Limitado a 1: la constraint UNIQUE sobre `url` lo garantiza
+     * pero LIMIT cuesta 0 y hace explicito que esperamos un solo row.
+     */
+    @Query(
+        "SELECT * FROM urls_bloqueadas WHERE url = :url " +
+            "AND id NOT IN (" +
+                "SELECT idLocal FROM pending_ops " +
+                "WHERE tabla = 'urls_bloqueadas' AND tipoOperacion = 'DELETE' AND fallida = 0" +
+            ") LIMIT 1"
+    )
+    fun observarPorUrl(url: String): Flow<UrlBloqueadaEntity?>
+
+    /**
      * Lookup por id (PK). Devuelve la fila completa o null si no existe.
      * Usado por el fallback de `procesarCreate` cuando `payloadJson` es NULL
      * (ops creados por versiones anteriores de la app).

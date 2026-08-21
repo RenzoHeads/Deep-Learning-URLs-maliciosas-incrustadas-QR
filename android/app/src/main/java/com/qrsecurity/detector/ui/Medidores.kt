@@ -13,7 +13,6 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.text.font.FontWeight
 
 /**
  * Gauge circular unificado — reemplaza [DetalleUrlScreen]`MedidorAmenaza` y
@@ -78,7 +77,6 @@ fun MedidorGauge(
         Text(
             text = valorTexto,
             style = MaterialTheme.typography.displaySmall,
-            fontWeight = FontWeight.Bold,
             color = colorTexto
         )
     }

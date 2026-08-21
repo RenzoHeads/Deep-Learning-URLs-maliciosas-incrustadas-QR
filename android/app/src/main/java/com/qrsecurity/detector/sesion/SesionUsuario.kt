@@ -142,6 +142,18 @@ open class SesionUsuario @Inject constructor(
     open fun obtenerToken(): String? =
         prefs().getString(KEY_TOKEN, null)
 
+    /**
+     * Actualiza SOLO el token cacheado (el access token de Auth0 renovado
+     * por el [okhttp3.Authenticator] tras un 401). Perfil y flag de sesion
+     * quedan intactos — a diferencia de [guardarSesion], no re-emite
+     * `_estadoSesion` (la sesion no cambio, solo el token).
+     */
+    open fun actualizarToken(token: String) {
+        prefs().edit()
+            .putString(KEY_TOKEN, token)
+            .apply()
+    }
+
     open fun guardarSesion(token: String, usuario: String, correo: String = "") {
         prefs().edit()
             .putString(KEY_TOKEN, token)

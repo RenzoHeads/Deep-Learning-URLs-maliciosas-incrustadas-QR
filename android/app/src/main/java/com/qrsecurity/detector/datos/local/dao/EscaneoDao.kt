@@ -55,6 +55,15 @@ private const val IDS_SIN_DELETE_PENDIENTE =
     "(SELECT idLocal FROM pending_ops " +
         "WHERE tabla = 'escaneos' AND tipoOperacion = 'DELETE' AND fallida = 0)"
 
+/**
+ * M4: resultado de [EscaneoDao.contarPorUrlLimpiaBatch] — URL + conteo de
+ * filas vivas. POJO para queries de batch (no es una entidad Room).
+ */
+data class ConteoUrlLimpia(
+    val urlLimpia: String,
+    val conteo: Int
+)
+
 @Dao
 interface EscaneoDao {
 
@@ -72,11 +81,19 @@ interface EscaneoDao {
     // pantalla de detalle via [observarReescaneosTodos].
 
     /**
-     * Historial deduplicado: ultima version de cada URL (todas).
+     * Historial deduplicado: ultima version de cada URL (las [limite] más
+     * recientes).
      *
      * D-1 rewrite: subquery escalar indexada por `idx_escaneos_dedup` —
      * SQLite reverse-scan indexado dentro de la partición `urlLimpia = ?`
      * obtiene la última fila en O(log n) por outer row.
+     *
+     * M5 audit fix: `LIMIT :limite` acota la materialización de filas y la
+     * memoria retenida por el StateFlow eager del Historial. El orden es
+     * DESC por `creadoEnMillis` — la fila recién insertada (match de
+     * `resolverIdNavegacion` tras un escaneo) siempre queda en la primera
+     * página. `DatosTabsViewModel.cargarMasHistorial()` incrementa el
+     * límite para traer más.
      */
     @Query(
         "SELECT e.* FROM escaneos e WHERE e.id = (" +
@@ -84,9 +101,9 @@ interface EscaneoDao {
                 "WHERE e2.urlLimpia = e.urlLimpia " +
                 "AND e2.id NOT IN $IDS_SIN_DELETE_PENDIENTE" +
                 "ORDER BY e2.creadoEnMillis DESC, e2.id DESC LIMIT 1" +
-            ") ORDER BY e.creadoEnMillis DESC, e.id DESC"
+            ") ORDER BY e.creadoEnMillis DESC, e.id DESC LIMIT :limite"
     )
-    fun observarTodosUnicos(): Flow<List<EscaneoEntity>>
+    fun observarTodosUnicos(limite: Int): Flow<List<EscaneoEntity>>
 
     /** Historial deduplicado: ultima version de cada URL (solo las que la
      *  ultima version es segura).
@@ -148,6 +165,21 @@ interface EscaneoDao {
             "AND id NOT IN $IDS_SIN_DELETE_PENDIENTE"
     )
     fun observarTotalReescaneos(urlLimpia: String, idActual: String): Flow<Int>
+
+    /**
+     * F4.5 audit fix — COUNT one-shot puro (mismo filtro que
+     * [observarTotalReescaneos]). `contarReescaneosSnapshot` antes hacía
+     * `observarTotalReescaneos(...).first()`: registraba un observador en el
+     * InvalidationTracker de Room solo para descartarlo tras la primera
+     * emisión — una vez por emisión del Flow del detalle.
+     */
+    @Query(
+        "SELECT COUNT(*) FROM escaneos " +
+            "WHERE urlLimpia = :urlLimpia " +
+            "AND id != :idActual " +
+            "AND id NOT IN $IDS_SIN_DELETE_PENDIENTE"
+    )
+    suspend fun contarReescaneos(urlLimpia: String, idActual: String): Int
 
     // ── Writes ──
 
@@ -286,4 +318,54 @@ interface EscaneoDao {
     /** Elimina rows por id en lote (para limpieza de rows no presentes en servidor). */
     @Query("DELETE FROM escaneos WHERE id IN (:ids)")
     suspend fun eliminarPorIds(ids: List<String>)
+
+    // ── M4 audit fix: batch reads para reconciliar urls_catalogo sin N+1 ──
+
+    /**
+     * M4: cuenta filas vivas (no DELETE pendiente) agrupadas por `urlLimpia`
+     * para una lista de URLs — una sola query en vez de K queries
+     * (`contarPorUrlLimpia` × K).
+     *
+     * Room expande `IN (:urls)` a parámetros posicionales — el caller debe
+     * chunkear la lista a ≤500 (límite de host params de SQLite viejo).
+     * KSP valida esta query contra el esquema (a diferencia de una temp
+     * table creada en runtime), por eso se usa IN en vez de _tmp_urls.
+     */
+    @Query(
+        "SELECT e.urlLimpia AS urlLimpia, COUNT(*) AS conteo " +
+            "FROM escaneos e " +
+            "WHERE e.urlLimpia IN (:urls) " +
+            "AND e.id NOT IN $IDS_SIN_DELETE_PENDIENTE " +
+            "GROUP BY e.urlLimpia"
+    )
+    suspend fun contarPorUrlLimpiaBatch(urls: List<String>): List<ConteoUrlLimpia>
+
+    /**
+     * M4: la fila viva más reciente de cada `urlLimpia` — una sola query
+     * en vez de K queries (`ultimoPorUrlLimpia` × K). Chunkear la lista
+     * a ≤500 en el caller.
+     *
+     * Reutiliza el patrón D-1 (subquery escalar `e.id = (SELECT e2.id …
+     * ORDER BY creadoEnMillis DESC, id DESC LIMIT 1)`) restringido a las
+     * URLs de interés vía `IN (:urls)`. El filtro
+     * `NOT IN IDS_SIN_DELETE_PENDIENTE` solo vive en la subquery escalar:
+     * como `e.id` debe igualar ese resultado, el candidato externo queda
+     * protegido sin repetir el mismo subquery (misma razón que
+     * [observarTodosUnicos]).
+     *
+     * Solo devuelve filas para URLs que tienen al menos una fila viva;
+     * las URLs con conteo == 0 no aparecen — el caller las identifica
+     * por ausencia en el mapa.
+     */
+    @Query(
+        "SELECT e.* FROM escaneos e " +
+            "WHERE e.urlLimpia IN (:urls) " +
+            "AND e.id = (" +
+                "SELECT e2.id FROM escaneos e2 " +
+                "WHERE e2.urlLimpia = e.urlLimpia " +
+                "AND e2.id NOT IN $IDS_SIN_DELETE_PENDIENTE " +
+                "ORDER BY e2.creadoEnMillis DESC, e2.id DESC LIMIT 1" +
+            ")"
+    )
+    suspend fun ultimoPorUrlLimpiaBatch(urls: List<String>): List<EscaneoEntity>
 }

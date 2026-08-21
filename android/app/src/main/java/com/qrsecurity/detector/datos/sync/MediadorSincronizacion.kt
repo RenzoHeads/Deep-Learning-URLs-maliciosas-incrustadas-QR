@@ -11,8 +11,12 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
+import com.qrsecurity.detector.BuildConfig
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -142,13 +146,29 @@ open class MediadorSincronizacion @Inject constructor(
         )
 
         // Inspeccionar estado de la cola para debug.
-        try {
-            val infos = wm.getWorkInfosForUniqueWork(SyncWorker.NOMBRE_TRABAJO).get()
-            infos?.forEach { info ->
-                Log.d("MediadorSync", "WorkInfo: state=${info.state} id=${info.id} tags=${info.tags}")
-            } ?: Log.w("MediadorSync", "getWorkInfos devolvio null")
-        } catch (e: Exception) {
-            Log.e("MediadorSync", "getWorkInfos fallo", e)
+        //
+        // Audit C1 fix: antes `Future.get()` se ejecutaba en el hilo llamador,
+        // que es el main thread en dos.paths criticos:
+        //  - arranque en frio (AppSeguridadQR.onCreate -> programarSyncPeriodica
+        //    + dispararSyncUnica tras el primer escaneo).
+        //  - Bloquear/Desbloquear/Eliminar del DetalleUrlViewModel (viewModelScope
+        //    = Main).
+        // `Future.get()` fuerza una query a la BD interna de WorkManager + una
+        // llamada binder de forma sincrona → bloqueo perceptible en la UI.
+        // Ahora: (1) solo se ejecuta en debug (release lo salta); (2) corre en
+        // un scope desechable en Default (nunca en el hilo llamador). Es
+        // fire-and-forget — el bloque no retorna nada al caller.
+        if (BuildConfig.DEBUG) {
+            CoroutineScope(Dispatchers.Default).launch {
+                try {
+                    val infos = wm.getWorkInfosForUniqueWork(SyncWorker.NOMBRE_TRABAJO).get()
+                    infos?.forEach { info ->
+                        Log.d("MediadorSync", "WorkInfo: state=${info.state} id=${info.id} tags=${info.tags}")
+                    } ?: Log.w("MediadorSync", "getWorkInfos devolvio null")
+                } catch (e: Exception) {
+                    Log.e("MediadorSync", "getWorkInfos fallo", e)
+                }
+            }
         }
     }
 

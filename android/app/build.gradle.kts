@@ -16,6 +16,14 @@ android {
         // el build declaraba 1.0.0 — drift garantizado. Unica fuente:
         // BuildConfig.VERSION_NAME.
         versionName = "2.4.1"
+
+        // Auth0 SDK: los placeholders alimentan el intent-filter de callback
+        // que la libreria inyecta en el manifest merger (esquema custom
+        // `qrguardian://`). Los valores reales viven en strings.xml.
+        manifestPlaceholders += mapOf(
+            "auth0Domain" to "@string/com_auth0_domain",
+            "auth0Scheme" to "@string/com_auth0_scheme"
+        )
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -136,6 +144,9 @@ dependencies {
     // ─── OkHttp ───
     implementation(libs.okhttp)
     implementation(libs.okhttp.logging.interceptor)
+
+    // ─── Auth0 (Universal Login + SecureCredentialsManager) ───
+    implementation(libs.auth0.android)
 
     // ─── Room ───
     implementation(libs.androidx.room.runtime)
