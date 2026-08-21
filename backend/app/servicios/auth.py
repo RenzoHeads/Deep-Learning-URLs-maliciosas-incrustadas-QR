@@ -84,6 +84,11 @@ async def obtener_id_usuario_por_sub(
     perfil visible en la app (email, nickname) viaja en el ID token del
     lado del cliente — el backend solo necesita la identidad estable.
 
+    Nota SQL: ``ON CONFLICT DO NOTHING`` SIN target — un target de
+    columnas exigiria un indice unico NO parcial exacto, y el de
+    auth0_user_id es parcial (migracion 012). Sin target, cualquier
+    violacion unica (auth0_user_id o nombre_usuario) cae en DO NOTHING.
+
     Raises:
         TokenInvalido: el usuario no existe y no se pudo crear (401).
     """
@@ -105,7 +110,7 @@ async def obtener_id_usuario_por_sub(
                 """
                 INSERT INTO usuarios (auth0_user_id, nombre_usuario)
                 VALUES ($1, $2)
-                ON CONFLICT (auth0_user_id) DO NOTHING
+                ON CONFLICT DO NOTHING
                 RETURNING id
                 """,
                 sub,
@@ -119,7 +124,7 @@ async def obtener_id_usuario_por_sub(
                 """
                 INSERT INTO usuarios (auth0_user_id, nombre_usuario)
                 VALUES ($1, $2)
-                ON CONFLICT (auth0_user_id) DO NOTHING
+                ON CONFLICT DO NOTHING
                 RETURNING id
                 """,
                 sub,
