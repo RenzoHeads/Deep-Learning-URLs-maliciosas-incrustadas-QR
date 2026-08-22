@@ -15,11 +15,10 @@ import kotlinx.coroutines.flow.Flow
  * unica transaccion Room (ver Repos en `db.withTransaction { ... }`). El
  * SyncWorker drena esta cola oldest-first.
  *
- * `siguienteOp()` fue reemplazado (C-04) por las primitivas suspend
- * [minPendingId], [markInProgress] y [getById]. La capa Repo combina las
- * tres dentro de un unico `db.withTransaction { ... }` para hacer un
-    * claim atomico oldest-first + return, evitando que dos SyncWorkers
- * capturen el mismo op en retry.
+ * `siguienteOp()` fue reemplazado (C-04) por primitivas suspend de claim.
+ * La capa Repo combina el claim oldest-first dentro de un unico
+ * `db.withTransaction { ... }` para evitar que dos SyncWorkers capturen
+ * el mismo op en retry.
  *
  * Atomicidad cross-DAO:
  *   - Cada metodo DAO aqui es single-statement; NO se anota con
@@ -68,43 +67,21 @@ interface PendingOpDao {
     )
     suspend fun minPendingId(): Long?
 
-    /**
-     * C-04 — reivindica el op `id` incrementando `intentos`. Devuelve
-     * filas-afectadas (0 si el op ya no existe o ya fue marcado fallido,
-     * 1 si el claim tuvo exito). Primitiva 2/3 del claim atomico.
-     *
-     * El guard `fallida = 0` impide reclamar ops en estado permanente
-     * fallido. La atomicidad real la entrega el `withTransaction` del Repo
-     * que envuelve a `minPendingId()` + `markInProgress(id)` + `getById(id)`.
-     */
-    @Query("UPDATE pending_ops SET intentos = intentos + 1 WHERE id = :id AND fallida = 0")
-    suspend fun markInProgress(id: Long): Int
-
-    /**
-     * C-04 — devuelve el op completo por id, o null. Primitiva 3/3 del
-     * claim atomico: tras `markInProgress(id)` devuelve 1, el Repo usa
-     * este para obtener el payload y disparar el replay.
-     */
-    @Query("SELECT * FROM pending_ops WHERE id = :id")
-    suspend fun getById(id: Long): PendingOpEntity?
-
     // -----------------------------------------------------------------
-    // A3-a audit fix — variantes BATCH de las primitivas de claim.
+    // Primitivas de claim (A3-a): solo BATCH.
     //
-    // `procesarPendingOps` original reclamaba UN op por iteracion (3 SQL
-    // sentencias en una tx). Con N ops encolados, el overhead de WAL
-    // fsync por tx dominaba el costo del replay. Las 3 variantes
-    // siguientes permiten reclamar K ops en una sola tx y procesarlos
-    // secuencialmente fuera de ella, amortizando el fsync.
+    // `procesarPendingOps` reclama K ops en una sola tx (3 SQL sentencias)
+    // y las procesa secuencialmente fuera de ella, amortizando el fsync
+    // WAL por tx que dominaba el claim de UN op por iteracion.
     //
-    // Las variantes SINGLE (minPendingId, markInProgress, getById) se
-    // mantienen intactas: los tests las usan directamente y documentan
-    // el contrato atomico del claim original.
+    // [minPendingId] y [getById] (variantes single) sobreviven porque tienen
+    // consumidores reales: el preflight `hayPendingOps` de SyncWorker y los
+    // tests, que las usan como helpers de inspeccion de la cola.
     //
     // Tradeoff de la variant batch: si el worker muere tras procesar
     // solo el primer op del batch, los K-1 restantes tienen `intentos`
     // ya incrementado pese a no haber sido realmente procesados
-    // ("phantom bump"). El riesgo es(acotado por `BATCH_SIZE_PUSH` (8)
+    // ("phantom bump"). El riesgo es acotado por `BATCH_SIZE_PUSH` (8)
     // y tolerado por `MAX_INTENTOS_OP` (10) — un op sobrevive a >=10
     // claims fantasma consecutivos, escenario solo realizable si el
     // worker es asesinado por el SO en >50% de sus runs, lo cual es
@@ -127,8 +104,7 @@ interface PendingOpDao {
      * A3-a — primitiva 2/3 del claim BATCH: incrementa `intentos` para
      * todos los [ids] reclamados. Devuelve filas-afectadas totales
      * (puede ser < `ids.size` si otra tx concurrente marco algun id
-     * como fallida entre el SELECT y el UPDATE). Espejo batcheable de
-     * [markInProgress].
+     * como fallida entre el SELECT y el UPDATE).
      */
     @Query(
         "UPDATE pending_ops SET intentos = intentos + 1 " +
@@ -146,6 +122,14 @@ interface PendingOpDao {
             "ORDER BY creadoEnMillis ASC, id ASC"
     )
     suspend fun getByIds(ids: List<Long>): List<PendingOpEntity>
+
+    /**
+     * Devuelve el op completo por id, o null. Helper de inspeccion de la
+     * cola usado por los tests para afirmar el estado de un op tras un
+     * replay.
+     */
+    @Query("SELECT * FROM pending_ops WHERE id = :id")
+    suspend fun getById(id: Long): PendingOpEntity?
 
     /**
      * M-21 — dedup query: devuelve el op pendiente existente para el
@@ -173,10 +157,6 @@ interface PendingOpDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertar(op: PendingOpEntity): Long
 
-    /**
-     * Elimina por id. Variante legacy con retorno `Unit`: conservada para
-     * no romper callers existentes que ignoran el conteo.
-     */
     @Query("DELETE FROM pending_ops WHERE id = :id")
     suspend fun borrarPorId(id: Long)
 

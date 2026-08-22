@@ -11,8 +11,8 @@ import com.qrsecurity.detector.datos.sync.SyncWorker
 import com.qrsecurity.detector.datos.sync.SyncWorker.Companion.KEY_INITIAL_SYNC_COMPLETED
 import com.qrsecurity.detector.datos.sync.SyncWorker.Companion.KEY_ULTIMO_SYNC
 import com.qrsecurity.detector.datos.sync.SyncWorker.Companion.PREFS_SYNC
+import com.qrsecurity.detector.cache.CacheDetalleEscaneos
 import com.qrsecurity.detector.pipeline.Pipeline
-import com.qrsecurity.detector.ui.CacheDetalleEscaneos
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -206,7 +206,7 @@ class LogoutCoordinator @Inject constructor(
 
         val nombres = listOf(
             SyncWorker.NOMBRE_TRABAJO,
-            SyncWorker.NOMBRE_TRABAJO + "_periodica"
+            SyncWorker.NOMBRE_TRABAJO_PERIODICO
         )
 
         var intentos = 0

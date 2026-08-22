@@ -112,3 +112,22 @@ val EscaneoEntity.nivelAlertaEnum: NivelAlerta
  */
 fun pctSeguro(probabilidad: Float): Int =
     Math.round((1f - probabilidad.coerceIn(0f, 1f)) * 100f)
+
+/**
+ * Mensaje de usuario para un QR que no contiene una URL (o la contiene
+ * demasiado larga). Unico punto de verdad (auditoria frontend v2, E2/B2):
+ * antes el mismo if-else con el magic string "url_demasiado_larga" estaba
+ * duplicado en HomeScreen y AnalisisScreen.
+ *
+ * U11: "url_demasiado_larga" antes decia "no contiene una URL" aunque el
+ * payload SI era una URL — mensaje contradictorio.
+ *
+ * @param tipoContenido el discriminator de [ResultadoAnalisis.NoUrl]
+ *   producido por el pipeline (p.ej. "url_demasiado_larga").
+ */
+internal fun mensajeNoUrl(tipoContenido: String): String =
+    if (tipoContenido == "url_demasiado_larga") {
+        "El QR contiene una URL demasiado larga (máximo 2048 caracteres)"
+    } else {
+        "El QR no contiene una URL"
+    }

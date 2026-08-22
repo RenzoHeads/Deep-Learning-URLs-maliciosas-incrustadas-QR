@@ -6,13 +6,18 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -28,12 +33,14 @@ import com.qrsecurity.detector.ui.theme.Borde
 import com.qrsecurity.detector.ui.theme.CyberFondo
 import com.qrsecurity.detector.ui.theme.CyberGlass
 import com.qrsecurity.detector.ui.theme.CyberGlassBorde
+import com.qrsecurity.detector.ui.theme.CyberRojo
 import com.qrsecurity.detector.ui.theme.CyberTextoPrincipal
 import com.qrsecurity.detector.ui.theme.CyberTextoSecundario
 import com.qrsecurity.detector.ui.theme.Espaciado
 import com.qrsecurity.detector.ui.theme.PencilModalFondo
 import com.qrsecurity.detector.ui.theme.PencilOverlay
 import com.qrsecurity.detector.ui.theme.RadioBorde
+import com.qrsecurity.detector.ui.theme.TamanosIcono
 import com.qrsecurity.detector.ui.theme.TamanosToque
 
 /**
@@ -54,7 +61,7 @@ import com.qrsecurity.detector.ui.theme.TamanosToque
  * modal como call-site separado con el indicator en el segundo estado.
  *
  * Las consecuencias se renderizan con [FilaRiesgo] (Warning icon + texto),
- * definida en `ModalDesbloqueo.kt` y reutilizada por los 4 modales.
+ * definida en este mismo archivo y reutilizada por los 4 modales.
  *
  * [ModalDesbloqueoOk] NO usa esta plantilla — es un modal de exito (icon
  * verde + 1 boton "Listo"), diferente shape.
@@ -156,5 +163,35 @@ internal fun PlantillaModalConfirmacion(
                     style = MaterialTheme.typography.labelLarge
                 )
             }
+    }
+}
+
+/**
+ * Fila de riesgo compartida por los modales de confirmacion via
+ * [PlantillaModalConfirmacion] — Warning icon + texto. Marco visual
+ * consistente para listar consecuencias de una accion destructiva.
+ *
+ * Movido aqui (auditoria frontend v2, E1): antes vivia en
+ * `ModalDesbloqueo.kt`, un archivo cuyo unico consumidor real es esta
+ * plantilla — el archivo de origen no correspondia a su contenido.
+ */
+@Composable
+internal fun FilaRiesgo(texto: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(Espaciado.md),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = Icons.Filled.Warning,
+            contentDescription = null,
+            tint = CyberRojo,
+            modifier = Modifier.size(TamanosIcono.estandar)
+        )
+        Text(
+            text = texto,
+            style = MaterialTheme.typography.bodyMedium,
+            color = CyberTextoPrincipal
+        )
     }
 }

@@ -1,8 +1,14 @@
-package com.qrsecurity.detector.pipeline
+package com.qrsecurity.detector.ui
 
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.qrsecurity.detector.pipeline.Estado
+import com.qrsecurity.detector.pipeline.Pipeline
+import com.qrsecurity.detector.pipeline.ResultadoAnalisis
+import com.qrsecurity.detector.pipeline.ResultadoUrlDto
+import com.qrsecurity.detector.pipeline.aDto
+import com.qrsecurity.detector.pipeline.aDominio
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
@@ -200,13 +206,18 @@ class PipelineViewModel @Inject constructor(
                     }
                 }
             } finally {
-                // Al terminar (exito o fallo), si este Job sigue siendo el
-                // "vigente", lo limpiamos. Si fue reemplazado por otro nuevo,
-                // `scanJob` ya apunta a ese otro y no tocamos nada.
+                // Al terminar (exito o fallo): SOLO si este Job sigue siendo
+                // el vigente tocamos el estado compartido. Si fue reemplazo
+                // por otro nuevo (o reiniciar()/cancelarReescaneo() lo
+                // desalojo poniendo scanJob = null), el flag y la referencia
+                // pertenecen al Job nuevo — el viejo no debe apagar
+                // `_analizando` que el nuevo ya encendio (misma disciplina
+                // que ya protegia a scanJob; antes `_analizando.value =
+                // false` era incondicional y reabría la ventana de race).
                 if (scanJob === this.coroutineContext[Job]) {
                     scanJob = null
+                    _analizando.value = false
                 }
-                _analizando.value = false
             }
         }
 

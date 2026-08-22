@@ -14,6 +14,7 @@ import org.junit.Test
  *  - [inicializar] validacion de 3 ramas `require(...)`.
  *  - [reset] restaura defaults despues de `inicializar`.
  *  - [NivelAlerta.esPeligroso] para los 3 niveles.
+ *  - [NivelAlerta.de] lookup fail-safe (Audit S4): id desconocido/vacio → SOSPECHOSO.
  *  - [desdeLogits] con logits vacios (size 0) → probabilidad 0f → SEGURO.
  *  - [desdeLogits] con 2 logits (softmax) → sigmoid(logits[1] - logits[0]).
  *  - [sigmoid] recorte en ±30 — no overflow.
@@ -122,6 +123,35 @@ class AlertControllerTest {
     @Test
     fun `NivelAlerta MALICIOSO es peligroso`() {
         assertEquals(true, ControladorAlerta.NivelAlerta.MALICIOSO.esPeligroso)
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // NivelAlerta.de — lookup fail-safe (Audit S4)
+    // ──────────────────────────────────────────────────────────────
+
+    @Test
+    fun `NivelAlerta de con id desconocido cae a SOSPECHOSO en lugar de lanzar`() {
+        // Antes `Enum.valueOf` lanzaba IllegalArgumentException; `de` es
+        // fail-safe hacia lo prudente (mismo criterio que ui.NivelAlerta.de).
+        assertEquals(
+            ControladorAlerta.NivelAlerta.SOSPECHOSO,
+            ControladorAlerta.NivelAlerta.de("NIVEL_FUTURO")
+        )
+    }
+
+    @Test
+    fun `NivelAlerta de con id vacio cae a SOSPECHOSO`() {
+        assertEquals(
+            ControladorAlerta.NivelAlerta.SOSPECHOSO,
+            ControladorAlerta.NivelAlerta.de("")
+        )
+    }
+
+    @Test
+    fun `NivelAlerta de con ids conocidos resuelve exactos`() {
+        assertEquals(ControladorAlerta.NivelAlerta.SEGURO, ControladorAlerta.NivelAlerta.de("SEGURO"))
+        assertEquals(ControladorAlerta.NivelAlerta.SOSPECHOSO, ControladorAlerta.NivelAlerta.de("SOSPECHOSO"))
+        assertEquals(ControladorAlerta.NivelAlerta.MALICIOSO, ControladorAlerta.NivelAlerta.de("MALICIOSO"))
     }
 
     // ──────────────────────────────────────────────────────────────

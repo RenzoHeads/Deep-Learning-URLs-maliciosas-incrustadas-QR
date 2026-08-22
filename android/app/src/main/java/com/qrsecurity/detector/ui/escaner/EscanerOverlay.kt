@@ -31,6 +31,30 @@ import com.qrsecurity.detector.ui.theme.PencilOverlay
 internal const val FACTOR_RETICULO = 0.6f
 
 /**
+ * Rectangulo del reticulo de escaneo centrado — unico punto de verdad
+ * (Audit M4). Compartido por el dibujo de [ScanReticle] y la validacion
+ * [qrDentroDeReticulo], que antes duplicaban la formula del reticulo.
+ */
+internal data class RectanguloReticulo(
+    val left: Float,
+    val top: Float,
+    val right: Float,
+    val bottom: Float
+)
+
+/**
+ * Calcula el rectangulo del reticulo centrado para unas dimensiones de
+ * viewfinder dadas: lado = `minOf(ancho, alto) * FACTOR_RETICULO`, centrado
+ * en el viewfinder. Puro (solo Floats), testeable sin Compose.
+ */
+internal fun rectanguloReticulo(ancho: Float, alto: Float): RectanguloReticulo {
+    val reticleSize = minOf(ancho, alto) * FACTOR_RETICULO
+    val left = (ancho - reticleSize) / 2f
+    val top = (alto - reticleSize) / 2f
+    return RectanguloReticulo(left, top, left + reticleSize, top + reticleSize)
+}
+
+/**
  * Mapeo FILL_CENTER imagen → pantalla, igual que el scale type del
  * [androidx.camera.view.PreviewView]: `scale = max(viewW/imgW, viewH/imgH)`,
  * centrado. Unico punto de verdad compartido por el overlay y la
@@ -85,12 +109,13 @@ fun ScanReticle() {
     Canvas(
         modifier = Modifier.fillMaxSize()
     ) {
-        val reticleSize = minOf(size.width, size.height) * FACTOR_RETICULO
-        val left = (size.width - reticleSize) / 2f
-        val top = (size.height - reticleSize) / 2f
-        val right = left + reticleSize
-        val bottom = top + reticleSize
-        val cornerLen = reticleSize * 0.08f
+        // Reticulo centrado — unico punto de verdad (Audit M4).
+        val r = rectanguloReticulo(size.width, size.height)
+        val left = r.left
+        val top = r.top
+        val right = r.right
+        val bottom = r.bottom
+        val cornerLen = (right - left) * 0.08f
         val strokeW = 3.dp.toPx()
         val color = CyberCyan
 
@@ -105,7 +130,7 @@ fun ScanReticle() {
         drawLine(color, Offset(right, bottom), Offset(right, bottom - cornerLen), strokeW)
 
         // Animated scan line (horizontal line moving top->bottom inside reticle)
-        val scanY = top + reticleSize * scanLineOffset
+        val scanY = top + (bottom - top) * scanLineOffset
         val scanAlpha = when {
             scanLineOffset < 0.05f || scanLineOffset > 0.95f -> Alphas.notorio
             else -> Alphas.alto
@@ -220,12 +245,13 @@ internal fun qrDentroDeReticulo(
     val screenTop = mapeo.y(deteccion.boundingBox.top.toFloat())
     val screenBottom = mapeo.y(deteccion.boundingBox.bottom.toFloat())
 
-    // Limites del reticulo (misma formula que ScanReticle)
-    val reticleSize = minOf(boxW, boxH) * FACTOR_RETICULO
-    val reticleLeft = (boxW - reticleSize) / 2f
-    val reticleTop = (boxH - reticleSize) / 2f
-    val reticleRight = reticleLeft + reticleSize
-    val reticleBottom = reticleTop + reticleSize
+    // Limites del reticulo — unico punto de verdad compartido con ScanReticle
+    // (Audit M4: antes ambas duplicaban la formula del reticulo centrado).
+    val r = rectanguloReticulo(boxW.toFloat(), boxH.toFloat())
+    val reticleLeft = r.left
+    val reticleTop = r.top
+    val reticleRight = r.right
+    val reticleBottom = r.bottom
 
     // Las 4 esquinas del QR deben caer dentro del reticulo
     return screenLeft >= reticleLeft && screenRight <= reticleRight &&

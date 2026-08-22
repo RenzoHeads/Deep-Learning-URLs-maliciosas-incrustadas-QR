@@ -1,7 +1,6 @@
 package com.qrsecurity.detector.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -16,9 +15,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.automirrored.filled.Logout
@@ -75,13 +71,11 @@ import com.qrsecurity.detector.ui.theme.TamanosToque
  * decorativo que mentia al usuario).
  *
  * @param onCerrarSesion Callback tras cerrar sesion (navega a LOGIN).
- * @param onMensaje Callback para mostrar snackbars.
  * @param viewModel VM de ajustes (Hilt).
  */
 @Composable
 fun PantallaAjustes(
     onCerrarSesion: () -> Unit,
-    onMensaje: (TipoMensaje, String) -> Unit = { _, _ -> },
     viewModel: AjustesViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
@@ -136,19 +130,12 @@ fun PantallaAjustes(
 
         // --- Privacidad Card ---
         TarjetaSeccion(titulo = "Privacidad y datos") {
-            FilaAjuste(
-                etiqueta = "Exportar historial",
-                icono = Icons.Filled.Download,
-                onClick = { onMensaje(TipoMensaje.INFO, "Función próximamente disponible") }
-            )
-            HorizontalDivider(color = CyberGlassBorde, thickness = Borde.fino)
-            FilaAjuste(
-                etiqueta = "Borrar historial",
-                icono = Icons.Filled.Delete,
-                peligro = true,
-                onClick = { onMensaje(TipoMensaje.INFO, "Función próximamente disponible") }
-            )
-            HorizontalDivider(color = CyberGlassBorde, thickness = Borde.fino)
+            // Audit M14: se eliminaron las filas "Exportar historial" y
+            // "Borrar historial" — eran placeholders que solo mostraban
+            // "próximamente" al tocar (mismo criterio que el toggle muerto
+            // M6 ya eliminado: no exponer un control que no hace nada real).
+            // Un export/borrado genuino debe implementarse antes de mostrar
+            // el control habilitado.
             FilaAjusteValor(
                 etiqueta = "Idioma",
                 valor = "Español",
@@ -236,44 +223,6 @@ private fun TarjetaSeccion(
             Spacer(modifier = Modifier.height(Espaciado.sm))
             contenido()
         }
-    }
-}
-
-@Composable
-private fun FilaAjuste(
-    etiqueta: String,
-    icono: ImageVector,
-    onClick: () -> Unit,
-    peligro: Boolean = false
-) {
-    val colorTexto = if (peligro) CyberRojo else CyberTextoPrincipal
-    val colorIcono = if (peligro) CyberRojo else CyberTextoSecundario
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(vertical = Espaciado.md),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(Espaciado.lg)
-    ) {
-        Icon(
-            imageVector = icono,
-            contentDescription = null,
-            tint = colorIcono,
-            modifier = Modifier.size(TamanosIcono.estandar)
-        )
-        Text(
-            text = etiqueta,
-            style = MaterialTheme.typography.bodyMedium,
-            color = colorTexto,
-            modifier = Modifier.weight(1f)
-        )
-        Icon(
-            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-            contentDescription = null,
-            tint = CyberTextoSecundario,
-            modifier = Modifier.size(TamanosIcono.estandar)
-        )
     }
 }
 

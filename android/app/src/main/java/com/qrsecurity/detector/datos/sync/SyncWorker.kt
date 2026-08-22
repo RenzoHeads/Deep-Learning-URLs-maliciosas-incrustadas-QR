@@ -198,6 +198,14 @@ class SyncWorker @AssistedInject constructor(
         const val NOMBRE_TRABAJO = "sync_qr_guardian"
 
         /**
+         * Nombre unico del trabajo periodico — fuente unica para
+         * [MediadorSincronizacion.programarSyncPeriodica],
+         * [MediadorSincronizacion.cancelarTodo] y
+         * [com.qrsecurity.detector.sesion.LogoutCoordinator].
+         */
+        const val NOMBRE_TRABAJO_PERIODICO = NOMBRE_TRABAJO + "_periodica"
+
+        /**
          * A4 fix (audit) — Mutex que serializa doWork() entre el one-shot worker
          * y el periodic worker. `internal` para testear desde
          * [SyncWorkerConcurrencyTest]. Vive en companion (singleton a nivel

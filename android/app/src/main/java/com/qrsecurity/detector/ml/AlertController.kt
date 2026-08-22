@@ -108,6 +108,19 @@ object ControladorAlerta {
          * Usado para decidir si mostrar la advertencia intersticial [MALICIOSO].
          */
         val esPeligroso: Boolean get() = this != SEGURO
+
+        companion object {
+            /**
+             * Lookup fail-safe (Audit S4): resuelve el nivel desde el string
+             * serializado (el `name` del enum, ver `ResultadoUrlDto.aDto`).
+             * Cae a [SOSPECHOSO] ante un id desconocido en lugar de lanzar
+             * [IllegalArgumentException] via `Enum.valueOf` — mismo criterio
+             * fail-safe que `ui.NivelAlerta.de` (fallar hacia lo prudente, no
+             * hacia lo inocuo).
+             */
+            fun de(id: String): NivelAlerta =
+                entries.firstOrNull { it.name == id } ?: SOSPECHOSO
+        }
     }
 
     /**

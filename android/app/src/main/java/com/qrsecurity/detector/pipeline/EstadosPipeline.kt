@@ -152,7 +152,10 @@ fun ResultadoUrlDto.aDominio(): ResultadoAnalisis.ResultadoUrl =
         urlOriginal = urlOriginal,
         urlLimpia = urlLimpia,
         probabilidad = probabilidad,
-        nivelAlerta = ControladorAlerta.NivelAlerta.valueOf(nivelAlerta),
+        // Audit S4: `de` fail-safe (cae a SOSPECHOSO) en lugar de
+        // `valueOf` que lanza IllegalArgumentException ante un id
+        // desconocido del JSON cacheado.
+        nivelAlerta = ControladorAlerta.NivelAlerta.de(nivelAlerta),
         delegado = delegado
     )
 

@@ -4,7 +4,6 @@ import android.content.Context
 import android.util.Log
 import com.qrsecurity.detector.api.ClienteBackend
 import com.qrsecurity.detector.cache.CacheResultados
-import com.qrsecurity.detector.datos.local.BaseDatosSeguridad
 import com.qrsecurity.detector.datos.repositorios.RepositorioEscaneos
 import com.qrsecurity.detector.datos.repositorios.RepositorioUrlsBloqueadas
 import com.qrsecurity.detector.datos.repositorios.bloquearLocal
@@ -14,12 +13,12 @@ import com.qrsecurity.detector.ml.ControladorAlerta
 import com.qrsecurity.detector.ml.MotorInferencia
 import com.qrsecurity.detector.ml.Preprocesador
 import com.qrsecurity.detector.qr.ExtractorUrls
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.json.Json
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -49,10 +48,10 @@ import javax.inject.Singleton
  */
 @Singleton
 class Pipeline @Inject constructor(
-    private val context: Context,
-    private val db: BaseDatosSeguridad,
+    // @ApplicationContext: Hilt no puede satisfacer un Context crudo sin
+    // calificar — antes lo hacia PipelineModule.providePipeline.
+    @ApplicationContext private val context: Context,
     private val backend: ClienteBackend,
-    private val json: Json,
     private val repoEscaneos: RepositorioEscaneos,
     private val repoUrlsBloqueadas: RepositorioUrlsBloqueadas,
     private val mediadorSync: MediadorSincronizacion,
@@ -80,7 +79,6 @@ class Pipeline @Inject constructor(
         Preprocesador.inicializar(context.assets)
     }
 
-    // db, backend, json, repoEscaneos, mediadorSync ya vienen inyectados.
 
     // ── Estado expuesto a la UI ──
     private val _estado = MutableStateFlow<Estado>(Estado.Inicializando)
@@ -107,7 +105,7 @@ class Pipeline @Inject constructor(
      * inferencia — emite [Estado.UrlDuplicada] para que la UI pregunte al usuario
      * si desea reescanear. Si al menos una URL es nueva, hay novedad real: se
      * infiere/persiste normal. `forzar=true` (desde
-     * [com.qrsecurity.detector.pipeline.PipelineViewModel.confirmarReescaneo])
+     * [com.qrsecurity.detector.ui.PipelineViewModel.confirmarReescaneo])
      * salta el dedup y re-escanea de todas formas.
      *
      * @param payloadCrudo Cadena cruda decodificada del codigo QR.

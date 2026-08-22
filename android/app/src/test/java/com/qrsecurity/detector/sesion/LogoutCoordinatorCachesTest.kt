@@ -11,8 +11,8 @@ import com.qrsecurity.detector.datos.repositorios.RepositorioEscaneos
 import com.qrsecurity.detector.datos.repositorios.RepositorioUrlsBloqueadas
 import com.qrsecurity.detector.datos.sync.MediadorSincronizacion
 import com.qrsecurity.detector.pipeline.Pipeline
-import com.qrsecurity.detector.ui.CacheDetalleEscaneos
-import com.qrsecurity.detector.ui.DetalleUrlUiState
+import com.qrsecurity.detector.cache.CacheDetalleEscaneos
+import com.qrsecurity.detector.cache.DetalleEscaneoCacheado
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.resetMain
@@ -104,7 +104,7 @@ class LogoutCoordinatorCachesTest {
         )
         com.qrsecurity.detector.ml.setupTestVocab()
         pipeline = Pipeline(
-            context = appContext, db = db, backend = backend, json = json,
+            context = appContext, backend = backend,
             repoEscaneos = repoEscaneos, repoUrlsBloqueadas = repoUrlsBloqueadas,
             mediadorSync = mediador,
             motorInferencia = com.qrsecurity.detector.ml.MotorInferenciaFake()
@@ -148,7 +148,7 @@ class LogoutCoordinatorCachesTest {
             creadoEnMillis = 1_000L
         )
         cacheDetalle.guardar(
-            DetalleUrlUiState.Cargado(
+            DetalleEscaneoCacheado(
                 escaneo = escaneoViejo,
                 urlBloqueada = true,
                 esUltimaVersion = true,
@@ -170,8 +170,8 @@ class LogoutCoordinatorCachesTest {
         // ── Assert: el cache debe quedar vacio ──
         assertEquals(
             "CacheDetalleEscaneos debe quedar vacio tras logout " +
-                "(fuga cross-user de DetalleUrlUiState.Cargado)",
-            emptyMap<String, DetalleUrlUiState.Cargado>(),
+                "(fuga cross-user de DetalleEscaneoCacheado)",
+            emptyMap<String, DetalleEscaneoCacheado>(),
             cacheDetalle.cache.value
         )
         assertNull(

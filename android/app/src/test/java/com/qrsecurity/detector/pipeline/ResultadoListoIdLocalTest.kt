@@ -1,5 +1,6 @@
 package com.qrsecurity.detector.pipeline
 
+import com.qrsecurity.detector.ui.PipelineViewModel
 import androidx.lifecycle.SavedStateHandle
 import androidx.room.Room
 import androidx.work.Configuration
@@ -84,7 +85,7 @@ class ResultadoListoIdLocalTest {
         val repoUrlsBloqueadas = RepositorioUrlsBloqueadas(db, backend, json, testDispatcher)
         val mediadorSync = MediadorSincronizacion(app)
         com.qrsecurity.detector.ml.setupTestVocab()
-        val pipeline = Pipeline(app, db, backend, json, repo, repoUrlsBloqueadas, mediadorSync, com.qrsecurity.detector.ml.MotorInferenciaFake())
+        val pipeline = Pipeline(app, backend, repo, repoUrlsBloqueadas, mediadorSync, com.qrsecurity.detector.ml.MotorInferenciaFake())
         vm = PipelineViewModel(pipeline, SavedStateHandle())
     }
 

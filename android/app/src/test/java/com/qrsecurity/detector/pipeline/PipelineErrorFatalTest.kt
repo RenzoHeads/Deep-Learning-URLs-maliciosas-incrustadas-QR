@@ -1,5 +1,6 @@
 package com.qrsecurity.detector.pipeline
 
+import com.qrsecurity.detector.ui.PipelineViewModel
 import androidx.lifecycle.SavedStateHandle
 import androidx.room.Room
 import androidx.work.Configuration
@@ -79,7 +80,7 @@ class PipelineErrorFatalTest {
         val mediadorSync = MediadorSincronizacion(app)
         setupTestVocab()
         val pipeline = Pipeline(
-            app, db, backend, json, repo, repoUrlsBloqueadas, mediadorSync,
+            app, backend, repo, repoUrlsBloqueadas, mediadorSync,
             MotorQueExploraFatal()
         )
         vm = PipelineViewModel(pipeline, SavedStateHandle())

@@ -17,7 +17,7 @@ import com.qrsecurity.detector.ml.setupTestVocab
 import com.qrsecurity.detector.pipeline.Pipeline
 import com.qrsecurity.detector.sesion.LogoutCoordinator
 import com.qrsecurity.detector.sesion.SesionUsuario
-import com.qrsecurity.detector.ui.CacheDetalleEscaneos
+import com.qrsecurity.detector.cache.CacheDetalleEscaneos
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.resetMain
@@ -134,15 +134,13 @@ class FixtureSyncWorker {
 
         mediador = FakeMediadorConFlag(appContext)
 
-        // Pipeline constructor (firma real): (context, db, backend, json,
+        // Pipeline constructor (firma real): (context, backend,
         // repoEscaneos, repoUrlsBloqueadas, mediadorSync, motorInferencia).
         // motorInferencia es MotorInferenciaFake (no carga TFLite).
         setupTestVocab()
         val pipeline = Pipeline(
             context = appContext,
-            db = db,
             backend = backend,
-            json = json,
             repoEscaneos = repoEscaneos,
             repoUrlsBloqueadas = repoUrls,
             mediadorSync = mediador,
@@ -158,8 +156,8 @@ class FixtureSyncWorker {
 
         logoutCoordinator = LogoutCoordinator(
             appContext = appContext,
-            mediadorSincronizacion = mediador,
             db = db,
+            mediadorSincronizacion = mediador,
             sesionUsuario = sesionUsuario,
             pipeline = pipeline,
             cacheDetalleEscaneos = CacheDetalleEscaneos(),

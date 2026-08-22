@@ -96,6 +96,35 @@ class EscanerOverlayGeometriaTest {
         assertEquals(mapeo?.offsetY, mapeo?.y(0f))
     }
 
+    // ── rectanguloReticulo (Audit M4: unico punto de verdad del reticulo) ──
+
+    @Test
+    fun `rectanguloReticulo cuadrado 1000x1000 devuelve el reticulo centrado 200-800`() {
+        // FACTOR_RETICULO = 0.6 → lado 600, centrado en 1000: 200..800.
+        val r = rectanguloReticulo(1000f, 1000f)
+        assertEquals(200f, r.left)
+        assertEquals(200f, r.top)
+        assertEquals(800f, r.right)
+        assertEquals(800f, r.bottom)
+    }
+
+    @Test
+    fun `rectanguloReticulo usa el lado menor (retrato 1000x2000)`() {
+        // min(1000,2000)=1000 → lado 600: left=200, top=(2000-600)/2=700,
+        // right=800, bottom=1300.
+        val r = rectanguloReticulo(1000f, 2000f)
+        assertEquals(200f, r.left)
+        assertEquals(700f, r.top)
+        assertEquals(800f, r.right)
+        assertEquals(1300f, r.bottom)
+    }
+
+    @Test
+    fun `rectanguloReticulo es un cuadrado (ancho == alto del rectangulo)`() {
+        val r = rectanguloReticulo(1280f, 960f)
+        assertEquals(r.right - r.left, r.bottom - r.top, 0f)
+    }
+
     // ── qrDentroDeReticulo ──
     //
     // Setup estandar: box 1000x1000, imagen 1000x1000 → scale=1, offset=0.

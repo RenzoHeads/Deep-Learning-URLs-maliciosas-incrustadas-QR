@@ -1,11 +1,6 @@
 package com.qrsecurity.detector.di
 
 import com.qrsecurity.detector.datos.local.BaseDatosSeguridad
-import com.qrsecurity.detector.datos.local.dao.EscaneoDao
-import com.qrsecurity.detector.datos.local.dao.PendingOpDao
-import com.qrsecurity.detector.datos.local.dao.SyncStateDao
-import com.qrsecurity.detector.datos.local.dao.UrlBloqueadaDao
-import com.qrsecurity.detector.datos.local.dao.UrlCatalogoDao
 import com.qrsecurity.detector.BuildConfig
 import android.content.Context
 import androidx.room.Room
@@ -17,10 +12,13 @@ import dagger.hilt.components.SingletonComponent
 import javax.inject.Singleton
 
 /**
- * Modulo Hilt que provee la instancia [BaseDatosSeguridad] (Room) y todos
- * sus DAOs. La base de datos es un singleton de proceso (una sola instancia)
+ * Modulo Hilt que provee la instancia [BaseDatosSeguridad] (Room).
+ * La base de datos es un singleton de proceso (una sola instancia)
  * hospedada en [SingletonComponent] para que sobreviva a cambios de
  * configuracion y se comparta entre todos los repositorios + el SyncWorker.
+ *
+ * Los DAOs NO se proveen aqui: ningun consumidor los inyecta — todos
+ * acceden via `db.xxxDao()` (repositorios, SyncWorker, SyncHelpers).
  *
  * Audit fix CRITICAL: las migraciones se toman de la lista unica
  * [BaseDatosSeguridad.TODAS_MIGRACIONES]. Antes este modulo registraba a
@@ -54,19 +52,4 @@ object DatabaseModule {
             }
             .build()
     }
-
-    @Provides
-    fun provideEscaneoDao(db: BaseDatosSeguridad): EscaneoDao = db.escaneoDao()
-
-    @Provides
-    fun provideUrlBloqueadaDao(db: BaseDatosSeguridad): UrlBloqueadaDao = db.urlBloqueadaDao()
-
-    @Provides
-    fun providePendingOpDao(db: BaseDatosSeguridad): PendingOpDao = db.pendingOpDao()
-
-    @Provides
-    fun provideSyncStateDao(db: BaseDatosSeguridad): SyncStateDao = db.syncStateDao()
-
-    @Provides
-    fun provideUrlCatalogoDao(db: BaseDatosSeguridad): UrlCatalogoDao = db.urlCatalogoDao()
 }

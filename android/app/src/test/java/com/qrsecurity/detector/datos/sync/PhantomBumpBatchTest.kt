@@ -121,7 +121,7 @@ class PhantomBumpBatchTest {
             // Given: 1 op con intentos=10 (10 phantom bumps previos).
             // Al claim del batch se bump a 11, que > MAX_INTENTOS_OP (10).
             val id = sembrarOp("op-agotado", creadoEnMillis = 100L)
-            repeat(10) { fixture.db.pendingOpDao().markInProgress(id) }
+            repeat(10) { fixture.db.pendingOpDao().markInProgressBatch(listOf(id)) }
 
             var invocaciones = 0
             val procesador: suspend (PendingOpEntity) -> Boolean = { _ ->
@@ -167,7 +167,7 @@ class PhantomBumpBatchTest {
             // Given: 1 op con intentos=9 (9 phantom bumps previos).
             // Al claim del batch se bump a 10, que NO > MAX_INTENTOS_OP (10).
             val id = sembrarOp("op-limite", creadoEnMillis = 100L)
-            repeat(9) { fixture.db.pendingOpDao().markInProgress(id) }
+            repeat(9) { fixture.db.pendingOpDao().markInProgressBatch(listOf(id)) }
 
             val procesadas = mutableListOf<PendingOpEntity>()
             val procesador: suspend (PendingOpEntity) -> Boolean = { op ->

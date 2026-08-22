@@ -211,7 +211,7 @@ open class MediadorSincronizacion @Inject constructor(
 
         // M12 fix — UPDATE: aplica nuevos constraints/interval tras upgrades.
         wm.enqueueUniquePeriodicWork(
-            SyncWorker.NOMBRE_TRABAJO + "_periodica",
+            SyncWorker.NOMBRE_TRABAJO_PERIODICO,
             ExistingPeriodicWorkPolicy.UPDATE,
             request
         )
@@ -226,7 +226,7 @@ open class MediadorSincronizacion @Inject constructor(
             return
         }
         wm.cancelUniqueWork(SyncWorker.NOMBRE_TRABAJO)
-        wm.cancelUniqueWork(SyncWorker.NOMBRE_TRABAJO + "_periodica")
+        wm.cancelUniqueWork(SyncWorker.NOMBRE_TRABAJO_PERIODICO)
     }
 
     /**

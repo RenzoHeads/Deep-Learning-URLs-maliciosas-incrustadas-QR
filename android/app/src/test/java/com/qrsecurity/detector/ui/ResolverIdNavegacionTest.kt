@@ -14,8 +14,10 @@ import org.junit.Test
  * Cobertura:
  *  - Caso 1: idLocal no-nulo → retorna directo (sin tocar historial).
  *  - Caso 2: idLocal null + match exacto (urlLimpia + urlOriginal) en historial.
- *  - Caso 3: idLocal null + sin match exacto + match parcial por urlLimpia
- *    (toma el mas reciente por creadoEnMillis).
+ *  - Caso 3 (Audit B6): idLocal null + sin match exacto → null, incluso si
+ *    existe un escaneo previo con la MISMA urlLimpia pero urlOriginal distinto
+ *    (antes devolvía el más reciente por creadoEnMillis — presentaba el
+ *    veredicto de un escaneo anterior como resultado del QR recién escaneado).
  *  - Caso 4: idLocal null + historial vacio → null.
  *  - Caso 5: idLocal null + historial con solo URLs distintas → null.
  *  - Caso 6: idLocal "" (vacio) → cae al match (no se trata como valido).
@@ -79,11 +81,14 @@ class ResolverIdNavegacionTest {
     }
 
     @Test
-    fun `idLocal null y sin match exacto retorna el mas reciente por urlLimpia`() {
+    fun `idLocal null y sin match exacto retorna null aunque exista escaneo previo por urlLimpia`() {
+        // Audit B6: un match por urlLimpia SOLA (con urlOriginal distinto)
+        // presentaria el veredicto de un escaneo anterior como resultado del
+        // QR recien escaneado. Sin idLocal ni match exacto → null.
         val historial = listOf(
             escaneo("id-antiguo", "ejemplo.com/path", "https://m.ejemplo.com/path", 100L),
-            escaneo("id-reciente", "ejemplo.com/path", "https://www.ejemplo.com/path", 500L),
-            escaneo("id-medio", "ejemplo.com/path", "https://www.ejemplo.com/path", 300L),
+            escaneo("id-reciente", "ejemplo.com/path", "https://www2.ejemplo.com/path", 500L),
+            escaneo("id-medio", "ejemplo.com/path", "https://m.ejemplo.com/path", 300L),
             escaneo("id-otra-url", "diferente.com/y", "https://diferente.com/y", 900L)
         )
         val resultado = resolverIdNavegacion(
@@ -91,7 +96,7 @@ class ResolverIdNavegacionTest {
             resultado = resultado,
             historial = historial
         )
-        assertEquals("id-reciente", resultado)
+        assertNull(resultado)
     }
 
     @Test

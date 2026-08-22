@@ -64,7 +64,6 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.qrsecurity.detector.camera.DeteccionQr
 import com.qrsecurity.detector.camera.ModuloCamara
-import com.qrsecurity.detector.pipeline.PipelineViewModel
 import com.qrsecurity.detector.ui.theme.Alphas
 import com.qrsecurity.detector.ui.theme.Borde
 import com.qrsecurity.detector.ui.theme.CyberCyan
@@ -182,7 +181,6 @@ fun PantallaHome(
     val estado by pipelineViewModel.estado.collectAsStateWithLifecycle()
 
     var moduloCamara by remember { mutableStateOf<ModuloCamara?>(null) }
-    var yaNavegoAnalisis by rememberSaveable { mutableStateOf(false) }
     var deteccionQr by rememberSaveable(stateSaver = DeteccionQrSaver) {
         mutableStateOf<DeteccionQr?>(null)
     }
@@ -216,17 +214,23 @@ fun PantallaHome(
         )
     }
 
-    // ── Navegacion a AnalisisScreen cuando inicia el analisis ──
-    LaunchedEffect(analizando, estado) {
-        if (analizando && !yaNavegoAnalisis &&
-            estado !is Estado.Escaneando &&
-            estado !is Estado.Inicializando &&
-            estado !is Estado.UrlDuplicada
+    // ── Navegacion a AnalisisScreen cuando el pipeline emite un resultado ──
+    // E3 fix (auditoria v2): la navegacion se deriva del sealed `estado`, no
+    // de un boolean paralelo (`yaNavegoAnalisis` era una doble fuente de
+    // verdad). El StateFlow de `estado` deduplica emisiones iguales, asi que
+    // este LaunchedEffect(estado) dispara EXACTAMENTE una vez cuando el
+    // pipeline llega a ResultadoListo con un ResultadoUrl real (NoUrl y
+    // Error se manejan en los efectos de abajo, no navegan). El guard
+    // `analizando` preserva el comportamiento de no navegar en una
+    // restauracion de process death (donde `estado` puede quedar en
+    // ResultadoListo sin un escaneo activo).
+    LaunchedEffect(estado) {
+        val e = estado
+        if (analizando &&
+            e is Estado.ResultadoListo &&
+            e.resultado is ResultadoAnalisis.ResultadoUrl
         ) {
-            yaNavegoAnalisis = true
             onEscanear()
-        } else if (!analizando) {
-            yaNavegoAnalisis = false
         }
     }
 
@@ -249,15 +253,9 @@ fun PantallaHome(
             deteccionQr = null
             moduloCamara?.reanudarDeteccion()
             pipelineViewModel.reiniciar()
-            // U11: "url_demasiado_larga" decia "El QR no contiene una URL"
-            // aunque el payload SI era una URL — mensaje contradictorio.
+            // E2/B2 fix: mensaje en un unico punto de verdad (mensajeNoUrl).
             val noUrl = e.resultado as ResultadoAnalisis.NoUrl
-            val mensaje = if (noUrl.tipoContenido == "url_demasiado_larga") {
-                "El QR contiene una URL demasiado larga (máximo 2048 caracteres)"
-            } else {
-                "El QR no contiene una URL"
-            }
-            onMensaje(TipoMensaje.INFO, mensaje)
+            onMensaje(TipoMensaje.INFO, mensajeNoUrl(noUrl.tipoContenido))
         }
     }
 
@@ -319,6 +317,17 @@ fun PantallaHome(
         }
     }
 
+    // ── Arranque de la camara (M17) ──
+    // El modulo se CREA dentro del factory de AndroidView (necesita el
+    // previewView); el arranque (`iniciar`) se delega aqui, un efecto que
+    // corre cuando el modulo se registra en estado — sin side-effects dentro
+    // del factory. `iniciar` es seguro de llamar multiples veces (hoy ya lo
+    // invoca ON_RESUME); este efecto cubre la composicion inicial cuando la
+    // actividad ya esta en RESUMED (no se dispararia ON_RESUME de nuevo).
+    LaunchedEffect(moduloCamara) {
+        moduloCamara?.iniciar()
+    }
+
     // ── Refresh del callback QR (H1 fix: evitar stale callback) ──
     LaunchedEffect(analizando, estado, deteccionQr, tamanoBox) {
         moduloCamara?.setOnQrDetectado { deteccion ->
@@ -354,14 +363,19 @@ fun PantallaHome(
                 factory = { ctx ->
                     PreviewView(ctx).also { previewView ->
                         previewView.scaleType = PreviewView.ScaleType.FILL_CENTER
-                        val modulo = ModuloCamara(
+                        // M17: el factory SOLO crea y registra el modulo
+                        // (necesita el previewView recien construido). El
+                        // arranque de la camara (`iniciar()`) NO se hace aqui —
+                        // es un side-effect de composicion; se delega al
+                        // LaunchedEffect(moduloCamara) abajo, que corre al
+                        // registrarse el modulo. Igual resultado, sin efectos
+                        // colaterales dentro del factory de AndroidView.
+                        moduloCamara = ModuloCamara(
                             context = ctx,
                             lifecycleOwner = lifecycleOwner,
                             previewView = previewView,
                             onQrDetectado = { /* set by LaunchedEffect above */ }
                         )
-                        moduloCamara = modulo
-                        modulo.iniciar()
                     }
                 },
                 modifier = Modifier.fillMaxSize()
@@ -475,10 +489,7 @@ fun PantallaHome(
             modifier = Modifier.align(Alignment.BottomCenter)
         ) {
             val deteccion = deteccionQr
-            val urlMostrada = deteccion?.payload
-                ?.takeIf { it.startsWith("http") }
-                ?: deteccion?.payload
-                ?: ""
+            val urlMostrada = deteccion?.payload ?: ""
             Column(
                 modifier = Modifier
                     .fillMaxWidth()

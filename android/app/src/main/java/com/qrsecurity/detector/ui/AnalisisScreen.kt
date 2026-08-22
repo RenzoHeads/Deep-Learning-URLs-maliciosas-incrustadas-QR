@@ -46,7 +46,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.qrsecurity.detector.pipeline.Pipeline
-import com.qrsecurity.detector.pipeline.PipelineViewModel
 import com.qrsecurity.detector.ui.theme.Alphas
 import com.qrsecurity.detector.ui.theme.CyberCyan
 import com.qrsecurity.detector.ui.theme.CyberFondo
@@ -152,14 +151,8 @@ fun PantallaAnalisis(
                         }
                     }
                     is ResultadoAnalisis.NoUrl -> {
-                        // U11: "url_demasiado_larga" decia "no contiene una
-                        // URL" aunque el payload SI era una URL.
-                        val mensaje = if (resultado.tipoContenido == "url_demasiado_larga") {
-                            "El QR contiene una URL demasiado larga (máximo 2048 caracteres)"
-                        } else {
-                            "El QR no contiene una URL"
-                        }
-                        onMensaje(TipoMensaje.INFO, mensaje)
+                        // E2/B2 fix: mensaje en un unico punto de verdad.
+                        onMensaje(TipoMensaje.INFO, mensajeNoUrl(resultado.tipoContenido))
                         pipelineViewModel.reiniciar()
                     }
                 }

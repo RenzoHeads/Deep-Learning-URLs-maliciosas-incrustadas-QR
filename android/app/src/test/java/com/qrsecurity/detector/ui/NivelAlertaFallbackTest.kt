@@ -34,4 +34,24 @@ class NivelAlertaFallbackTest {
         assertEquals(NivelAlerta.SOSPECHOSO, NivelAlerta.de("SOSPECHOSO"))
         assertEquals(NivelAlerta.MALICIOSO, NivelAlerta.de("MALICIOSO"))
     }
+
+    // ── mensajeNoUrl (auditoria v2 E2/B2: punto unico de verdad) ──
+
+    @Test
+    fun `mensajeNoUrl con tipoContenido url_demasiado_larga indica limite de longitud`() {
+        assertEquals(
+            "El QR contiene una URL demasiado larga (máximo 2048 caracteres)",
+            mensajeNoUrl("url_demasiado_larga")
+        )
+    }
+
+    @Test
+    fun `mensajeNoUrl con cualquier otro tipoContenido indica que no hay URL`() {
+        assertEquals("El QR no contiene una URL", mensajeNoUrl("sin_url"))
+    }
+
+    @Test
+    fun `mensajeNoUrl con tipoContenido vacio indica que no hay URL`() {
+        assertEquals("El QR no contiene una URL", mensajeNoUrl(""))
+    }
 }

@@ -75,7 +75,7 @@ class MediadorSincronizacionTest {
         // contamination (aunque WorkManagerTestInitHelper es en memoria y
         // se reinicializa en @Before, esto es defensivo).
         workManager.cancelUniqueWork(SyncWorker.NOMBRE_TRABAJO)
-        workManager.cancelUniqueWork(SyncWorker.NOMBRE_TRABAJO + "_periodica")
+        workManager.cancelUniqueWork(SyncWorker.NOMBRE_TRABAJO_PERIODICO)
     }
 
     // ──────────────────────────────────────────────────────────────
@@ -134,7 +134,7 @@ class MediadorSincronizacionTest {
         // no duplica el schedule, solo actualiza constraints/interval
         // si cambiaron (que en este test no cambian).
         val workInfos = workManager
-            .getWorkInfosForUniqueWork(SyncWorker.NOMBRE_TRABAJO + "_periodica")
+            .getWorkInfosForUniqueWork(SyncWorker.NOMBRE_TRABAJO_PERIODICO)
             .get()
         assertNotNull(workInfos)
         assertEquals(
@@ -156,7 +156,7 @@ class MediadorSincronizacionTest {
             .getWorkInfosForUniqueWork(SyncWorker.NOMBRE_TRABAJO)
             .get()
         val periodicInfos = workManager
-            .getWorkInfosForUniqueWork(SyncWorker.NOMBRE_TRABAJO + "_periodica")
+            .getWorkInfosForUniqueWork(SyncWorker.NOMBRE_TRABAJO_PERIODICO)
             .get()
         assertEquals(1, oneShotInfos.size)
         assertEquals(1, periodicInfos.size)
@@ -181,7 +181,7 @@ class MediadorSincronizacionTest {
             .getWorkInfosForUniqueWork(SyncWorker.NOMBRE_TRABAJO)
             .get()
         val periodicInfos = workManager
-            .getWorkInfosForUniqueWork(SyncWorker.NOMBRE_TRABAJO + "_periodica")
+            .getWorkInfosForUniqueWork(SyncWorker.NOMBRE_TRABAJO_PERIODICO)
             .get()
         assertEquals(1, oneShotInfos.size)
         assertEquals(1, periodicInfos.size)

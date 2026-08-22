@@ -1,4 +1,4 @@
-package com.qrsecurity.detector.ui
+package com.qrsecurity.detector.cache
 
 import com.qrsecurity.detector.datos.local.entidades.EscaneoEntity
 import org.junit.Assert.assertEquals
@@ -10,7 +10,7 @@ import org.junit.Test
  * Bug 3 (pieza c) — CacheDetalleEscaneos NO se limpia en logout.
  *
  * [CacheDetalleEscaneos] es @Singleton (Hilt), asi que su instancia (y el
- * mapa `_cache` de `DetalleUrlUiState.Cargado` por id) sobrevive a cierres
+ * mapa `_cache` de `DetalleEscaneoCacheado` por id) sobrevive a cierres
  * de sesion dentro del mismo proceso. Sin un metodo [limpiar], al cerrar
  * sesion y volver a loguear (otro usuario o el mismo), el detalle de un
  * escaneo apareceria "pre-cargado" con datos stale del usuario anterior.
@@ -39,7 +39,7 @@ class CacheDetalleEscaneosLimpiarTest {
         creadoEnMillis = System.currentTimeMillis()
     )
 
-    private fun cargadoDummy(id: String) = DetalleUrlUiState.Cargado(
+    private fun cargadoDummy(id: String) = DetalleEscaneoCacheado(
         escaneo = escaneoDummy(id),
         urlBloqueada = false,
         esUltimaVersion = true,
@@ -62,7 +62,7 @@ class CacheDetalleEscaneosLimpiarTest {
 
         assertEquals(
             "El cache debe estar vacio tras limpiar",
-            emptyMap<String, DetalleUrlUiState.Cargado>(),
+            emptyMap<String, DetalleEscaneoCacheado>(),
             cache.cache.value
         )
     }

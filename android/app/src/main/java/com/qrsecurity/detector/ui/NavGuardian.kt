@@ -46,7 +46,6 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import android.net.Uri
-import com.qrsecurity.detector.pipeline.PipelineViewModel
 import com.qrsecurity.detector.sesion.SessionViewModel
 import com.qrsecurity.detector.ui.theme.Alphas
 import com.qrsecurity.detector.ui.theme.Borde
@@ -72,7 +71,6 @@ import kotlinx.coroutines.launch
     val pipelineViewModel: PipelineViewModel,
     val datosViewModel: DatosTabsViewModel,
     val analisisAnterioresViewModel: AnalisisAnterioresViewModel,
-    val detalleVersionAntiguaViewModel: DetalleVersionAntiguaViewModel,
     val sessionViewModel: SessionViewModel,
 )
 
@@ -90,21 +88,19 @@ object Rutas {
     const val ANALISIS = "analisis"
     const val HOME = "home"
     const val HISTORIAL = "historial"
-    const val DETALLE_URL = "detalle_url/{id}"
     /**
-     * Pantalla dedicada para visualizar UNA version historica especifica
-     * de una URL (NO la ultima version — esa va por [DETALLE_URL]).
-     *
-     * Esta ruta rompe el loop DetalleUrl → AnalisisAnteriores →
-     * DetalleUrl → ... : el callback `onVerDetalle(id)` de
-     * [PantallaAnalisisAnteriores] navega a esta ruta (no a
-     * [DETALLE_URL]) porque la pantalla de DetalleUrl renderiza el
-     * boton "Ver versiones de este analisis", que re-abriria
-     * AnalisisAnteriores y formaria un ciclo infinito.
+     * Detalle de UN escaneo por id — sirve tanto la versión vigente como
+     * las históricas (re-escaneos) de una URL. La pantalla distingue ambos
+     * casos con `esUltimaVersion` (calculado reactivamente por el VM):
+     * las versiones históricas ocultan las acciones de URL y el botón
+     * "Ver versiones", lo que ROMPE el loop DetalleUrl →
+     * AnalisisAnteriores → DetalleUrl → ... sin necesidad de una ruta
+     * dedicada (la antigua DETALLE_VERSION_ANTIGUA y su VM duplicado
+     * fueron eliminados — auditoría frontend F1.1).
      *
      * Toma el id del escaneo (UUID) como parametro.
      */
-    const val DETALLE_VERSION_ANTIGUA = "detalle_version_antigua/{id}"
+    const val DETALLE_URL = "detalle_url/{id}"
     const val ANALISIS_ANTERIORES =
         "analisis_anteriores?urlLimpia={urlLimpia}&idActual={idActual}"
     const val AJUSTES = "ajustes"
@@ -144,7 +140,6 @@ fun NavGuardian() {
     val pipelineViewModel: PipelineViewModel = hiltViewModel()
     val datosViewModel: DatosTabsViewModel = hiltViewModel()
     val analisisAnterioresViewModel: AnalisisAnterioresViewModel = hiltViewModel()
-    val detalleVersionAntiguaViewModel: DetalleVersionAntiguaViewModel = hiltViewModel()
     val sessionViewModel: SessionViewModel = hiltViewModel()
 
     // Bug 3 (pieza a) + audit race-fix: logueado reactivo TRI-STATE. Antes
@@ -208,7 +203,6 @@ fun NavGuardian() {
                 pipelineViewModel = pipelineViewModel,
                 datosViewModel = datosViewModel,
                 analisisAnterioresViewModel = analisisAnterioresViewModel,
-                detalleVersionAntiguaViewModel = detalleVersionAntiguaViewModel,
                 sessionViewModel = sessionViewModel,
             ),
             contexto = NavGuardianContexto(
@@ -338,20 +332,6 @@ private fun NavGuardianRutas(
             )
         }
         composable(
-            route = Rutas.DETALLE_VERSION_ANTIGUA,
-            arguments = listOf(
-                navArgument("id") { type = NavType.StringType },
-            ),
-        ) { backStackEntry ->
-            val idEscaneo = backStackEntry.arguments?.getString("id").orEmpty()
-            PantallaDetalleVersionAntigua(
-                id = idEscaneo,
-                onBack = { navController.popBackStack() },
-                onMensaje = contexto.mostrarMensaje,
-                viewModel = viewModels.detalleVersionAntiguaViewModel,
-            )
-        }
-        composable(
             route = Rutas.ANALISIS_ANTERIORES,
             arguments = listOf(
                 navArgument("urlLimpia") {
@@ -376,7 +356,10 @@ private fun NavGuardianRutas(
                     }
                 },
                 onVerDetalle = { idEscaneo ->
-                    navController.navigate(Rutas.DETALLE_VERSION_ANTIGUA.replace("{id}", idEscaneo))
+                    // F1.1: el detalle unificado sirve versiones históricas
+                    // (esUltimaVersion=false oculta acciones y el botón
+                    // "Ver versiones" — sin loop de navegación).
+                    navController.navigate(Rutas.DETALLE_URL.replace("{id}", idEscaneo))
                 },
                 viewModel = viewModels.analisisAnterioresViewModel,
                 datosViewModel = viewModels.datosViewModel,
@@ -401,7 +384,6 @@ private fun NavGuardianRutas(
                         launchSingleTop = true
                     }
                 },
-                onMensaje = contexto.mostrarMensaje,
             )
         }
     }

@@ -2,14 +2,18 @@ package com.qrsecurity.detector.ui
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.qrsecurity.detector.cache.CacheDetalleEscaneos
+import com.qrsecurity.detector.cache.DetalleEscaneoCacheado
 import com.qrsecurity.detector.datos.local.entidades.EscaneoEntity
 import com.qrsecurity.detector.datos.repositorios.RepositorioEscaneos
 import com.qrsecurity.detector.datos.repositorios.RepositorioUrlsBloqueadas
 import com.qrsecurity.detector.datos.repositorios.bloquearLocal
 import com.qrsecurity.detector.datos.repositorios.desbloquearLocal
+import com.qrsecurity.detector.datos.repositorios.eliminarLocal
 import com.qrsecurity.detector.datos.repositorios.eliminarLocalPorUrlLimpia
 import com.qrsecurity.detector.datos.sync.MediadorSincronizacion
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
@@ -54,6 +58,16 @@ sealed interface DetalleUrlUiState {
     data object NoEncontrado : DetalleUrlUiState
 }
 
+// Mapeo al contrato neutro del cache ([DetalleEscaneoCacheado]) — el
+// cache vive en la capa `cache` y no conoce los estados de pantalla.
+private fun DetalleUrlUiState.Cargado.aCacheado() = DetalleEscaneoCacheado(
+    escaneo, urlBloqueada, esUltimaVersion, totalReescaneos
+)
+
+private fun DetalleEscaneoCacheado.aCargado() = DetalleUrlUiState.Cargado(
+    escaneo, urlBloqueada, esUltimaVersion, totalReescaneos
+)
+
 /**
  * Acciones que la UI puede despachar al ViewModel (Unidirectional Data Flow).
  *
@@ -75,6 +89,16 @@ sealed interface DetalleUrlAction {
      * (ver [RepositorioEscaneos.eliminarLocalPorUrlLimpia]).
      */
     data class EliminarUrl(val urlLimpia: String) : DetalleUrlAction
+    /**
+     * Elimina UNA versión histórica específica por id (NO la cascada por
+     * [urlLimpia] de [EliminarUrl]). Delega en
+     * [RepositorioEscaneos.eliminarLocal], que maneja branch dirty/synced
+     * y la sincronización de `urls_catalogo` en una transacción atómica.
+     *
+     * Reemplaza a `DetalleVersionAntiguaViewModel.eliminarVersion` tras
+     * unificar ambas pantallas (auditoría frontend F1.1).
+     */
+    data class EliminarVersion(val id: String) : DetalleUrlAction
 }
 
 /**
@@ -118,10 +142,26 @@ class DetalleUrlViewModel @Inject constructor(
     private val _mensaje = Channel<MensajeUi>(Channel.BUFFERED)
     val mensaje = _mensaje.receiveAsFlow()
 
-    // Evento one-shot: se emite (true) cuando la URL fue eliminada del historial.
+    // Evento one-shot: se emite cuando la URL fue eliminada del historial.
     // La UI lo recolecta para navegar atras (onBack) tras un eliminado exitoso.
-    private val _eliminarCompletado = Channel<Boolean>(Channel.BUFFERED)
+    private val _eliminarCompletado = Channel<Unit>(Channel.BUFFERED)
     val eliminarCompletado = _eliminarCompletado.receiveAsFlow()
+
+    // Evento one-shot: se emite cuando el desbloqueo confirmo exito real en
+    // el repositorio. La UI lo recolecta para abrir el modal de exito
+    // (OkDesbloqueo) — reemplaza al flag `desbloqueoPendiente` que
+    // correlacionaba el boolean con el *tipo* de mensaje del canal `mensaje`
+    // (fragil ante cualquier EXITO/ERROR concurrente).
+    private val _desbloqueoCompletado = Channel<Unit>(Channel.BUFFERED)
+    val desbloqueoCompletado = _desbloqueoCompletado.receiveAsFlow()
+
+    // Guarda de reentrada (B4): doble-tap en Bloquear/Desbloquear/Eliminar
+    // lanzaba cascadas duplicadas (doble DELETE al backend + doble
+    // `eliminarCompletado` → navegacion atras doble + snackbar de error tras
+    // un borrado exitoso). Check sincrono en el entry point — mismo patron
+    // que LoginViewModel.procesando. Solo se toca desde el hilo Main
+    // (viewModelScope + llamadas UI), sin necesidad de atomica.
+    private var operandoUrl = false
 
     /**
      * Carga el escaneo por id. Pre-llena _uiState desde el cache (si hay)
@@ -164,7 +204,7 @@ class DetalleUrlViewModel @Inject constructor(
 
         val preFill = cacheDetalle.obtener(id)
         var tuvoEmisionNoNula = preFill != null || yaTeniaCargado
-        if (preFill != null) _uiState.value = preFill
+        if (preFill != null) _uiState.value = preFill.aCargado()
 
         cargarJob = viewModelScope.launch {
             repositorioEscaneos.observarPorId(id).collect { escaneo ->
@@ -276,7 +316,7 @@ class DetalleUrlViewModel @Inject constructor(
                     }
                     .distinctUntilChanged()
                     .collect { cargado ->
-                        cacheDetalle.guardar(cargado)
+                        cacheDetalle.guardar(cargado.aCacheado())
                         _uiState.value = cargado
                     }
                 }
@@ -288,10 +328,15 @@ class DetalleUrlViewModel @Inject constructor(
      * Despacha una accion desde la UI (UDF).
      */
     fun onAction(action: DetalleUrlAction) {
+        // B4: rechazo en el dispatch, no dentro del launch — dos taps
+        // consecutivos sobre el mismo boton nunca encolan dos cascadas.
+        if (operandoUrl) return
+        operandoUrl = true
         when (action) {
             is DetalleUrlAction.BloquearUrl -> bloquearUrl(action.url, action.razon)
             is DetalleUrlAction.DesbloquearUrl -> desbloquearUrl(action.url)
             is DetalleUrlAction.EliminarUrl -> eliminarUrl(action.urlLimpia)
+            is DetalleUrlAction.EliminarVersion -> eliminarVersion(action.id)
         }
     }
 
@@ -311,8 +356,12 @@ class DetalleUrlViewModel @Inject constructor(
                     }
                 }
                 _mensaje.send(MensajeUi(TipoMensaje.EXITO, "URL bloqueada."))
+            } catch (c: CancellationException) {
+                throw c
             } catch (e: Exception) {
                 _mensaje.send(MensajeUi(TipoMensaje.ERROR, "No pudimos bloquear la URL. Inténtalo de nuevo."))
+            } finally {
+                operandoUrl = false
             }
         }
     }
@@ -334,11 +383,18 @@ class DetalleUrlViewModel @Inject constructor(
                         }
                     }
                     _mensaje.send(MensajeUi(TipoMensaje.EXITO, "URL desbloqueada."))
+                    // Evento tipado en vez de sniffear el tipo del mensaje:
+                    // la UI abre OkDesbloqueo solo con esta señal.
+                    _desbloqueoCompletado.send(Unit)
                 } else {
                     _mensaje.send(MensajeUi(TipoMensaje.INFO, "La URL no estaba bloqueada."))
                 }
+            } catch (c: CancellationException) {
+                throw c
             } catch (e: Exception) {
                 _mensaje.send(MensajeUi(TipoMensaje.ERROR, "No pudimos desbloquear la URL. Inténtalo de nuevo."))
+            } finally {
+                operandoUrl = false
             }
         }
     }
@@ -348,7 +404,7 @@ class DetalleUrlViewModel @Inject constructor(
      * del historial local y encola DELETEs al backend via SyncWorker.
      *
      * Tras un eliminado exitoso:
-     *  1. Emite [_eliminarCompletado] `true` → la UI navega atras.
+     *  1. Emite [_eliminarCompletado] → la UI navega atras.
      *  2. Invalida el cache de detalle para que el id ya no aparezca.
      *
      * @param urlLimpia la URL limpia cuyos escaneos se eliminaran.
@@ -366,9 +422,43 @@ class DetalleUrlViewModel @Inject constructor(
                 // re-entrar desde AnalisisAnteriores).
                 cacheDetalle.invalidarPorUrlLimpia(urlLimpia)
                 _mensaje.send(MensajeUi(TipoMensaje.EXITO, "URL eliminada del historial."))
-                _eliminarCompletado.send(true)
+                _eliminarCompletado.send(Unit)
+            } catch (c: CancellationException) {
+                throw c
             } catch (e: Exception) {
                 _mensaje.send(MensajeUi(TipoMensaje.ERROR, "No pudimos eliminar la URL. Inténtalo de nuevo."))
+            } finally {
+                operandoUrl = false
+            }
+        }
+    }
+
+    /**
+     * Elimina UNA versión histórica por id (NO cascada por URL). Delega en
+     * [RepositorioEscaneos.eliminarLocal], que maneja:
+     *  - Branch dirty (CREATE pending): cancela el CREATE op + borra el row
+     *    local. No encola DELETE (fila nunca llegó al backend).
+     *  - Branch synced: encola DELETE op + borra el row local.
+     *  - Sincroniza `urls_catalogo` atómicamente (borra el hash si era la
+     *    última versión de la URL, o actualiza el row con la nueva última).
+     *
+     * Tras un eliminado exitoso invalida el cache del id y emite
+     * [_eliminarCompletado] → la UI navega atrás.
+     */
+    private fun eliminarVersion(id: String) {
+        viewModelScope.launch {
+            try {
+                repositorioEscaneos.eliminarLocal(id)
+                mediadorSincronizacion.dispararSyncUnica()
+                cacheDetalle.invalidar(id)
+                _mensaje.send(MensajeUi(TipoMensaje.EXITO, "Versión eliminada del historial."))
+                _eliminarCompletado.send(Unit)
+            } catch (c: CancellationException) {
+                throw c
+            } catch (e: Exception) {
+                _mensaje.send(MensajeUi(TipoMensaje.ERROR, "No pudimos eliminar la versión. Inténtalo de nuevo."))
+            } finally {
+                operandoUrl = false
             }
         }
     }

@@ -14,11 +14,14 @@ import com.qrsecurity.detector.pipeline.ResultadoAnalisis
  *  2. Match exacto en [historial] por (urlLimpia + urlOriginal). Cubre la
  *     rara carrera en la que [idLocal] es null pero Room ya emitio la fila
  *     recien insertada.
- *  3. Match parcial por [ResultadoAnalisis.ResultadoUrl.urlLimpia], tomando
- *     el escaneo mas reciente por [EscaneoEntity.creadoEnMillis]. Fallback
- *     final cuando el historial aun no refleja el INSERT pero existe un
- *     escaneo previo de la misma URL limpia.
- *  4. `null` — sin candidato. La UI emite "No se pudo guardar el analisis".
+ *  3. `null` — sin candidato. La UI emite "No se pudo guardar el analisis".
+ *
+ * NOTA (Audit B6): NO existe fallback por [ResultadoAnalisis.ResultadoUrl.urlLimpia]
+ * sola. Tomar el escaneo mas reciente de la misma URL limpia con un
+ * [EscaneoEntity.urlOriginal] DISTINTO presentaria el veredicto de un escaneo
+ * anterior como resultado del QR recien escaneado. Si no hay [idLocal] ni
+ * match exacto, devolvemos `null` (la UI notifica el fallo de guardado) en
+ * lugar de mentir con un veredicto obsoleto.
  *
  * Extraida del bloque inline en [PantallaAnalisis] (Audit fix B3) para
  * habilitar testeo unitario JVM sin instanciar el Pipeline ni Room.
@@ -44,9 +47,8 @@ internal fun resolverIdNavegacion(
             it.urlOriginal == resultado.urlOriginal
     }?.let { return it.id }
 
-    // 3. Fallback parcial por urlLimpia, mas reciente.
-    return historial
-        .filter { it.urlLimpia == resultado.urlLimpia }
-        .maxByOrNull { it.creadoEnMillis }
-        ?.id
+    // Audit B6: sin fallback parcial por urlLimpia. Un match por urlLimpia
+    // sola (con urlOriginal distinto) devolveria el veredicto de un escaneo
+    // anterior como si fuera el del QR recien escaneado.
+    return null
 }

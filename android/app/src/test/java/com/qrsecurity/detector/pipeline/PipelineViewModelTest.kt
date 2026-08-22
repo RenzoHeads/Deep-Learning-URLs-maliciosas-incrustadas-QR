@@ -1,5 +1,6 @@
 package com.qrsecurity.detector.pipeline
 
+import com.qrsecurity.detector.ui.PipelineViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -80,7 +81,7 @@ class PipelineViewModelTest {
         val repoUrlsBloqueadas = com.qrsecurity.detector.datos.repositorios.RepositorioUrlsBloqueadas(db, backend, json, testDispatcher)
         val mediadorSync = com.qrsecurity.detector.datos.sync.MediadorSincronizacion(app)
         com.qrsecurity.detector.ml.setupTestVocab()
-        val pipeline = com.qrsecurity.detector.pipeline.Pipeline(app, db, backend, json, repoEscaneos, repoUrlsBloqueadas, mediadorSync, com.qrsecurity.detector.ml.MotorInferenciaFake())
+        val pipeline = com.qrsecurity.detector.pipeline.Pipeline(app, backend, repoEscaneos, repoUrlsBloqueadas, mediadorSync, com.qrsecurity.detector.ml.MotorInferenciaFake())
         // PipelineViewModel requiere SavedStateHandle (Hilt lo inyecta en prod;
         // en test pasamos uno vacío — no usamos resultadoCacheado aquí).
         val savedState = androidx.lifecycle.SavedStateHandle()

@@ -139,15 +139,13 @@ class LogoutCoordinatorTest {
             json = json,
             ioDispatcher = testDispatcher
         )
-        // Pipeline constructor (firma real): (context, db, backend, json,
+        // Pipeline constructor (firma real): (context, backend,
         // repoEscaneos, repoUrlsBloqueadas, mediadorSync, motorInferencia).
         // `motorInferencia` es MotorInferenciaFake (no carga TFLite).
         com.qrsecurity.detector.ml.setupTestVocab()
         val pipeline = Pipeline(
             context = appContext,
-            db = db,
             backend = backend,
-            json = json,
             repoEscaneos = repoEscaneos,
             repoUrlsBloqueadas = repoUrlsBloqueadas,
             mediadorSync = mediador,
@@ -157,11 +155,11 @@ class LogoutCoordinatorTest {
         sesionUsuario = FakeSesionUsuario(appContext)
         coordinator = LogoutCoordinator(
             appContext = appContext,
-            mediadorSincronizacion = mediador,
             db = db,
+            mediadorSincronizacion = mediador,
             sesionUsuario = sesionUsuario,
             pipeline = pipeline,
-            cacheDetalleEscaneos = com.qrsecurity.detector.ui.CacheDetalleEscaneos(),
+            cacheDetalleEscaneos = com.qrsecurity.detector.cache.CacheDetalleEscaneos(),
             credentialsManager = com.auth0.android.authentication.storage.SecureCredentialsManager(
                 appContext,
                 com.auth0.android.Auth0.getInstance(appContext),

@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -17,7 +19,6 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -59,7 +60,7 @@ import com.qrsecurity.detector.ui.theme.Espaciado
  * Descomposicion del archivo:
  *  - [DetalleUrlTarjetas]: tarjetas (URL, veredicto, versiones) + chip de estado.
  *  - [DetalleUrlAcciones]: botones de accion (Abrir/Bloquear/Desbloquear/Eliminar).
- *  - [ModalDesbloqueo], [ModalDesbloqueoConfirmarOk], [ModalEliminarUrl]: modales.
+ *  - [ModalesConfirmacion]: los 5 modales (Bloqueo/Desbloqueo/Eliminar).
  *
  * P1: los 4 modales se modelan con [ModalDetalleUrl] (sealed interface) en
  * lugar de 4 booleanos mutuamente excluyentes — fuerza estado legal (solo
@@ -74,49 +75,27 @@ import com.qrsecurity.detector.ui.theme.Espaciado
 
 /**
  * Modal activo en la pantalla de DetalleUrl. Solo UNO puede estar visible
- * a la vez (los 4 modales son mutuamente excluyentes por UX). El estado
- * [Ninguno] representa el estado sin modal — reemplaza los 4 booleanos
- * independientes previos (que admitian combinaciones imposibles como
- * "ConfirmarDesbloqueo + EliminarUrl visibles a la vez").
+ * a la vez (los modales son mutuamente excluyentes por UX). [Ninguno]
+ * representa el estado sin modal — reemplaza los booleanos independientes
+ * previos (que admitian combinaciones imposibles como "ConfirmarDesbloqueo
+ * + EliminarUrl visibles a la vez").
+ *
+ * Enum (antes sealed interface de data objects): los enums son
+ * Serializable → Bundle-saveables de fabrica via el autoSaver de
+ * [rememberSaveable], sin el Saver custom de dos `when` paralelos que
+ * habia que mantener sincronizados a mano al anadir variantes.
  */
-sealed interface ModalDetalleUrl {
-    data object Ninguno : ModalDetalleUrl
-    data object ConfirmarDesbloqueo : ModalDetalleUrl
-    data object OkDesbloqueo : ModalDetalleUrl
-    data object ConfirmarBloqueo : ModalDetalleUrl
-    data object EliminarUrl : ModalDetalleUrl
+enum class ModalDetalleUrl {
+    Ninguno,
+    ConfirmarDesbloqueo,
+    OkDesbloqueo,
+    ConfirmarBloqueo,
+    EliminarUrl,
     /** Audit fix S1: confirmación antes de abrir una URL no-SEGURO desbloqueada. */
-    data object ConfirmarAbrirEnlace : ModalDetalleUrl
+    ConfirmarAbrirEnlace,
+    /** Eliminar UNA versión histórica por id (no la cascada por URL). */
+    EliminarVersion
 }
-
-/**
- * Saver para [ModalDetalleUrl]: los `data object` no son Bundle-saveables,
- * por lo que [rememberSaveable] lanza `IllegalArgumentException` al
- * intentar persistir el [MutableState] (crash FATAL en main al abrir Detalle
- * tras escanear QR). Serializamos cada variante a su nombre estable.
- */
-private val ModalDetalleUrlSaver: Saver<ModalDetalleUrl, String> = Saver(
-    save = { state ->
-        when (state) {
-            ModalDetalleUrl.Ninguno -> "Ninguno"
-            ModalDetalleUrl.ConfirmarDesbloqueo -> "ConfirmarDesbloqueo"
-            ModalDetalleUrl.OkDesbloqueo -> "OkDesbloqueo"
-            ModalDetalleUrl.ConfirmarBloqueo -> "ConfirmarBloqueo"
-            ModalDetalleUrl.EliminarUrl -> "EliminarUrl"
-            ModalDetalleUrl.ConfirmarAbrirEnlace -> "ConfirmarAbrirEnlace"
-        }
-    },
-    restore = { name ->
-        when (name) {
-            "ConfirmarDesbloqueo" -> ModalDetalleUrl.ConfirmarDesbloqueo
-            "OkDesbloqueo" -> ModalDetalleUrl.OkDesbloqueo
-            "ConfirmarBloqueo" -> ModalDetalleUrl.ConfirmarBloqueo
-            "EliminarUrl" -> ModalDetalleUrl.EliminarUrl
-            "ConfirmarAbrirEnlace" -> ModalDetalleUrl.ConfirmarAbrirEnlace
-            else -> ModalDetalleUrl.Ninguno
-        }
-    }
-)
 
 @Composable
 fun PantallaDetalleUrl(
@@ -132,43 +111,26 @@ fun PantallaDetalleUrl(
 
     // P1: estado del modal en un solo state tipado. Solo un modal activo por
     // vez. rememberSaveable (audit fix P1): sobrevive rotacion/process death
-    // — antes un `remember` cerraba el modal abierto al rotar.
-    // Saver custom: los `data object` de [ModalDetalleUrl] NO son
-    // Bundle-saveables (crash FATAL IllegalArgumentException en main al
-    // entrar a DetalleUrl tras escanear QR). Usamos [ModalDetalleUrlSaver]
-    // para mapear cada variante a un String.
-    var modalActiva by rememberSaveable(stateSaver = ModalDetalleUrlSaver) {
-        mutableStateOf<ModalDetalleUrl>(ModalDetalleUrl.Ninguno)
-    }
-
-    // Audit fix B5: bandera del desbloqueo pendiente. El modal de exito
-    // (OkDesbloqueo) ya NO se muestra optimista al confirmar — se muestra
-    // solo cuando el VM emite el mensaje EXITO de desbloqueo. Antes, si
-    // desbloquearUrl fallaba, convivian el modal "URL desbloqueada" y el
-    // snackbar "Error al desbloquear URL".
-    // U9: rememberSaveable — con remember, una rotacion entre la
-    // confirmacion y el EXITO del VM reseteaba la bandera y el modal de
-    // exito nunca se abria (solo quedaba el snackbar).
-    var desbloqueoPendiente by rememberSaveable { mutableStateOf(false) }
+    // — antes un `remember` cerraba el modal abierto al rotar. Al ser un
+    // enum (Serializable) el autoSaver de rememberSaveable lo persiste sin
+    // Saver custom.
+    var modalActiva by rememberSaveable { mutableStateOf(ModalDetalleUrl.Ninguno) }
 
     LaunchedEffect(id) { viewModel.cargarEscaneo(id) }
 
     LaunchedEffect(viewModel) {
         lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
             viewModel.mensaje.collect { mensaje ->
-                // Audit fix B5: el modal de exito del desbloqueo se abre
-                // SOLO cuando el VM confirma el EXITO (no al confirmar el
-                // dialogo). Cualquier ERROR reinicia la bandera.
-                if (desbloqueoPendiente) {
-                    if (mensaje.tipo == TipoMensaje.EXITO) {
-                        desbloqueoPendiente = false
-                        modalActiva = ModalDetalleUrl.OkDesbloqueo
-                    } else if (mensaje.tipo == TipoMensaje.ERROR) {
-                        desbloqueoPendiente = false
-                    }
-                }
                 onMensaje(mensaje.tipo, mensaje.texto)
             }
+        }
+    }
+
+    // El modal de exito del desbloqueo se abre SOLO con la señal tipada del
+    // VM (exito real del repositorio), no sniffando tipos de mensaje.
+    LaunchedEffect(viewModel) {
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            viewModel.desbloqueoCompletado.collect { modalActiva = ModalDetalleUrl.OkDesbloqueo }
         }
     }
 
@@ -178,18 +140,28 @@ fun PantallaDetalleUrl(
         }
     }
 
-    // Audit fix B4: back del sistema desactivado mientras hay un modal
-    // abierto — cierra el modal, no la pantalla entera.
-    BackHandler(enabled = modalActiva == ModalDetalleUrl.Ninguno, onBack = onBack)
+    // Audit fix B4 (corregido): back del sistema con un modal abierto cierra
+    // el MODAL, no la pantalla. Los modales son overlays (no Dialog), asi que
+    // nadie mas intercepta el back — este handler debe estar HABILITADO con
+    // modal abierto. Se compone despues del handler por defecto: el ultimo
+    // BackHandler habilitado en componerse tiene prioridad.
+    BackHandler(onBack = onBack)
+    BackHandler(enabled = modalActiva != ModalDetalleUrl.Ninguno) {
+        modalActiva = ModalDetalleUrl.Ninguno
+    }
 
-    // P2: hoist del urlLimpia una sola vez por recomposicion. Invariant:
-    // si un modal esta activo, uiState DEBE ser Cargado (los modales solo
-    // se disparan desde ContenidoDetalle, que requiere Cargado). El silent
-    // fallback `?.let` no oculta un bug — cubre el edge case de race donde
-    // uiState cambia a NoEncontrado/Cargando mientras el modal esta abierto
-    // (p.ej. eliminado concurrente desde otro flujo): en ese caso cerramos
-    // el modal sin disparar la accion, que es el comportamiento seguro.
-    val urlLimpiaActual = (uiState as? DetalleUrlUiState.Cargado)?.escaneo?.urlLimpia
+    // P2: hoist del Cargado una sola vez por recomposicion (cast unico —
+    // antes se repetia en urlLimpiaActual y en el modal ConfirmarAbrirEnlace).
+    // Invariant: si un modal esta activo, uiState DEBE ser Cargado (los
+    // modales solo se disparan desde ContenidoDetalle, que requiere
+    // Cargado). El silent fallback `?.` no oculta un bug — cubre el edge
+    // case de race donde uiState cambia a NoEncontrado/Cargando mientras
+    // el modal esta abierto (p.ej. eliminado concurrente desde otro flujo):
+    // en ese caso cerramos el modal sin disparar la accion, que es el
+    // comportamiento seguro.
+    val cargado = uiState as? DetalleUrlUiState.Cargado
+    val urlLimpiaActual = cargado?.escaneo?.urlLimpia
+    val idEscaneoActual = cargado?.escaneo?.id
 
     Box(modifier = Modifier.fillMaxSize().background(CyberFondo)) {
         when (val estado = uiState) {
@@ -206,6 +178,7 @@ fun PantallaDetalleUrl(
                 onSolicitarDesbloqueo = { modalActiva = ModalDetalleUrl.ConfirmarDesbloqueo },
                 onSolicitarBloqueo = { modalActiva = ModalDetalleUrl.ConfirmarBloqueo },
                 onSolicitarEliminar = { modalActiva = ModalDetalleUrl.EliminarUrl },
+                onSolicitarEliminarVersion = { modalActiva = ModalDetalleUrl.EliminarVersion },
                 onAbrirEnlace = { onInvalida ->
                     // Audit fix S1: nivel SEGURO → abre directo. Cualquier
                     // otro nivel (SOSPECHOSO/MALICIOSO desbloqueada) pide
@@ -230,12 +203,8 @@ fun PantallaDetalleUrl(
         ModalDetalleUrl.Ninguno -> Unit
         ModalDetalleUrl.ConfirmarDesbloqueo -> ModalDesbloqueoConfirmar(
             onConfirmar = {
-                // Audit fix B5: cerrar el dialogo y marcar pendiente — el
-                // modal OkDesbloqueo lo abre el colector de mensajes cuando
-                // el VM confirma el exito real del desbloqueo.
                 modalActiva = ModalDetalleUrl.Ninguno
                 if (urlLimpiaActual != null) {
-                    desbloqueoPendiente = true
                     viewModel.onAction(DetalleUrlAction.DesbloquearUrl(urlLimpiaActual))
                 }
             },
@@ -260,12 +229,18 @@ fun PantallaDetalleUrl(
             },
             onCancelar = { modalActiva = ModalDetalleUrl.Ninguno }
         )
+        ModalDetalleUrl.EliminarVersion -> ModalEliminarVersion(
+            onConfirmar = {
+                modalActiva = ModalDetalleUrl.Ninguno
+                // idEscaneoActual (no el nav arg `id`): tras un reKey del
+                // SyncWorker el nav arg puede ser el clientUUID obsoleto.
+                idEscaneoActual?.let { viewModel.onAction(DetalleUrlAction.EliminarVersion(it)) }
+            },
+            onCancelar = { modalActiva = ModalDetalleUrl.Ninguno }
+        )
         ModalDetalleUrl.ConfirmarAbrirEnlace -> {
             // Audit fix S1: advertencia en el momento de abrir una URL que
             // NO fue clasificada como SEGURO (y está desbloqueada).
-            // Refactor: cast unico `as? Cargado` — antes se repetia en el
-            // cuerpo del modal (linea 224) y en onConfirmar (linea 235).
-            val cargado = uiState as? DetalleUrlUiState.Cargado
             PlantillaModalConfirmacion(
                 titulo = "Abrir enlace de riesgo",
                 cuerpo = "Este enlace fue clasificado como " +
@@ -304,6 +279,7 @@ private fun ContenidoDetalle(
     onSolicitarDesbloqueo: () -> Unit,
     onSolicitarBloqueo: () -> Unit,
     onSolicitarEliminar: () -> Unit,
+    onSolicitarEliminarVersion: () -> Unit,
     onAbrirEnlace: (onInvalida: () -> Unit) -> Unit,
     onMensaje: (TipoMensaje, String) -> Unit
 ) {
@@ -321,14 +297,18 @@ private fun ContenidoDetalle(
         // ─── Title Block ───
         Column(verticalArrangement = Arrangement.spacedBy(Espaciado.xs)) {
             Text(
-                text = "Detalle del análisis",
+                // La misma pantalla sirve la versión vigente y las
+                // históricas (unificación F1.1): el título diferencia de
+                // un vistazo cuál se está viendo.
+                text = if (estado.esUltimaVersion) {
+                    "Detalle del análisis"
+                } else {
+                    "Versión anterior del análisis"
+                },
                 style = MaterialTheme.typography.headlineLarge,
                 color = CyberTextoPrincipal
             )
             if (estado.esUltimaVersion) {
-                // Auditoría UI 2: deja claro de un vistazo que esta pantalla
-                // muestra la versión vigente (frente al detalle de una
-                // versión anterior, con su propio título diferenciado).
                 Text(
                     text = "Última versión del escaneo",
                     style = MaterialTheme.typography.labelMedium,
@@ -339,18 +319,19 @@ private fun ContenidoDetalle(
         }
 
         // ─── URL Card ───
-        // Auditoría UI 2: creadoEnMillis ya existía en el estado pero nunca
-        // se renderizaba — se presenta como "Analizado: dd/MM/yyyy · HH:mm".
+        // En versión histórica el chip muestra solo el nivelAlerta
+        // histórico — no el estado de bloqueo ACTUAL de la URL (que
+        // pertenece a la versión vigente).
         TarjetaUrl(
             escaneo = escaneo,
-            urlBloqueada = estado.urlBloqueada,
+            urlBloqueada = if (estado.esUltimaVersion) estado.urlBloqueada else false,
             fechaAnalisis = escaneo.creadoEnMillis
         )
 
         // ─── Verdict Card ───
         TarjetaVeredicto(escaneo = escaneo)
 
-        // ─── Actions ─── (solo en ultima version; los reescaneos son readOnly)
+        // ─── Actions ─── (solo en ultima version; los reescaneos son ReadOnly)
         if (estado.esUltimaVersion) {
             SeccionAcciones(
                 estado = estado,
@@ -361,10 +342,25 @@ private fun ContenidoDetalle(
                 onAbrirEnlace = onAbrirEnlace,
                 onMensaje = onMensaje
             )
+        } else {
+            // Versión histórica: única acción — eliminar SOLO esta versión
+            // (por id), no la cascada por URL.
+            BotonCyber(
+                texto = "Eliminar esta versión",
+                onClick = onSolicitarEliminarVersion,
+                icono = Icons.Filled.Delete,
+                contenedor = CyberRojo
+            )
         }
 
         // ─── Versions Card ───
-        if (estado.totalReescaneos > 0) {
+        // El gate esUltimaVersion ROMPE el loop de navegación DetalleUrl →
+        // AnalisisAnteriores → DetalleUrl → ... : desde una versión
+        // histórica no se vuelve a ofrecer "ver versiones" (la vuelta a
+        // AnalisisAnteriores es solo con back). Esto eliminó la ruta
+        // dedicada DETALLE_VERSION_ANTIGUA y su VM duplicado (auditoría
+        // frontend F1.1).
+        if (estado.esUltimaVersion && estado.totalReescaneos > 0) {
             TarjetaVersiones(
                 totalReescaneos = estado.totalReescaneos,
                 onClick = { onVerAnalisisAnteriores(escaneo.urlLimpia, escaneo.id) }
