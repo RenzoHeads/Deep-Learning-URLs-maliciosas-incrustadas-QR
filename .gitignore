@@ -9,12 +9,7 @@
 .superpowers/
 .zcode/
 .claude/
-docs/superpowers/
-docs/tech_spec.md
-docs/auditoria_pais_generico.md
-docs/modulos.md
-docs/navegacion.md
-docs/arquitectura.mmd
+docs/
 PLAN_IMPLEMENTACION_SEMINARIO2.md
 android/docs/
 android/lint_full.txt
