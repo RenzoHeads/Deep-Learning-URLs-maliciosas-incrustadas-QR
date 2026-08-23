@@ -115,7 +115,7 @@ def update_returning(
     table: str,
     eq_conds: list[tuple[str, Any]],
     ge_conds: list[tuple[str, str, Any]],
-    keyset_conds: list[tuple[str, Any, str, Any]],
+    keyset_conds: list[tuple[str, Any, str, Any, str]],
     is_null: list[str],
     is_not_null: list[str],
 ) -> list[FakeRecord]:

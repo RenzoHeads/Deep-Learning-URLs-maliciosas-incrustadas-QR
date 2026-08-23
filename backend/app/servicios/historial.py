@@ -151,11 +151,13 @@ async def listar_escaneos(
     offset: int = 0,
     modificados_desde: datetime | None = None,
     cursor_id: str | None = None,
+    orden: str = "asc",
 ) -> list[EscaneoRespuesta]:
     """Lista escaneos con filtro opcional y paginacion server-side.
 
-    Modos normal/delta/keyset: ver [app.consulta_listado.
-    construir_consulta_listado] — la semantica vive en un unico lugar.
+    Modos normal/delta/keyset (y keyset DESC de backfill): ver
+    [app.consulta_listado.construir_consulta_listado] — la semantica vive
+    en un unico lugar.
     """
     query, params = construir_consulta_listado(
         _SQL_SELECT_ESCANEO,
@@ -165,6 +167,7 @@ async def listar_escaneos(
         offset=offset,
         modificados_desde=modificados_desde,
         cursor_id=cursor_id,
+        orden=orden,
     )
     async with pool.acquire() as conexion:
         filas = await conexion.fetch(query, *params)

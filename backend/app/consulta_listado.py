@@ -31,6 +31,7 @@ def construir_consulta_listado(
     offset: int = 0,
     modificados_desde: datetime | None = None,
     cursor_id: str | None = None,
+    orden: str = "asc",
 ) -> tuple[str, list[Any]]:
     """Devuelve ``(query, params)`` para un listado con delta-sync.
 
@@ -47,6 +48,14 @@ def construir_consulta_listado(
       ``(updated_at, id) > (modificados_desde, cursor_id)`` — evita el
       refetch infinito de la fila limite y la perdida de filas por
       inserts concurrentes entre batches (Bug A1 fix). Sin OFFSET.
+    - Keyset DESC (``orden="desc"`` + ``modificados_desde``): backfill
+      inicial del cliente — mismo modo delta (incluye tombstones) pero
+      recorre el historial de lo MAS RECIENTE hacia atras. Sin
+      ``cursor_id`` arranca desde la fila mas nueva (sin condicion
+      keyset); con ``cursor_id`` compara estrictamente hacia atras:
+      ``(updated_at, id) < (modificados_desde, cursor_id)``. Sin OFFSET.
+      Solo tiene efecto junto a ``modificados_desde``; las ramas normal
+      y delta-legacy lo ignoran.
 
     Args:
         select_sql: constante SELECT de la tabla (con JOIN si aplica).
@@ -59,7 +68,23 @@ def construir_consulta_listado(
     params: list[Any] = [id_usuario]
 
     if modificados_desde is not None:
-        if cursor_id is not None:
+        if orden == "desc":
+            # Backfill: primera pagina sin cursor_id (desde la fila mas
+            # nueva), siguientes con keyset hacia atras. La comparacion
+            # espeja la del ASC (estricta en el tuple) para no repetir la
+            # fila limite ni saltarse filas del empate updated_at.
+            if cursor_id is not None:
+                condiciones.append(
+                    f"({a}updated_at < $2 OR ({a}updated_at = $2 AND {a}id::text < $3))"
+                )
+                params.extend([modificados_desde, cursor_id])
+            query = (
+                f"{select_sql} WHERE {' AND '.join(condiciones)} "
+                f"ORDER BY {a}updated_at DESC, {a}id DESC "
+                f"LIMIT ${len(params) + 1}"
+            )
+            params.append(limite)
+        elif cursor_id is not None:
             condiciones.append(
                 f"({a}updated_at > $2 OR ({a}updated_at = $2 AND {a}id::text > $3))"
             )

@@ -48,11 +48,13 @@ async def listar_urls_bloqueadas(
     offset: int = 0,
     modificados_desde: datetime | None = None,
     cursor_id: str | None = None,
+    orden: str = "asc",
 ) -> list[UrlBloqueadaRespuesta]:
     """Lista las URLs bloqueadas del usuario (delta sync).
 
-    Modos normal/delta/keyset: ver [app.consulta_listado.
-    construir_consulta_listado] — la semantica vive en un unico lugar.
+    Modos normal/delta/keyset (y keyset DESC de backfill): ver
+    [app.consulta_listado.construir_consulta_listado] — la semantica vive
+    en un unico lugar.
     """
     query, params = construir_consulta_listado(
         _SQL_SELECT_BLOQUEADA,
@@ -61,6 +63,7 @@ async def listar_urls_bloqueadas(
         offset=offset,
         modificados_desde=modificados_desde,
         cursor_id=cursor_id,
+        orden=orden,
     )
     async with pool.acquire() as conexion:
         filas = await conexion.fetch(query, *params)

@@ -20,7 +20,7 @@ def matches(
     row: dict,
     eq_conds: list[tuple[str, Any]] | None = None,
     ge_conds: list[tuple[str, str, Any]] | None = None,
-    keyset_conds: list[tuple[str, Any, str, Any]] | None = None,
+    keyset_conds: list[tuple[str, Any, str, Any, str]] | None = None,
     is_null: list[str] | None = None,
     is_not_null: list[str] | None = None,
     bool_conds: list[tuple[str, bool]] | None = None,
@@ -74,8 +74,9 @@ def matches(
                 if not (rv >= val):
                     return False
 
-    # Bug A1 fix (keyset pagination): (ts > V) OR (ts == V AND id > IV).
-    for ts_col, ts_val, id_col, id_val in keyset_conds:
+    # Bug A1 fix (keyset pagination): ASC — (ts > V) OR (ts == V AND id > IV).
+    # Backfill DESC: (ts < V) OR (ts == V AND id < IV) — espejo invertido.
+    for ts_col, ts_val, id_col, id_val, direccion in keyset_conds:
         rv_ts = row.get(ts_col)
         if rv_ts is None:
             return False
@@ -85,12 +86,23 @@ def matches(
                     ts_val = datetime.fromisoformat(str(ts_val))
                 except ValueError:
                     return False
-            ts_gt = rv_ts > ts_val
-            ts_eq = rv_ts == ts_val
+            if direccion == "desc":
+                ts_cmp = rv_ts < ts_val
+                ts_eq = rv_ts == ts_val
+            else:
+                ts_cmp = rv_ts > ts_val
+                ts_eq = rv_ts == ts_val
         else:
-            ts_gt = str(rv_ts) > str(ts_val)
-            ts_eq = str(rv_ts) == str(ts_val)
-        if not (ts_gt or (ts_eq and str(row.get(id_col, "")) > str(id_val))):
+            if direccion == "desc":
+                ts_cmp = str(rv_ts) < str(ts_val)
+                ts_eq = str(rv_ts) == str(ts_val)
+            else:
+                ts_cmp = str(rv_ts) > str(ts_val)
+                ts_eq = str(rv_ts) == str(ts_val)
+        rv_id = row.get(id_col, "")
+        rv_id = str(rv_id) if isinstance(rv_id, uuid.UUID) else str(rv_id)
+        id_ok = (rv_id < str(id_val)) if direccion == "desc" else (rv_id > str(id_val))
+        if not (ts_cmp or (ts_eq and id_ok)):
             return False
 
     for col in is_null:
@@ -119,14 +131,14 @@ def parse_conditions(
     Returns:
         eq_conds: lista de (col, val) para condiciones de igualdad.
         ge_conds: lista de (col, ">=", val) para condiciones >= (delta sync).
-        keyset_conds: lista de (ts_col, ts_val, id_col, id_val) para la
-            condicion keyset (Bug A1 fix).
+        keyset_conds: lista de (ts_col, ts_val, id_col, id_val, direccion)
+            para la condicion keyset (Bug A1 fix ASC + backfill DESC).
         bool_conds: lista de (col, val) para literales booleanos
             (``es_malicioso = false`` / ``= true``).
     """
     eq_conds: list[tuple[str, Any]] = []
     ge_conds: list[tuple[str, str, Any]] = []
-    keyset_conds: list[tuple[str, Any, str, Any]] = []
+    keyset_conds: list[tuple[str, Any, str, Any, str]] = []
     bool_conds: list[tuple[str, bool]] = []
 
     # Strip SET clause from UPDATE so `col = $N` in SET is not mistaken
@@ -139,19 +151,21 @@ def parse_conditions(
     if m_set_strip:
         sql = sql[: m_set_strip.start()] + " " + sql[m_set_strip.end():]
 
-    # Bug A1 fix: keyset pagination
+    # Bug A1 fix (keyset ASC) + backfill DESC: el operador (< o >) decide
+    # la direccion de la comparacion compuesta.
     m_ks = re.search(
-        r"\(\s*(?:[\w_]+\.)?([\w_]+)\s*>\s*\$(\d+)\s+OR\s+"
+        r"\(\s*(?:[\w_]+\.)?([\w_]+)\s*([<>])\s*\$(\d+)\s+OR\s+"
         r"\(\s*(?:[\w_]+\.)?\1\s*=\s*\$(\d+)\s+AND\s+"
-        r"(?:[\w_]+\.)?([\w_]+)(?:::\w+)?\s*>\s*\$(\d+)\s*\)\s*\)",
+        r"(?:[\w_]+\.)?([\w_]+)(?:::\w+)?\s*\2\s*\$(\d+)\s*\)\s*\)",
         sql,
         flags=re.IGNORECASE,
     )
     if m_ks:
-        ts_col, ts_gt_idx, ts_eq_idx, id_col, id_gt_idx = m_ks.groups()
+        ts_col, operador, _ts_gt_idx, ts_eq_idx, id_col, id_gt_idx = m_ks.groups()
         ts_val = params[int(ts_eq_idx) - 1]
         id_val = params[int(id_gt_idx) - 1]
-        keyset_conds.append((ts_col, ts_val, id_col, id_val))
+        direccion = "desc" if operador == "<" else "asc"
+        keyset_conds.append((ts_col, ts_val, id_col, id_val, direccion))
         sql = sql[: m_ks.start()] + " " + sql[m_ks.end():]
 
     for m in re.finditer(r"([\w_]+)\s*=\s*\$(\d+)", sql, flags=re.IGNORECASE):

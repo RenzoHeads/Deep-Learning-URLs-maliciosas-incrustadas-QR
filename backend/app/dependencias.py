@@ -16,7 +16,7 @@ ForwardRef) para extraer los query params de ``ParamsListado.__init__``.
 """
 import logging
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 import asyncpg
 from fastapi import Depends, Query, Request
@@ -83,11 +83,21 @@ class ParamsListado:
                         "devuelve solo filas con (updated_at, id) > "
                         "(modificados_desde, cursor_id) — sin OFFSET."
         )] = None,
+        orden: Annotated[Literal["asc", "desc"], Query(
+            description="Direccion del keyset pagination en modo delta. "
+                        "'desc' sirve al backfill inicial del cliente: la "
+                        "primera pagina (sin cursor_id) trae lo MAS RECIENTE "
+                        "primero, y cada pagina posterior avanza hacia atras "
+                        "con (updated_at, id) < (modificados_desde, cursor_id). "
+                        "Solo aplica junto a modificados_desde; las demas "
+                        "ramas lo ignoran. Default 'asc' (delta incremental)."
+        )] = "asc",
     ):
         self.limite = limite
         self.offset = offset
         self.modificados_desde = modificados_desde
         self.cursor_id = cursor_id
+        self.orden = orden
 
 
 #: ParamsListado inyectado: ``params: Annotated[ParamsListado, Depends()]``.

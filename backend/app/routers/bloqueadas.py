@@ -43,6 +43,7 @@ async def listar_urls_bloqueadas(
         offset=params.offset,
         modificados_desde=params.modificados_desde,
         cursor_id=params.cursor_id,
+        orden=params.orden,
     )
 
 

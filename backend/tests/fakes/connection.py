@@ -103,16 +103,24 @@ class FakeConnection:
                 eq_conds, ge_conds, keyset_conds, is_null, is_not_null,
             )
 
-        # SELECT normal: ordenar segun modo (delta vs normal).
-        if ge_conds or keyset_conds:
+        # SELECT normal: ordenar segun modo (delta vs normal). El ORDER BY
+        # del SQL decide — delta ASC (default), delta DESC (backfill, sin
+        # ge/keyset conds en la primera pagina) o normal por creado_en DESC.
+        m_delta = re.search(
+            r"ORDER\s+BY\s+(?:[\w_]+\.)?updated_at\s+(ASC|DESC)",
+            sql,
+            flags=re.IGNORECASE,
+        )
+        if m_delta or ge_conds or keyset_conds:
             def _key_delta(r: dict) -> Any:
                 ua = r.get("updated_at")
                 if ua is None:
                     ua = r.get("creado_en") or datetime.min.replace(tzinfo=timezone.utc)
-                if keyset_conds:
-                    return (ua, str(r.get("id", "")))
-                return ua
-            matched_sorted = sorted(matched, key=_key_delta)
+                # Tiebreaker por id siempre presente — el ORDER BY real
+                # siempre desempata por id (ASC o DESC segun direccion).
+                return (ua, str(r.get("id", "")))
+            reverse = bool(m_delta) and m_delta.group(1).upper() == "DESC"
+            matched_sorted = sorted(matched, key=_key_delta, reverse=reverse)
         else:
             def _key(r: dict) -> Any:
                 ce = r.get("creado_en")
