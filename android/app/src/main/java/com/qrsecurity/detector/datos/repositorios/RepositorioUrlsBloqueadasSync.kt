@@ -48,11 +48,10 @@ suspend fun RepositorioUrlsBloqueadas.sincronizarBackfill(
                 token, cursorTs, LIMITE_PAGINA, cursorId = cursorId, orden = "desc"
             )
         },
-        aplicarPrimerBatch = { delta, ahora ->
-            aplicarBatchUrlsBloqueadasBackfill(delta, ahora, fijarCursorIncremental = true)
-        },
-        aplicarBatch = { delta, ahora ->
-            aplicarBatchUrlsBloqueadasBackfill(delta, ahora, fijarCursorIncremental = false)
+        // RC3: UNA tx por corrida con todas las paginas acumuladas (ver
+        // RepositorioEscaneos.sincronizarBackfill).
+        applyBatch = { delta, ahora ->
+            aplicarBatchUrlsBloqueadasBackfill(delta, ahora, fijarCursorIncremental = cursorBackfill == null)
         },
         extraerCursor = { url -> url.updatedAt?.let { ts -> CursorDelta(ts, url.id) } },
         mensajeError = "Error en backfill de URLs bloqueadas"

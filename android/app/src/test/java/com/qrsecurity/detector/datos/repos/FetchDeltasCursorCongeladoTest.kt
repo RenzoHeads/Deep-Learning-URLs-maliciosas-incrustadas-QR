@@ -5,6 +5,7 @@ import com.qrsecurity.detector.datos.repositorios.ResultadoSync
 import com.qrsecurity.detector.datos.repositorios.fetchDeltas
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -98,5 +99,87 @@ class FetchDeltasCursorCongeladoTest {
             val exitoso = resultado as ResultadoSync.Exitoso
             assertTrue(exitoso.pullCompleto)
             assertFalse(exitoso.masPorSincronizar)
+        }
+
+    // ──────────────────────────────────────────────────────────────
+    // RC3 — coalescing: TODAS las paginas de la corrida se aplican en UNA
+    // sola invocacion de applyBatch (una tx Room por tabla/fase). Antes cada
+    // pagina era su propia tx: ~20 invalidaciones por worker-run colapsaban
+    // el PagingData del Historial/Analisis (parpadeo de lista vacia).
+    // ──────────────────────────────────────────────────────────────
+
+    @Test
+    fun `paginas multiples se aplican en UN solo batch coalescido`() =
+        runTest(testDispatcher) {
+            // 3 paginas: dos llenas + una corta (fin del stream).
+            val paginas = listOf(
+                listOf(
+                    FilaDelta("a1", "2026-01-01T00:00:00Z"),
+                    FilaDelta("a2", "2026-01-02T00:00:00Z")
+                ),
+                listOf(
+                    FilaDelta("b1", "2026-01-03T00:00:00Z"),
+                    FilaDelta("b2", "2026-01-04T00:00:00Z")
+                ),
+                listOf(FilaDelta("c1", "2026-01-05T00:00:00Z"))
+            )
+            var pagina = 0
+            val batchesAplicados = mutableListOf<List<FilaDelta>>()
+
+            val resultado = fetchDeltas(
+                ioDispatcher = testDispatcher,
+                cursor = CursorDelta.EPOCH.aString(),
+                limitePagina = 2,
+                maxPaginasPorRun = 5,
+                fetchDelta = { _, _ -> paginas[pagina++] },
+                applyBatch = { batch, _ ->
+                    batchesAplicados += batch
+                    batch.map { it.id }
+                },
+                extraerCursor = { fila ->
+                    fila.updatedAt?.let { CursorDelta(it, fila.id) }
+                },
+                mensajeError = "error test"
+            )
+
+            val exitoso = resultado as ResultadoSync.Exitoso
+            assertEquals(5, exitoso.filaSincronizadas)
+            assertEquals(listOf("a1", "a2", "b1", "b2", "c1"), exitoso.idsServidor)
+            assertEquals(
+                "las 3 paginas deben aplicarse en UNA sola invocacion (una tx)",
+                1,
+                batchesAplicados.size
+            )
+            assertEquals(
+                "el batch coalescido contiene las paginas concatenadas en orden",
+                listOf("a1", "a2", "b1", "b2", "c1"),
+                batchesAplicados.first().map { it.id }
+            )
+            assertTrue(exitoso.pullCompleto)
+        }
+
+    @Test
+    fun `primera pagina vacia no invoca el applier`() =
+        runTest(testDispatcher) {
+            var batchesAplicados = 0
+
+            val resultado = fetchDeltas(
+                ioDispatcher = testDispatcher,
+                cursor = CursorDelta.EPOCH.aString(),
+                limitePagina = 2,
+                maxPaginasPorRun = 5,
+                fetchDelta = { _, _ -> emptyList<FilaDelta>() },
+                applyBatch = { _, _ ->
+                    batchesAplicados++
+                    emptyList<String>()
+                },
+                extraerCursor = { null },
+                mensajeError = "error test"
+            )
+
+            val exitoso = resultado as ResultadoSync.Exitoso
+            assertEquals(0, exitoso.filaSincronizadas)
+            assertTrue(exitoso.pullCompleto)
+            assertEquals("sin filas no hay tx que aplicar", 0, batchesAplicados)
         }
 }

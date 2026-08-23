@@ -19,12 +19,15 @@ private data class FilaBackfill(val id: String, val updatedAt: String?)
 /**
  * Backfill DESC (v10) — tests de [fetchBackfill].
  *
- *  1. Primera pagina (cursor null) se pide SIN cursor_id y usa
- *     aplicarPrimerBatch (fija cursor incremental); siguientes avanzan el
- *     cursor de backfill con la ULTIMA fila (la mas vieja de la pagina).
+ *  1. Primera pagina (cursor null) se pide SIN cursor_id y las siguientes
+ *     retroceden con keyset DESC hacia la fila mas vieja.
  *  2. Pagina corta = fin del historial → pullCompleto=true.
  *  3. Presupuesto de paginas agotado → masPorSincronizar=true.
  *  4. Guard de cursor congelado (espejo del S4 de fetchDeltas).
+ *  5. RC3 (coalescing): TODAS las paginas de la corrida se aplican en UNA
+ *     sola invocacion de applyBatch, con la lista concatenada en orden DESC
+ *     (first = mas nueva, last = mas vieja) — una sola transaccion Room por
+ *     tabla/fase, en vez de una por pagina (causa del parpadeo de listas).
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33], application = com.qrsecurity.detector.TestApplication::class)
@@ -46,7 +49,7 @@ class FetchBackfillTest {
                 )
             )
             val peticiones = mutableListOf<Pair<String, String?>>()
-            var primerBatchAplicado = false
+            val batchesAplicados = mutableListOf<List<FilaBackfill>>()
 
             val resultado = fetchBackfill(
                 ioDispatcher = testDispatcher,
@@ -57,11 +60,10 @@ class FetchBackfillTest {
                     peticiones.add(ts to id)
                     paginas[id]!!
                 },
-                aplicarPrimerBatch = { batch, _ ->
-                    primerBatchAplicado = true
+                applyBatch = { batch, _ ->
+                    batchesAplicados += batch
                     batch.map { it.id }
                 },
-                aplicarBatch = { batch, _ -> batch.map { it.id } },
                 extraerCursor = { fila ->
                     fila.updatedAt?.let { CursorDelta(it, fila.id) }
                 },
@@ -77,7 +79,18 @@ class FetchBackfillTest {
                 ),
                 peticiones
             )
-            assertTrue("la primera pagina debe usar aplicarPrimerBatch", primerBatchAplicado)
+            // RC3: un UNICO batch con las dos paginas concatenadas en orden
+            // DESC — first()=c (la mas nueva, semilla incremental),
+            // last()=a (la mas vieja, cursor backfill).
+            assertEquals(
+                "todas las paginas deben aplicarse en UNA sola invocacion coalescida",
+                1,
+                batchesAplicados.size
+            )
+            assertEquals(
+                listOf("c", "b", "a"),
+                batchesAplicados.first().map { it.id }
+            )
             assertTrue(resultado is ResultadoSync.Exitoso)
             val exitoso = resultado as ResultadoSync.Exitoso
             assertEquals(3, exitoso.filaSincronizadas)
@@ -87,41 +100,14 @@ class FetchBackfillTest {
         }
 
     @Test
-    fun `continuacion con cursor persistido NO usa aplicarPrimerBatch`() =
-        runTest(testDispatcher) {
-            var primerBatchAplicado = false
-            val paginaCorta = listOf(FilaBackfill("a", "2026-01-01T00:00:00Z"))
-
-            val resultado = fetchBackfill(
-                ioDispatcher = testDispatcher,
-                cursorBackfill = "2026-02-01T00:00:00Z|b",
-                limitePagina = 2,
-                maxPaginasPorRun = 5,
-                fetchPagina = { _, _ -> paginaCorta },
-                aplicarPrimerBatch = { _, _ ->
-                    primerBatchAplicado = true
-                    emptyList()
-                },
-                aplicarBatch = { batch, _ -> batch.map { it.id } },
-                extraerCursor = { fila ->
-                    fila.updatedAt?.let { CursorDelta(it, fila.id) }
-                },
-                mensajeError = "error test"
-            )
-
-            assertFalse("con cursor persistido la primera pagina es una continuacion", primerBatchAplicado)
-            assertTrue(resultado is ResultadoSync.Exitoso)
-            assertEquals(1, (resultado as ResultadoSync.Exitoso).filaSincronizadas)
-        }
-
-    @Test
-    fun `presupuesto de paginas agotado deja masPorSincronizar true`() =
+    fun `presupuesto de paginas agotado aplica un solo batch y deja masPorSincronizar true`() =
         runTest(testDispatcher) {
             // Backend devuelve SIEMPRE paginas llenas (historial enorme).
             val paginaLlena = listOf(
                 FilaBackfill("x1", "2026-03-01T00:00:00Z"),
                 FilaBackfill("x2", "2026-02-01T00:00:00Z")
             )
+            val batchesAplicados = mutableListOf<List<FilaBackfill>>()
 
             val resultado = fetchBackfill(
                 ioDispatcher = testDispatcher,
@@ -129,8 +115,10 @@ class FetchBackfillTest {
                 limitePagina = 2,
                 maxPaginasPorRun = 3,
                 fetchPagina = { _, _ -> paginaLlena },
-                aplicarPrimerBatch = { batch, _ -> batch.map { it.id } },
-                aplicarBatch = { batch, _ -> batch.map { it.id } },
+                applyBatch = { batch, _ ->
+                    batchesAplicados += batch
+                    batch.map { it.id }
+                },
                 extraerCursor = { fila ->
                     fila.updatedAt?.let { CursorDelta(it, fila.id) }
                 },
@@ -141,6 +129,12 @@ class FetchBackfillTest {
             assertEquals(6, exitoso.filaSincronizadas)
             assertTrue(exitoso.masPorSincronizar)
             assertFalse(exitoso.pullCompleto)
+            assertEquals(
+                "agotar el presupuesto tambien debe coalescer en UNA invocacion",
+                1,
+                batchesAplicados.size
+            )
+            assertEquals(6, batchesAplicados.first().size)
         }
 
     @Test
@@ -158,8 +152,7 @@ class FetchBackfillTest {
                 limitePagina = 2,
                 maxPaginasPorRun = 5,
                 fetchPagina = { _, _ -> pagina },
-                aplicarPrimerBatch = { batch, _ -> batch.map { it.id } },
-                aplicarBatch = { batch, _ -> batch.map { it.id } },
+                applyBatch = { batch, _ -> batch.map { it.id } },
                 extraerCursor = { fila ->
                     fila.updatedAt?.let { CursorDelta(it, fila.id) }
                 },
@@ -175,16 +168,20 @@ class FetchBackfillTest {
         }
 
     @Test
-    fun `cuenta vacia devuelve exitoso sin filas y pullCompleto true`() =
+    fun `cuenta vacia devuelve exitoso sin filas ni aplicacion de batch`() =
         runTest(testDispatcher) {
+            var batchesAplicados = 0
+
             val resultado = fetchBackfill<FilaBackfill>(
                 ioDispatcher = testDispatcher,
                 cursorBackfill = null,
                 limitePagina = 2,
                 maxPaginasPorRun = 5,
                 fetchPagina = { _, _ -> emptyList() },
-                aplicarPrimerBatch = { _, _ -> emptyList() },
-                aplicarBatch = { _, _ -> emptyList() },
+                applyBatch = { _, _ ->
+                    batchesAplicados++
+                    emptyList()
+                },
                 extraerCursor = { null },
                 mensajeError = "error test"
             )
@@ -193,11 +190,16 @@ class FetchBackfillTest {
             assertEquals(0, exitoso.filaSincronizadas)
             assertTrue(exitoso.pullCompleto)
             assertFalse(exitoso.masPorSincronizar)
+            assertEquals(
+                "con la primera pagina vacia no debe invocarse el applier (sin tx)",
+                0,
+                batchesAplicados
+            )
         }
 
     // ── T1 (v10 + review) — validacion runtime de que la primera pagina del
     //    backfill llega DESCENDENTE. Backend legacy que ignora `orden=desc`
-    //    devuelve ASC: si el cliente lo tomara como DESC fijaria el cursor
+    //    devuelve ASC: si el cliente lo tratara como DESC fijaria el cursor
     //    incremental a la fila mas VIEJA y los deltas futuros arrancarian mal.
     //    Regla: solo marca ASC estricto (first.ts estrictamente < last.ts);
     //    EMPATES pasan (los multi-INSERT del backend comparten updated_at en
@@ -212,7 +214,6 @@ class FetchBackfillTest {
                 FilaBackfill("a", "2026-01-01T00:00:00Z"),
                 FilaBackfill("b", "2026-03-01T00:00:00Z")
             )
-            var primerBatchInvocado = false
             var batchInvocado = false
 
             val resultado = fetchBackfill(
@@ -221,13 +222,9 @@ class FetchBackfillTest {
                 limitePagina = 2,
                 maxPaginasPorRun = 5,
                 fetchPagina = { _, _ -> paginaAsc },
-                aplicarPrimerBatch = { batch, _ ->
-                    primerBatchInvocado = true
-                    batch.map { it.id }
-                },
-                aplicarBatch = { batch, _ ->
+                applyBatch = { _, _ ->
                     batchInvocado = true
-                    batch.map { it.id }
+                    emptyList()
                 },
                 extraerCursor = { fila ->
                     fila.updatedAt?.let { CursorDelta(it, fila.id) }
@@ -237,11 +234,7 @@ class FetchBackfillTest {
 
             assertTrue("debe abortar como Fallido ante backend legacy", resultado is ResultadoSync.Fallido)
             assertFalse(
-                "ningun batch debe aplicarse si la primera pagina no es descendente",
-                primerBatchInvocado
-            )
-            assertFalse(
-                "ningun batch de continuacion debe aplicarse",
+                "ninguna fila debe aplicarse si la primera pagina no es descendente",
                 batchInvocado
             )
         }
@@ -257,7 +250,7 @@ class FetchBackfillTest {
                 FilaBackfill("a", "2026-03-01T00:00:00Z"),
                 FilaBackfill("b", "2026-03-01T00:00:00Z")
             )
-            var primerBatchInvocado = false
+            var batchesAplicados = 0
 
             val resultado = fetchBackfill(
                 ioDispatcher = testDispatcher,
@@ -266,11 +259,10 @@ class FetchBackfillTest {
                 maxPaginasPorRun = 5,
                 // Segunda pagina vacia (fin de historial) tras la primera.
                 fetchPagina = { _, id -> if (id == null) paginaEmpate else emptyList() },
-                aplicarPrimerBatch = { batch, _ ->
-                    primerBatchInvocado = true
-                    batch.map { it.id }
+                applyBatch = { _, _ ->
+                    batchesAplicados++
+                    listOf("a", "b")
                 },
-                aplicarBatch = { batch, _ -> batch.map { it.id } },
                 extraerCursor = { fila ->
                     fila.updatedAt?.let { CursorDelta(it, fila.id) }
                 },
@@ -278,7 +270,7 @@ class FetchBackfillTest {
             )
 
             assertTrue("el empate no debe marcar legacy: Exitoso", resultado is ResultadoSync.Exitoso)
-            assertTrue("la primera pagina (aunque empatada) debe aplicarse", primerBatchInvocado)
+            assertTrue("la pagina (aunque empatada) debe aplicarse", batchesAplicados == 1)
             val exitoso = resultado as ResultadoSync.Exitoso
             assertEquals(2, exitoso.filaSincronizadas)
         }
@@ -287,7 +279,7 @@ class FetchBackfillTest {
     fun `primera pagina de una sola fila NO valida direccion`() =
         runTest(testDispatcher) {
             // size < 2: no hay pares que comparar — flujo normal.
-            var primerBatchInvocado = false
+            var batchesAplicados = 0
 
             val resultado = fetchBackfill(
                 ioDispatcher = testDispatcher,
@@ -297,11 +289,10 @@ class FetchBackfillTest {
                 fetchPagina = { _, _ ->
                     listOf(FilaBackfill("a", "2026-01-01T00:00:00Z"))
                 },
-                aplicarPrimerBatch = { batch, _ ->
-                    primerBatchInvocado = true
-                    batch.map { it.id }
+                applyBatch = { _, _ ->
+                    batchesAplicados++
+                    listOf("a")
                 },
-                aplicarBatch = { batch, _ -> batch.map { it.id } },
                 extraerCursor = { fila ->
                     fila.updatedAt?.let { CursorDelta(it, fila.id) }
                 },
@@ -309,7 +300,7 @@ class FetchBackfillTest {
             )
 
             assertTrue("pagina corta de 1 fila = Exitoso", resultado is ResultadoSync.Exitoso)
-            assertTrue(primerBatchInvocado)
+            assertTrue(batchesAplicados == 1)
             assertEquals(1, (resultado as ResultadoSync.Exitoso).filaSincronizadas)
         }
 
@@ -319,7 +310,7 @@ class FetchBackfillTest {
             // Si la primera o ultima fila no trae updatedAt, no hay ts para
             // comparar — skip de la validacion y flujo normal (el guard de
             // cursor congelado existente cubre el resto).
-            var primerBatchInvocado = false
+            var batchesAplicados = 0
 
             val resultado = fetchBackfill(
                 ioDispatcher = testDispatcher,
@@ -336,11 +327,10 @@ class FetchBackfillTest {
                         emptyList()
                     }
                 },
-                aplicarPrimerBatch = { batch, _ ->
-                    primerBatchInvocado = true
-                    batch.map { it.id }
+                applyBatch = { _, _ ->
+                    batchesAplicados++
+                    listOf("a", "b")
                 },
-                aplicarBatch = { batch, _ -> batch.map { it.id } },
                 extraerCursor = { fila ->
                     fila.updatedAt?.let { CursorDelta(it, fila.id) }
                 },
@@ -348,7 +338,7 @@ class FetchBackfillTest {
             )
 
             assertTrue("updatedAt null en extremo = skip validacion, Exitoso", resultado is ResultadoSync.Exitoso)
-            assertTrue(primerBatchInvocado)
+            assertTrue(batchesAplicados == 1)
             assertEquals(2, (resultado as ResultadoSync.Exitoso).filaSincronizadas)
         }
 
@@ -357,7 +347,7 @@ class FetchBackfillTest {
         runTest(testDispatcher) {
             // Timestamp corrupto en el extremo: el runCatching de la
             // validacion debe degradar a "no validable" (skip) sin lanzar.
-            var primerBatchInvocado = false
+            var batchesAplicados = 0
 
             val resultado = fetchBackfill(
                 ioDispatcher = testDispatcher,
@@ -374,11 +364,10 @@ class FetchBackfillTest {
                         emptyList()
                     }
                 },
-                aplicarPrimerBatch = { batch, _ ->
-                    primerBatchInvocado = true
-                    batch.map { it.id }
+                applyBatch = { _, _ ->
+                    batchesAplicados++
+                    listOf("a", "b")
                 },
-                aplicarBatch = { batch, _ -> batch.map { it.id } },
                 extraerCursor = { fila ->
                     fila.updatedAt?.let { CursorDelta(it, fila.id) }
                 },
@@ -386,7 +375,7 @@ class FetchBackfillTest {
             )
 
             assertTrue("ts no parseable = skip validacion, Exitoso (sin crash)", resultado is ResultadoSync.Exitoso)
-            assertTrue(primerBatchInvocado)
+            assertTrue(batchesAplicados == 1)
             assertEquals(2, (resultado as ResultadoSync.Exitoso).filaSincronizadas)
         }
 }

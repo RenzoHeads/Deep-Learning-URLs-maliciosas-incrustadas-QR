@@ -65,11 +65,13 @@ suspend fun RepositorioEscaneos.sincronizarBackfill(
                 token, cursorTs, LIMITE_PAGINA, cursorId = cursorId, orden = "desc"
             )
         },
-        aplicarPrimerBatch = { delta, ahora ->
-            aplicarBatchEscaneosBackfill(delta, ahora, fijarCursorIncremental = true)
-        },
-        aplicarBatch = { delta, ahora ->
-            aplicarBatchEscaneosBackfill(delta, ahora, fijarCursorIncremental = false)
+        // RC3: UNA tx por corrida con todas las paginas acumuladas. La
+        // semilla del cursor incremental (first() de la acumulacion = fila
+        // mas NUEVA) solo se intenta en la primera corrida del backfill
+        // (cursorBackfill == null) — en continuaciones el cursor incremental
+        // ya fue fijado (o no hay fila primera valida), igual que antes.
+        applyBatch = { delta, ahora ->
+            aplicarBatchEscaneosBackfill(delta, ahora, fijarCursorIncremental = cursorBackfill == null)
         },
         extraerCursor = { escaneo ->
             escaneo.updatedAt?.let { ts -> CursorDelta(ts, escaneo.id) }
@@ -149,11 +151,13 @@ internal suspend fun RepositorioEscaneos.aplicarBatchEscaneos(
 }
 
 /**
- * Aplica un batch del backfill DESC: filas + cursor de backfill (ultima
- * fila = la mas vieja de la pagina) y, en la primera pagina
- * ([fijarCursorIncremental]), el cursor incremental ASC al timestamp mas
- * nuevo visto (primera fila) — solo si aun no habia cursor incremental
- * (no pisa uno ya avanzado por deltas o writes posteriores).
+ * Aplica la ACUMULACION coalescida del backfill DESC (RC3: una sola tx por
+ * corrida — el caller pasa TODAS las paginas concatenadas en orden DESC):
+ * filas + cursor de backfill (ultima fila = la mas vieja de la corrida) y,
+ * en la primera corrida ([fijarCursorIncremental]), el cursor incremental
+ * ASC al timestamp mas nuevo visto (primera fila de la acumulacion) — solo
+ * si aun no habia cursor incremental (no pisa uno ya avanzado por deltas o
+ * writes posteriores).
  */
 internal suspend fun RepositorioEscaneos.aplicarBatchEscaneosBackfill(
     delta: List<ClienteBackend.Escaneo>,

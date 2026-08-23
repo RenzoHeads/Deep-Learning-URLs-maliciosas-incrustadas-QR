@@ -123,20 +123,31 @@ internal suspend fun BaseDatosSeguridad.asegurarFilaSyncState(tabla: String) {
  * Flujo:
  *  - Parsing del cursor (epoch = full pull paginado).
  *  - Loop hasta [maxPaginasPorRun] paginas o hasta batch incompleto.
- *  - Tras cada batch, llama [applyBatch] (tx Room — upsert/tombstone/cursor).
+ *  - RC3 fix (parpadeo de listas): las paginas se ACUMULAN en memoria y al
+ *    terminar el loop se aplica TODO en una UNICA llamada a [applyBatch]
+ *    (una sola transaccion Room). Antes cada pagina era su propia tx: con
+ *    MAX_PAGINAS_POR_RUN=5 x 2 fases x 2 tablas eran ~20 invalidaciones del
+ *    InvalidationTracker por worker-run, y cada una regeneraba el
+ *    PagingData del Historial/Analisis (refresh=Loading, itemCount=0)
+ *    produciendo flashes de lista vacia ante el usuario. La semantica de
+ *    cursores no cambia: el cursor sale de la ULTIMA fila del ULTIMO batch
+ *    — con la lista concatenada es exactamente la misma fila.
  *  - Si el batch vino con [limitePagina] filas y hay mas, actualiza cursor
  *    con `extraerCursor(ultima)` y continua; si no, break.
  *  - Devuelve [ResultadoSync.Exitoso] con `masPorSincronizar` true si se
  *    llego al limite de paginas (trabajo queda pendiente).
+ *
+ * Presupuesto de memoria: <= maxPaginasPorRun * limitePagina filas en
+ * memoria (<=1000 con los valores por defecto de [PaginacionSync]).
  *
  * @param ioDispatcher dispatcher para withContext.
  * @param cursor cursor "ts|id" persistido en `sync_state` (epoch = full pull).
  * @param limitePagina tamano de pagina (200 por defecto en los repos).
  * @param maxPaginasPorRun maximo de paginas por worker-run (5 por defecto).
  * @param fetchDelta lambda que llama al endpoint paginado del backend.
- * @param applyBatch lambda que aplica el batch en una tx Room y devuelve
- *     los IDs de las filas vivas (para que [limpiarHuerfanos] haga cleanup
- *     tras un full pull).
+ * @param applyBatch lambda aplica TODAS las filas acumuladas en una tx Room
+ *     y devuelve los IDs de las filas vivas (para que [limpiarHuerfanos]
+ *     haga cleanup tras un full pull).
  * @param extraerCursor lambda que extrae el cursor de la ultima fila del
  *     batch, o `null` si `updatedAt` es `null`.
  * @param mensajeError mensaje para [ResultadoSync.Fallido] generico (no HTTP).
@@ -157,13 +168,13 @@ internal suspend fun <T> fetchDeltas(
         val todosIdsServidor = mutableListOf<String>()
         var masPorSincronizar = false
         val ahora = System.currentTimeMillis()
+        val paginasAcumuladas = mutableListOf<T>()
 
         for (pagina in 1..maxPaginasPorRun) {
             val delta = fetchDelta(cursorActual.ts, cursorActual.id)
             if (delta.isEmpty()) break
 
-            val batchIds = applyBatch(delta, ahora)
-            todosIdsServidor.addAll(batchIds)
+            paginasAcumuladas.addAll(delta)
             totalFilas += delta.size
 
             if (delta.size < limitePagina) break
@@ -194,6 +205,13 @@ internal suspend fun <T> fetchDeltas(
             if (pagina == maxPaginasPorRun) masPorSincronizar = true
         }
 
+        // RC3: UNA transaccion por tabla/fase — el applier deduce el cursor
+        // de la ultima fila (misma que pagina-por-pagina). Con acumulacion
+        // vacia (primera pagina vacia) no se escribe nada, igual que antes.
+        if (paginasAcumuladas.isNotEmpty()) {
+            todosIdsServidor.addAll(applyBatch(paginasAcumuladas, ahora))
+        }
+
         ResultadoSync.Exitoso(
             filaSincronizadas = totalFilas,
             idsServidor = todosIdsServidor,
@@ -220,16 +238,24 @@ internal suspend fun <T> fetchDeltas(
  *
  * Espejo de [fetchDeltas] con la direccion invertida:
  *  - Primera pagina ([cursorBackfill] null): sin cursor_id — el backend
- *    devuelve desde la fila mas nueva. [aplicarPrimerBatch] aplica el batch
- *    Y fija de inmediato el cursor incremental ASC al timestamp mas nuevo
- *    visto (primera fila de la pagina) — los deltas incrementales pueden
- *    correr en corridas siguientes sin esperar el backfill completo.
+ *    devuelve desde la fila mas nueva. El applier debe fijar de inmediato
+ *    el cursor incremental ASC al timestamp mas nuevo visto (primera fila
+ *    de la acumulacion) — los deltas incrementales pueden correr en
+ *    corridas siguientes sin esperar el backfill completo. El repos decide
+ *    si fija ese cursor via `fijarCursorIncremental = cursorBackfill == null`.
  *  - Paginas siguientes: keyset hacia atras `(updated_at, id) < (ts, id)`
- *    con el cursor persistido; [aplicarBatch] avanza solo el cursor backfill.
+ *    con el cursor persistido.
  *  - Pagina corta = fin del historial (`pullCompleto=true`; el caller
  *    persiste el centinela [BackfillDelta.COMPLETADO]).
  *  - Mismo presupuesto [maxPaginasPorRun] y mismo guard de cursor congelado
  *    (pagina llena sin updatedAt en la ultima fila).
+ *
+ * RC3 fix (parpadeo de listas): igual que [fetchDeltas], las paginas se
+ * ACUMULAN y se aplican en una UNICA llamada a [applyBatch] al terminar —
+ * una sola transaccion (y una sola invalidacion de Room) por tabla/fase,
+ * en vez de una por pagina. El applier recibe la lista concatenada en
+ * orden DESC: `delta.first()` es la fila mas NUEVA de la corrida (semilla
+ * del cursor incremental) y `delta.last()` la mas VIEJA (cursor backfill).
  *
  * @param cursorBackfill "ts|id" persistido (null = arrancar desde lo mas nuevo).
  */
@@ -239,8 +265,7 @@ internal suspend fun <T> fetchBackfill(
     limitePagina: Int,
     maxPaginasPorRun: Int,
     fetchPagina: suspend (cursorTs: String, cursorId: String?) -> List<T>,
-    aplicarPrimerBatch: suspend (List<T>, Long) -> List<String>,
-    aplicarBatch: suspend (List<T>, Long) -> List<String>,
+    applyBatch: suspend (List<T>, Long) -> List<String>,
     extraerCursor: (T) -> CursorDelta?,
     mensajeError: String
 ): ResultadoSync = withContext(ioDispatcher) {
@@ -251,6 +276,7 @@ internal suspend fun <T> fetchBackfill(
         val todosIdsServidor = mutableListOf<String>()
         var masPorSincronizar = false
         val ahora = System.currentTimeMillis()
+        val paginasAcumuladas = mutableListOf<T>()
 
         for (pagina in 1..maxPaginasPorRun) {
             val delta = fetchPagina(cursorActual.ts, cursorActual.id)
@@ -271,7 +297,7 @@ internal suspend fun <T> fetchBackfill(
             // no parseable o null en algun extremo => "no validable": skip.
             //
             // Al detectar legacy aborta como transitorio (Fallido codigo=null
-            // -> Result.retry() en el worker) SIN invocar aplicadores NI
+            // -> Result.retry() en el worker) SIN invocar el applier NI
             // escribir cursores: la siguiente corrida re-intenta; mientras el
             // backend no despliegue `orden=desc`, el bucle es un retry
             // inofensivo (REPLACE idempotente) con log visible.
@@ -298,14 +324,9 @@ internal suspend fun <T> fetchBackfill(
                 }
             }
 
-            val batchIds = if (primeraPagina) {
-                aplicarPrimerBatch(delta, ahora)
-            } else {
-                aplicarBatch(delta, ahora)
-            }
-            primeraPagina = false
-            todosIdsServidor.addAll(batchIds)
+            paginasAcumuladas.addAll(delta)
             totalFilas += delta.size
+            primeraPagina = false
 
             if (delta.size < limitePagina) break
 
@@ -326,6 +347,14 @@ internal suspend fun <T> fetchBackfill(
             }
             cursorActual = nuevoCursor
             if (pagina == maxPaginasPorRun) masPorSincronizar = true
+        }
+
+        // RC3: UNA transaccion por tabla/fase. La acumulacion concatenada en
+        // orden DESC preserva los extremos que el applier necesita: first()
+        // = fila mas nueva (semilla incremental), last() = mas vieja
+        // (cursor backfill).
+        if (paginasAcumuladas.isNotEmpty()) {
+            todosIdsServidor.addAll(applyBatch(paginasAcumuladas, ahora))
         }
 
         ResultadoSync.Exitoso(
