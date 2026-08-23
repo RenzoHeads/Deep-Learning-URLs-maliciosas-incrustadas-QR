@@ -151,7 +151,14 @@ dependencies {
     // ─── Room ───
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
+    // room-paging: genera PagingSource<Int, T> desde @Query del DAO
+    // (paginación local sobre Room, sin RemoteMediator).
+    implementation(libs.androidx.room.paging)
     ksp(libs.androidx.room.compiler)
+
+    // ─── Paging 3 ───
+    implementation(libs.androidx.paging.runtime)
+    implementation(libs.androidx.paging.compose)
 
     // ─── WorkManager ───
     implementation(libs.androidx.work.runtime.ktx)
@@ -179,6 +186,7 @@ dependencies {
     testImplementation(libs.androidx.room.testing)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.androidx.work.testing)
+    testImplementation(libs.androidx.paging.testing)
     testImplementation(libs.okhttp.mockwebserver)
     testImplementation(platform(libs.androidx.compose.bom))
     testImplementation(libs.androidx.compose.material3)

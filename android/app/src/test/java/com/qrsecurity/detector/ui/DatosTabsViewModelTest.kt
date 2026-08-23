@@ -1,6 +1,7 @@
 package com.qrsecurity.detector.ui
 
 import androidx.lifecycle.viewModelScope
+import androidx.paging.testing.asSnapshot
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.work.Configuration
@@ -18,7 +19,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
-import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -98,14 +100,21 @@ class DatosTabsViewModelTest {
      * `db.withTransaction` corre en Room's real ThreadPoolExecutor (OS thread).
      * La continuation despues de withTransaction vuelve a Main (testDispatcher)
      * async. `Thread.sleep` da tiempo al OS thread para completar la tx y
-     * encolar la continuation; `advanceUntilIdle` la drena.
+     * encolar la continuation; `runCurrent` la drena.
+     *
+     * v10 fix (hang): se usa `runCurrent` y NO `advanceUntilIdle` — el VM
+     * colecta Eagerly el ticker de medianoche (flujo INFINITO de delays);
+     * `advanceUntilIdle` avanza el reloj virtual a traves de la cadena
+     * infinita de delays y nunca termina (spin del scheduler confirmado por
+     * thread dump). `runCurrent` solo ejecuta tareas VENCIDAS: el delay de
+     * medianoche esta a horas de distancia virtual y nunca dispara.
      */
     private suspend fun kotlinx.coroutines.test.TestScope.drenarRoomYDispatcher() {
         repeat(5) {
             Thread.sleep(50)
-            advanceUntilIdle()
+            runCurrent()
         }
-        advanceUntilIdle()
+        runCurrent()
     }
 
     /**
@@ -117,15 +126,15 @@ class DatosTabsViewModelTest {
      * retiraron.
      */
     private fun subscribirTodos() {
-        collectorJobs += viewModel.viewModelScope.launch { viewModel.historialTodos.collect { } }
         collectorJobs += viewModel.viewModelScope.launch { viewModel.urlsBloqueadas.collect { } }
+        collectorJobs += viewModel.viewModelScope.launch { viewModel.historialUiState.collect { } }
     }
 
     // ── Estado inicial — todos los StateFlows arrancan con initialValue ──
 
     @Test
-    fun estadoInicial_historialTodos_emptyList() {
-        assertEquals(emptyList<EscaneoEntity>(), viewModel.historialTodos.value)
+    fun estadoInicial_historialPaging_vacio() = runTest(testDispatcher) {
+        assertEquals(emptyList<FilaHistorial>(), viewModel.historialPaging.asSnapshot())
     }
 
     @Test
@@ -136,7 +145,7 @@ class DatosTabsViewModelTest {
     // ── Emision reactiva desde Room ──
 
     @Test
-    fun historialTodos_emiteTrasInsert() = runTest(testDispatcher) {
+    fun historialPaging_emiteTrasInsertConCabeceraDeGrupo() = runTest(testDispatcher) {
         subscribirTodos()
         val escaneo = EscaneoEntity(
             id = "esc-1",
@@ -153,8 +162,13 @@ class DatosTabsViewModelTest {
         db.escaneoDao().insertar(escaneo)
         drenarRoomYDispatcher()
 
-        assertEquals("historialTodos debe emitir 1 escaneo tras insert", 1, viewModel.historialTodos.value.size)
-        assertEquals("esc-1", viewModel.historialTodos.value[0].id)
+        val snapshot = viewModel.historialPaging.asSnapshot()
+        // v10: la primera fila del grupo lleva su cabecera ("Hoy" para un
+        // escaneo de ahora) insertada por insertSeparators.
+        assertEquals(2, snapshot.size)
+        assertTrue(snapshot[0] is FilaHistorial.Cabecera)
+        assertEquals("Hoy", (snapshot[0] as FilaHistorial.Cabecera).titulo)
+        assertEquals("esc-1", (snapshot[1] as FilaHistorial.Entrada).escaneo.id)
     }
 
     @Test
@@ -186,7 +200,6 @@ class DatosTabsViewModelTest {
 
         val estado = viewModel.historialUiState.value
         assertEquals("historialUiState debe emitir totalTodos sin esperar a medianoche", 1, estado.totalTodos)
-        assertEquals(1, estado.grupos.sumOf { it.escaneos.size })
     }
 
     @Test
@@ -210,58 +223,78 @@ class DatosTabsViewModelTest {
     }
 
     @Test
-    fun filtrarHistorial_aplicaFiltroDeBloqueadasYBusquedaSinDistinguirMayusculas() {
-        val items = listOf(
-            EscaneoEntity(
-                id = "evil-1",
-                urlOriginal = "https://evil.example.com/login",
-                urlLimpia = "evil.example.com/login",
-                probabilidad = 0.99f,
-                nivelAlerta = "MALICIOSO",
-                delegado = "NNAPI",
-                esMalicioso = true,
-                creadoEnMillis = 3L,
+    fun paginacion_aplicaFiltroDeBloqueadasYBusquedaEnSQLSinDistinguirMayusculas() = runTest(testDispatcher) {
+        subscribirTodos()
+        val ahora = System.currentTimeMillis()
+        db.escaneoDao().insertar(escaneoDePrueba("evil-1", ahora).copy(
+            urlOriginal = "https://evil.example.com/login",
+            urlLimpia = "evil.example.com/login"
+        ))
+        db.escaneoDao().insertar(escaneoDePrueba("evil-2", ahora - 1_000).copy(
+            urlOriginal = "https://other.example.com/login",
+            urlLimpia = "other.example.com/login"
+        ))
+        db.escaneoDao().insertar(escaneoDePrueba("safe-1", ahora - 2_000).copy(
+            urlOriginal = "https://evil.example.com/about",
+            urlLimpia = "evil.example.com/about",
+            nivelAlerta = "SEGURO"
+        ))
+        db.urlBloqueadaDao().insertar(
+            UrlBloqueadaEntity(
+                id = "url-1",
+                url = "evil.example.com/login",
+                razon = "Malicioso",
+                creadoEnMillis = ahora,
                 dirty = false,
-                syncedAtMillis = 3L
-            ),
-            EscaneoEntity(
-                id = "evil-2",
-                urlOriginal = "https://other.example.com/login",
-                urlLimpia = "other.example.com/login",
-                probabilidad = 0.95f,
-                nivelAlerta = "MALICIOSO",
-                delegado = "NNAPI",
-                esMalicioso = true,
-                creadoEnMillis = 2L,
-                dirty = false,
-                syncedAtMillis = 2L
-            ),
-            EscaneoEntity(
-                id = "safe-1",
-                urlOriginal = "https://evil.example.com/about",
-                urlLimpia = "evil.example.com/about",
-                probabilidad = 0.01f,
-                nivelAlerta = "SEGURO",
-                delegado = null,
-                esMalicioso = false,
-                creadoEnMillis = 1L,
-                dirty = false,
-                syncedAtMillis = 1L
+                syncedAtMillis = ahora
             )
         )
+        drenarRoomYDispatcher()
 
-        val result = filtrarHistorial(
-            historial = items,
-            filtro = "BLOQUEADAS",
-            busqueda = "EVIL",
-            bloqueadasUrls = setOf("evil.example.com/login", "safe.example.com")
-        )
+        // v10: el filtro (bloqueadas + búsqueda) vive en SQL — solo
+        // materializa las filas que matchean. Equivalente del test
+        // `filtrarHistorial` de la era en-memoria.
+        viewModel.actualizarFiltroHistorial(FiltroHistorial.BLOQUEADAS)
+        viewModel.actualizarBusquedaHistorial("EVIL")
+        advanceTimeBy(301) // debounce de búsqueda (300ms)
+        drenarRoomYDispatcher()
 
-        assertEquals(listOf("evil-1"), result.map { it.id })
+        val snapshot = viewModel.historialPaging.asSnapshot()
+        val ids = snapshot.filterIsInstance<FilaHistorial.Entrada>().map { it.escaneo.id }
+        assertEquals(listOf("evil-1"), ids)
     }
 
     @Test
-    fun agruparHistorial_fechasFuturasVanAlGrupoHoy() {
+    fun paginacion_filtroSegurasExcluyeSospechosas() = runTest(testDispatcher) {
+        subscribirTodos()
+        val ahora = System.currentTimeMillis()
+        db.escaneoDao().insertar(escaneoDePrueba("seg-1", ahora).copy(nivelAlerta = "SEGURO"))
+        db.escaneoDao().insertar(escaneoDePrueba("sos-1", ahora - 1_000).copy(nivelAlerta = "SOSPECHOSO"))
+        drenarRoomYDispatcher()
+
+        viewModel.actualizarFiltroHistorial(FiltroHistorial.SEGURAS)
+        drenarRoomYDispatcher()
+
+        val ids = viewModel.historialPaging.asSnapshot()
+            .filterIsInstance<FilaHistorial.Entrada>().map { it.escaneo.id }
+        assertEquals(listOf("seg-1"), ids)
+    }
+
+    @Test
+    fun paginacion_dedupSoloMuestraLaUltimaVersionPorURL() = runTest(testDispatcher) {
+        subscribirTodos()
+        val ahora = System.currentTimeMillis()
+        db.escaneoDao().insertar(escaneoDePrueba("v1", ahora - 10_000).copy(urlLimpia = "dup.example.com", urlOriginal = "https://dup.example.com"))
+        db.escaneoDao().insertar(escaneoDePrueba("v2", ahora).copy(urlLimpia = "dup.example.com", urlOriginal = "https://dup.example.com"))
+        drenarRoomYDispatcher()
+
+        val ids = viewModel.historialPaging.asSnapshot()
+            .filterIsInstance<FilaHistorial.Entrada>().map { it.escaneo.id }
+        assertEquals("solo la versión más reciente de la URL aparece", listOf("v2"), ids)
+    }
+
+    @Test
+    fun claveGrupoHistorial_fechasFuturasVanAlGrupoHoy() {
         // Fechas-futuras fix: un creadoEnMillis futuro (reloj del device
         // atrasado contra el servidor) daba diasDeDiferencia negativo y la
         // fila caia fuera de los 3 grupos — sumaba en totalTodos pero nunca
@@ -269,47 +302,13 @@ class DatosTabsViewModelTest {
         val ahora = System.currentTimeMillis()
         val enUnaHora = ahora + 3_600_000L
         val haceTresDias = ahora - 3L * 24 * 3_600_000L
-        val entidades = listOf(
-            EscaneoEntity(
-                id = "futuro",
-                urlOriginal = "https://futuro.example.com",
-                urlLimpia = "futuro.example.com",
-                probabilidad = 0.5f,
-                nivelAlerta = "SOSPECHOSO",
-                delegado = null,
-                esMalicioso = false,
-                creadoEnMillis = enUnaHora,
-                dirty = false,
-                syncedAtMillis = enUnaHora
-            ),
-            EscaneoEntity(
-                id = "viejo",
-                urlOriginal = "https://viejo.example.com",
-                urlLimpia = "viejo.example.com",
-                probabilidad = 0.1f,
-                nivelAlerta = "SEGURO",
-                delegado = null,
-                esMalicioso = false,
-                creadoEnMillis = haceTresDias,
-                dirty = false,
-                syncedAtMillis = haceTresDias
-            )
-        )
 
-        val grupos = agruparHistorialPorFecha(entidades, ahora = ahora)
-
-        // Auditoría UI 2: el genérico "Anteriores" se reemplazó por grupos
-        // por día calendario con fecha concreta "dd/MM/yyyy".
-        assertEquals(listOf("Hoy", formatoFechaCorta(haceTresDias)), grupos.map { it.titulo })
-        assertEquals(
-            "La fila con fecha futura debe pintarse en Hoy",
-            listOf("futuro"),
-            grupos.first { it.titulo == "Hoy" }.escaneos.map { it.id }
-        )
+        assertEquals("Hoy", claveGrupoHistorial(enUnaHora, ahora))
+        assertEquals(formatoFechaCorta(haceTresDias), claveGrupoHistorial(haceTresDias, ahora))
     }
 
     @Test
-    fun agruparHistorial_anteayerYDiasAnteriores_grupoPorDiaConFechaConcreta() {
+    fun claveGrupoHistorial_anteayerYDiasAnterioresConFechaConcreta() {
         // Auditoría UI 2: jerarquía temporal útil — Hoy/Ayer/Anteayer relativos
         // y a partir de ahí un grupo por día calendario titulado con la fecha
         // concreta, ordenado del más reciente al más antiguo.
@@ -317,23 +316,29 @@ class DatosTabsViewModelTest {
         val hace2Dias = ahora - 2L * 24 * 3_600_000L
         val hace3Dias = ahora - 3L * 24 * 3_600_000L
         val hace5Dias = ahora - 5L * 24 * 3_600_000L
-        val entidades = listOf(
-            escaneoDePrueba("hace5-1", hace5Dias),
-            escaneoDePrueba("anteayer-1", hace2Dias),
-            escaneoDePrueba("hace3-1", hace3Dias)
-        )
 
-        val grupos = agruparHistorialPorFecha(entidades, ahora = ahora)
+        assertEquals("Hoy", claveGrupoHistorial(ahora, ahora))
+        assertEquals("Ayer", claveGrupoHistorial(ahora - 24 * 3_600_000L, ahora))
+        assertEquals("Anteayer", claveGrupoHistorial(hace2Dias, ahora))
+        assertEquals(formatoFechaCorta(hace3Dias), claveGrupoHistorial(hace3Dias, ahora))
+        assertEquals(formatoFechaCorta(hace5Dias), claveGrupoHistorial(hace5Dias, ahora))
+    }
 
-        assertEquals(
-            listOf("Anteayer", formatoFechaCorta(hace3Dias), formatoFechaCorta(hace5Dias)),
-            grupos.map { it.titulo }
-        )
-        assertEquals(
-            "Cada grupo de día contiene exactamente su escaneo",
-            listOf(listOf("hace3-1"), listOf("hace5-1")),
-            grupos.drop(1).map { grupo -> grupo.escaneos.map { it.id } }
-        )
+    @Test
+    fun paginacion_insertaCabeceraAlCambiarDeGrupoTemporal() = runTest(testDispatcher) {
+        subscribirTodos()
+        val ahora = System.currentTimeMillis()
+        val haceTresDias = ahora - 3L * 24 * 3_600_000L
+        db.escaneoDao().insertar(escaneoDePrueba("nuevo", ahora))
+        db.escaneoDao().insertar(escaneoDePrueba("viejo", haceTresDias))
+        drenarRoomYDispatcher()
+
+        val snapshot = viewModel.historialPaging.asSnapshot()
+        val titulos = snapshot.filterIsInstance<FilaHistorial.Cabecera>().map { it.titulo }
+        // DESC: "Hoy" (con su fila) primero, luego la cabecera de la fecha
+        // concreta con su fila — un header por cambio de grupo.
+        assertEquals(listOf("Hoy", formatoFechaCorta(haceTresDias)), titulos)
+        assertEquals(4, snapshot.size) // 2 cabeceras + 2 filas
     }
 
     /** Entidad mínima para tests de agrupación — solo id y fecha varían. */

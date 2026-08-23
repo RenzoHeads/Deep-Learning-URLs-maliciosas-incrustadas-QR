@@ -184,6 +184,14 @@ open class MediadorSincronizacion @Inject constructor(
      * datos. El sync tras-write (one-shot) sigue [NetworkType.CONNECTED] —
      * eso es controlado por el usuario explicitamente.
      *
+     * v10 — excepcion al M11: mientras el sync inicial no completa
+     * (`initial_sync_completed=false`), el periodico relaja a
+     * [NetworkType.CONNECTED] (incluye datos moviles) — ver
+     * [restriccionRedSyncPeriodico]. Sin esto, un usuario solo-movil que no
+     * reabre la app ni escribe localmente nunca completa su backfill. Al
+     * completarse, [SyncWorker] re-programa el periodico (esta misma funcion)
+     * y la restriccion vuelve a UNMETERED.
+     *
      * Bug M12 fix — periodico usa [ExistingPeriodicWorkPolicy.UPDATE]
      * (WorkManager 2.7+) en vez de KEEP: si el constraints o el interval
      * cambian entre versiones de la app, UPDATE los aplica sin reiniciar el
@@ -198,9 +206,12 @@ open class MediadorSincronizacion @Inject constructor(
             Log.w("MediadorSync", "programarSyncPeriodica() — WorkManager no inicializado, skip")
             return
         }
-        // M11 fix — UNMETERED: el sync periodico no debe consumir datos medidos.
+        val initialSyncCompleted = context.getSharedPreferences(
+            SyncWorker.PREFS_SYNC, Context.MODE_PRIVATE
+        ).getBoolean(SyncWorker.KEY_INITIAL_SYNC_COMPLETED, false)
+        // v10: CONNECTED durante el backfill inicial, UNMETERED despues (M11).
         val constraints = Constraints.Builder()
-            .setRequiredNetworkType(NetworkType.UNMETERED)
+            .setRequiredNetworkType(restriccionRedSyncPeriodico(initialSyncCompleted))
             .build()
 
         val request = PeriodicWorkRequestBuilder<SyncWorker>(

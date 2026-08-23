@@ -198,7 +198,8 @@ class FixtureSyncWorker {
                 ),
                 repoEscaneos,
                 repoUrls,
-                logoutCoordinator
+                logoutCoordinator,
+                mediador
             )
         }
         return TestListenableWorkerBuilder<SyncWorker>(appContext)

@@ -32,5 +32,23 @@ data class SyncStateEntity(
      * Null = nunca se ha hecho delta pull → el siguiente sync hace full pull.
      * Se actualiza tras cada delta pull exitosa con el max(updated_at) recibido.
      */
-    val ultimoCursorModificacion: String? = null
+    val ultimoCursorModificacion: String? = null,
+    /**
+     * Backfill DESC (v10) — progreso del backfill inicial hacia atras.
+     *
+     * El primer pull de un usuario nuevo recorre el historial en orden DESC
+     * (`orden=desc` del backend): la version mas reciente de cada URL llega
+     * en la PRIMERA pagina, y [ultimoCursorModificacion] se fija de inmediato
+     * al timestamp mas nuevo visto — los deltas incrementales ASC ya pueden
+     * correr en paralelo sin esperar a que termine el backfill completo.
+     *
+     * Valores:
+     *  - `null` — sin backfill pendiente. Para usuarios que ya sincronizaron
+     *    antes de v10 (cursor incremental ya fijado) significa "completado";
+     *    para un usuario nuevo (cursor incremental null) significa "arrancar".
+     *  - `"ts|id"` — proxima pagina DESC pendiente (fila mas vieja recibida).
+     *  - [com.qrsecurity.detector.datos.repositorios.BackfillDelta.COMPLETADO]
+     *    — backfill terminado (llego a la pagina corta / cuenta vacia).
+     */
+    val ultimoCursorBackfill: String? = null
 )

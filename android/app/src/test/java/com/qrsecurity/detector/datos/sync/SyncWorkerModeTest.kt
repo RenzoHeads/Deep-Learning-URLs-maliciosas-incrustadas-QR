@@ -1,5 +1,6 @@
 package com.qrsecurity.detector.datos.sync
 
+import androidx.work.NetworkType
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -76,6 +77,27 @@ class SyncWorkerModeTest {
                 syncReciente = true,
                 pullReciente = true
             )
+        )
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // v10 — restriccion de red del periodico: CONNECTED durante el
+    // backfill inicial (usuario solo-movil), UNMETERED despues (M11).
+    // ──────────────────────────────────────────────────────────────
+
+    @Test
+    fun `periodico usa CONNECTED mientras el sync inicial no completa`() {
+        assertEquals(
+            NetworkType.CONNECTED,
+            restriccionRedSyncPeriodico(initialSyncCompleted = false)
+        )
+    }
+
+    @Test
+    fun `periodico vuelve a UNMETERED tras completar el sync inicial`() {
+        assertEquals(
+            NetworkType.UNMETERED,
+            restriccionRedSyncPeriodico(initialSyncCompleted = true)
         )
     }
 }

@@ -1,5 +1,6 @@
 package com.qrsecurity.detector.datos.local.dao
 
+import androidx.paging.PagingSource
 import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
@@ -64,6 +65,21 @@ data class ConteoUrlLimpia(
     val conteo: Int
 )
 
+/**
+ * M3 (auditoría frontend): contadores TOTALES del historial deduplicado,
+ * calculados por COUNT en el DAO — mismo predicado de "última versión viva
+ * por urlLimpia" que [EscaneoDao.observarTodosUnicos] pero SIN LIMIT.
+ * Antes los chips "N escaneos / N% seguros" derivaban los totales de la
+ * ventana paginada (LIMIT 500) en el ViewModel: con más URLs únicas que el
+ * límite mostraban el tamaño de la ventana, no el total real.
+ */
+data class ConteosHistorial(
+    val totalTodos: Int,
+    val totalSeguras: Int,
+    val totalSospechosas: Int,
+    val totalBloqueadas: Int
+)
+
 @Dao
 interface EscaneoDao {
 
@@ -81,19 +97,23 @@ interface EscaneoDao {
     // pantalla de detalle via [observarReescaneosTodos].
 
     /**
-     * Historial deduplicado: ultima version de cada URL (las [limite] más
-     * recientes).
+     * Historial deduplicado y FILTRADO, paginado con Paging 3 sobre Room
+     * (v10) — misma subquery dedup indexada de siempre ([paginarHistorial]
+     * reemplaza a la antigua `observarTodosUnicos(limite)` + filtrado en
+     * memoria de `filtrarHistorial`).
      *
-     * D-1 rewrite: subquery escalar indexada por `idx_escaneos_dedup` —
-     * SQLite reverse-scan indexado dentro de la partición `urlLimpia = ?`
-     * obtiene la última fila en O(log n) por outer row.
+     * El filtro vive en SQL (no materializa filas que no matchean):
+     *  - [nivelAlerta]: null = TODAS; si no, filtro exacto sobre la ultima
+     *    version de cada URL.
+     *  - [soloBloqueadas]: solo URLs presentes en `urls_bloqueadas` (join
+     *    reactivo — bloquear/desbloquear re-emite la pagina).
+     *  - [busqueda]: LIKE case-insensitive (COLLATE NOCASE) sobre urlLimpia
+     *    y urlOriginal, con ESCAPE '\' — el repositorio escapa los
+     *    wildcards del input del usuario.
      *
-     * M5 audit fix: `LIMIT :limite` acota la materialización de filas y la
-     * memoria retenida por el StateFlow eager del Historial. El orden es
-     * DESC por `creadoEnMillis` — la fila recién insertada (match de
-     * `resolverIdNavegacion` tras un escaneo) siempre queda en la primera
-     * página. `DatosTabsViewModel.cargarMasHistorial()` incrementa el
-     * límite para traer más.
+     * Memoria acotada a la ventana de Paging: con 10.000 URLs unicas, la
+     * huella es proporcional a las paginas alrededor del scroll, no al
+     * total scrolleado.
      */
     @Query(
         "SELECT e.* FROM escaneos e WHERE e.id = (" +
@@ -101,9 +121,45 @@ interface EscaneoDao {
                 "WHERE e2.urlLimpia = e.urlLimpia " +
                 "AND e2.id NOT IN $IDS_SIN_DELETE_PENDIENTE" +
                 "ORDER BY e2.creadoEnMillis DESC, e2.id DESC LIMIT 1" +
-            ") ORDER BY e.creadoEnMillis DESC, e.id DESC LIMIT :limite"
+            ") " +
+            "AND (:nivelAlerta IS NULL OR e.nivelAlerta = :nivelAlerta) " +
+            "AND (:soloBloqueadas = 0 OR e.urlLimpia IN " +
+                "(SELECT url FROM urls_bloqueadas)) " +
+            "AND (:busqueda = '' OR " +
+                "(e.urlLimpia COLLATE NOCASE LIKE '%' || :busqueda || '%' ESCAPE '\\') OR " +
+                "(e.urlOriginal COLLATE NOCASE LIKE '%' || :busqueda || '%' ESCAPE '\\')) " +
+            "ORDER BY e.creadoEnMillis DESC, e.id DESC"
     )
-    fun observarTodosUnicos(limite: Int): Flow<List<EscaneoEntity>>
+    fun paginarHistorial(
+        nivelAlerta: String?,
+        soloBloqueadas: Boolean,
+        busqueda: String
+    ): PagingSource<Int, EscaneoEntity>
+
+    /**
+     * M3 (auditoría frontend): contadores totales del historial
+     * deduplicado — una sola fila con los 4 COUNTs (misma query de "última
+     * versión viva" que [observarTodosUnicos], sin LIMIT). COALESCE porque
+     * SQLite devuelve SUM=NULL sobre cero filas.
+     */
+    @Query(
+        "SELECT COUNT(*) AS totalTodos, " +
+            "COALESCE(SUM(e.nivelAlerta = 'SEGURO'), 0) AS totalSeguras, " +
+            "COALESCE(SUM(e.nivelAlerta = 'SOSPECHOSO'), 0) AS totalSospechosas, " +
+            "COALESCE(SUM(e.urlLimpia IN (" +
+                "SELECT url FROM urls_bloqueadas WHERE id NOT IN (" +
+                    "SELECT idLocal FROM pending_ops " +
+                    "WHERE tabla = 'urls_bloqueadas' " +
+                    "AND tipoOperacion = 'DELETE' AND fallida = 0)" +
+            ")), 0) AS totalBloqueadas " +
+            "FROM escaneos e WHERE e.id = (" +
+                "SELECT e2.id FROM escaneos e2 " +
+                "WHERE e2.urlLimpia = e.urlLimpia " +
+                "AND e2.id NOT IN $IDS_SIN_DELETE_PENDIENTE" +
+                "ORDER BY e2.creadoEnMillis DESC, e2.id DESC LIMIT 1" +
+            ")"
+    )
+    fun observarConteosHistorial(): Flow<ConteosHistorial>
 
     /** Historial deduplicado: ultima version de cada URL (solo las que la
      *  ultima version es segura).
@@ -128,18 +184,20 @@ interface EscaneoDao {
     fun observarSegurosUnicos(): Flow<List<EscaneoEntity>>
 
     /**
-     * Reescaneos de una URL (versiones anteriores) — TODOS, sin paginar.
+     * Reescaneos de una URL (versiones anteriores) — paginados con Paging 3
+     * sobre Room (v10).
      *
-     * Devuelve
-     * todas las filas con `urlLimpia = :urlLimpia` excepto [idActual],
-     * ordenadas por `creadoEnMillis DESC`. Usado por la pantalla de
-     * Reescaneos bajo el patron reactivo (como [observarTodosUnicos] para
-     * el historial): Room emite la lista cacheada en <1ms y re-emite si
-     * la tabla cambia; la UI virtualiza con `LazyColumn`.
+     * Misma seleccion que tenia la version Flow sin LIMIT (todas las filas
+     * con `urlLimpia = :urlLimpia` excepto [idActual], ordenadas por
+     * `creadoEnMillis DESC`), pero como [PagingSource]: Paging mantiene en
+     * memoria solo la ventana de paginas alrededor del scroll y descarta las
+     * lejanas — con una URL de miles de versiones la huella queda acotada al
+     * tamano de la ventana en vez de al total, y las invalidaciones de la
+     * tabla recalculan por pagina visible en vez de re-emitir la lista
+     * completa.
      *
-     * El numero de reescaneos de una sola URL esta acotado por las veces
-     * que el usuario re-escaneo esa URL, asi que cargar todos sin paginar
-     * es mas barato que el historial (que carga todas las URLs unicas).
+     * El total para el header ("N análisis") y el badge de version vienen de
+     * [observarTotalReescaneos] (COUNT indexado), independiente del Pager.
      */
     @Query(
         "SELECT * FROM escaneos " +
@@ -148,10 +206,10 @@ interface EscaneoDao {
             "AND id NOT IN $IDS_SIN_DELETE_PENDIENTE " +
             "ORDER BY creadoEnMillis DESC, id DESC"
     )
-    fun observarReescaneosTodos(
+    fun paginarReescaneos(
         urlLimpia: String,
         idActual: String
-    ): Flow<List<EscaneoEntity>>
+    ): PagingSource<Int, EscaneoEntity>
 
     /**
      * Cuenta el total de reescaneos (versiones distintas) de una URL,

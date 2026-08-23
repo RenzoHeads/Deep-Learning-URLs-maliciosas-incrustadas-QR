@@ -30,6 +30,19 @@ object PaginacionSync {
      * Con [LIMITE_PAGINA]=200 por pagina, esto permite hasta 1000 registros
      * por worker-run. Si el servidor tiene mas, `masPorSincronizar=true` y
      * el siguiente worker continuara trayendo desde el cursor persistido.
+     *
+     * T2/v10 — presupuesto ADITIVO por tabla y por corrida: en [com.qrsecurity.
+     * detector.datos.sync.SyncWorkerPull] las fases (a) delta incremental y
+     * (b) backfill DESC se ejecutan secuencialmente y CADA UNA usa su propio
+     * presupuesto de [MAX_PAGINAS_POR_RUN] paginas. Mientras el backfill siga
+     * activo, un worker-run puede traer hasta el DOBLE (delta ≤5 + backfill
+     * ≤5 paginas ≈ ≤2000 filas/tabla/run). Justificacion battery/datos: la
+     * ventana en la que el backfill corre es el sync inicial, y alli el sync
+     * periodico pide [androidx.work.NetworkType.CONNECTED] (ver
+     * restriccionRedSyncPeriodico); el pico de ~10 paginas por tabla queda
+     * acotado a esa ventana. Enforcement existente: FetchBackfillTest
+     * ("presupuesto de paginas agotado deja masPorSincronizar true") y
+     * FetchDeltasCursorCongeladoTest.
      */
     const val MAX_PAGINAS_POR_RUN = 5
 }
@@ -64,6 +77,42 @@ internal data class CursorDelta(val ts: String, val id: String?) {
         fun parse(cursor: String): CursorDelta = CursorDelta(
             ts = cursor.substringBefore('|'),
             id = cursor.substringAfter('|', "").ifEmpty { null }
+        )
+    }
+}
+
+/**
+ * Backfill DESC (v10) — valores del cursor de backfill en
+ * `sync_state.ultimoCursorBackfill`.
+ *
+ *  - `null` — sin backfill pendiente: usuario ya sincronizado pre-v10
+ *    (cursor incremental fijado) o nunca iniciado (cursor incremental null;
+ *    el worker lo detecta y arranca).
+ *  - `"ts|id"` — proxima pagina DESC pendiente (fila mas vieja recibida).
+ *  - [COMPLETADO] — centinela: el backfill llego a la pagina corta (o la
+ *    cuenta esta vacia) y no debe re-arrancar.
+ */
+object BackfillDelta {
+    const val COMPLETADO = "backfill_completado"
+}
+
+/**
+ * v10 fix (fila fantasma) — garantiza que exista la fila de [tabla] en
+ * `sync_state` antes de que un applier de PULL escriba cursores con UPDATE.
+ *
+ * En un login fresh sin writes locales previos la fila no existe (solo
+ * `registrarLocal` la sembraba) y los UPDATE son no-op: el cursor del primer
+ * PULL se perdia y cada corrida repetia el pull desde epoch. Debe llamarse
+ * DENTRO de la `db.withTransaction { }` del applier (la lectura y el seed
+ * comparten tx con la escritura del cursor).
+ */
+internal suspend fun BaseDatosSeguridad.asegurarFilaSyncState(tabla: String) {
+    if (syncStateDao().obtener(tabla) == null) {
+        syncStateDao().upsert(
+            com.qrsecurity.detector.datos.local.entidades.SyncStateEntity(
+                tabla = tabla,
+                ultimaSincronizacionAtMillis = null
+            )
         )
     }
 }
@@ -161,6 +210,137 @@ internal suspend fun <T> fetchDeltas(
         // Bug H3 (mismo fix que Pipeline.kt:329): rethrow CancellationException
         // para no ejecutar side effects en corutina cancelada (logout → el
         // worker resucitaria como Fallido y dispararia Result.retry()).
+        if (e is kotlinx.coroutines.CancellationException) throw e
+        ResultadoSync.Fallido(mensaje = e.message ?: mensajeError)
+    }
+}
+
+/**
+ * Ejecuta el BACKFILL inicial en orden DESC (lo mas reciente primero).
+ *
+ * Espejo de [fetchDeltas] con la direccion invertida:
+ *  - Primera pagina ([cursorBackfill] null): sin cursor_id — el backend
+ *    devuelve desde la fila mas nueva. [aplicarPrimerBatch] aplica el batch
+ *    Y fija de inmediato el cursor incremental ASC al timestamp mas nuevo
+ *    visto (primera fila de la pagina) — los deltas incrementales pueden
+ *    correr en corridas siguientes sin esperar el backfill completo.
+ *  - Paginas siguientes: keyset hacia atras `(updated_at, id) < (ts, id)`
+ *    con el cursor persistido; [aplicarBatch] avanza solo el cursor backfill.
+ *  - Pagina corta = fin del historial (`pullCompleto=true`; el caller
+ *    persiste el centinela [BackfillDelta.COMPLETADO]).
+ *  - Mismo presupuesto [maxPaginasPorRun] y mismo guard de cursor congelado
+ *    (pagina llena sin updatedAt en la ultima fila).
+ *
+ * @param cursorBackfill "ts|id" persistido (null = arrancar desde lo mas nuevo).
+ */
+internal suspend fun <T> fetchBackfill(
+    ioDispatcher: CoroutineDispatcher,
+    cursorBackfill: String?,
+    limitePagina: Int,
+    maxPaginasPorRun: Int,
+    fetchPagina: suspend (cursorTs: String, cursorId: String?) -> List<T>,
+    aplicarPrimerBatch: suspend (List<T>, Long) -> List<String>,
+    aplicarBatch: suspend (List<T>, Long) -> List<String>,
+    extraerCursor: (T) -> CursorDelta?,
+    mensajeError: String
+): ResultadoSync = withContext(ioDispatcher) {
+    try {
+        var cursorActual = cursorBackfill?.let { CursorDelta.parse(it) } ?: CursorDelta.EPOCH
+        var primeraPagina = cursorBackfill == null
+        var totalFilas = 0
+        val todosIdsServidor = mutableListOf<String>()
+        var masPorSincronizar = false
+        val ahora = System.currentTimeMillis()
+
+        for (pagina in 1..maxPaginasPorRun) {
+            val delta = fetchPagina(cursorActual.ts, cursorActual.id)
+            if (delta.isEmpty()) break
+
+            // T1 (v10 + review): validacion runtime de que la primera pagina
+            // del backfill llega DESCENDENTE. Un backend LEGACY que ignore
+            // `orden=desc` devuelve ASC; si el cliente lo tratara como DESC
+            // fijaria el cursor incremental a la fila mas VIEJA y los deltas
+            // futuros arrancarian desde un punto equivocado (dejaria de
+            // recibir actualizaciones sin error visible).
+            //
+            // Regla: marca legacy SOLO si la primera fila es estrictamente
+            // ANTERIOR a la ultima (ASC inequivoco). EMPATES (first.ts ==
+            // last.ts) PASAN: los multi-INSERT del backend comparten `now()`
+            // y una pagina DESC plenamente valida puede tener first.ts ==
+            // last.ts (ver backend/app/consulta_listado.py:103-107). Timestamp
+            // no parseable o null en algun extremo => "no validable": skip.
+            //
+            // Al detectar legacy aborta como transitorio (Fallido codigo=null
+            // -> Result.retry() en el worker) SIN invocar aplicadores NI
+            // escribir cursores: la siguiente corrida re-intenta; mientras el
+            // backend no despliegue `orden=desc`, el bucle es un retry
+            // inofensivo (REPLACE idempotente) con log visible.
+            if (primeraPagina && delta.size >= 2) {
+                val tsPrimero = extraerCursor(delta.first())?.ts
+                val tsUltimo = extraerCursor(delta.last())?.ts
+                val ascendente = tsPrimero != null && tsUltimo != null &&
+                    (runCatching {
+                        java.time.Instant.parse(tsPrimero)
+                            .isBefore(java.time.Instant.parse(tsUltimo))
+                    }.getOrNull() ?: false)
+                if (ascendente) {
+                    android.util.Log.e(
+                        "SyncHelpers",
+                        "fetchBackfill: primera pagina no descendente " +
+                            "(backfill_no_descendente) — backend legacy ignora " +
+                            "orden=desc, abortando como transitorio sin fijar cursores"
+                    )
+                    return@withContext ResultadoSync.Fallido(
+                        mensaje = "backfill: primera pagina no descendente (backend legacy ignora orden=desc)",
+                        codigo = null,
+                        retryAfterSegundos = null
+                    )
+                }
+            }
+
+            val batchIds = if (primeraPagina) {
+                aplicarPrimerBatch(delta, ahora)
+            } else {
+                aplicarBatch(delta, ahora)
+            }
+            primeraPagina = false
+            todosIdsServidor.addAll(batchIds)
+            totalFilas += delta.size
+
+            if (delta.size < limitePagina) break
+
+            val ultima = delta.last()
+            val nuevoCursor = extraerCursor(ultima)
+            if (nuevoCursor == null) {
+                // Mismo guard de fetchDeltas (cursor congelado): pagina llena
+                // cuya ultima fila no trae updatedAt — cortamos sin avanzar y
+                // avisamos; REPLACE idempotente protege los datos.
+                android.util.Log.w(
+                    "SyncHelpers",
+                    "fetchBackfill: pagina llena sin updatedAt en la ultima fila — " +
+                        "cursor backfill no puede retroceder, backfill detenido " +
+                        "(pullCompleto=false, quedan paginas sin sincronizar)"
+                )
+                masPorSincronizar = true
+                break
+            }
+            cursorActual = nuevoCursor
+            if (pagina == maxPaginasPorRun) masPorSincronizar = true
+        }
+
+        ResultadoSync.Exitoso(
+            filaSincronizadas = totalFilas,
+            idsServidor = todosIdsServidor,
+            pullCompleto = !masPorSincronizar,
+            masPorSincronizar = masPorSincronizar
+        )
+    } catch (e: ClienteBackend.HttpBackendException) {
+        ResultadoSync.Fallido(
+            mensaje = e.message ?: mensajeError,
+            codigo = e.codigo,
+            retryAfterSegundos = e.retryAfterSegundos
+        )
+    } catch (e: Exception) {
         if (e is kotlinx.coroutines.CancellationException) throw e
         ResultadoSync.Fallido(mensaje = e.message ?: mensajeError)
     }

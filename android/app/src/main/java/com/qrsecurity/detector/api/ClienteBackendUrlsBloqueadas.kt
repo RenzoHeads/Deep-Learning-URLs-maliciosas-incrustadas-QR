@@ -12,15 +12,17 @@ import kotlinx.serialization.json.buildJsonObject
  * Delta sync — `GET /urls-bloqueadas?modificados_desde=<ISO>`.
  * Bug A1 fix (keyset pagination via [cursorId]).
  * Incluye tombstones (deleted_at != null) — el cliente debe eliminarlos local.
+ * Backfill DESC: [orden] = "desc" (lo mas reciente primero).
  */
 suspend fun ClienteBackend.listarUrlsBloqueadasDelta(
     token: String,
     modificadosDesde: String,
     limite: Int = 200,
     offset: Int = 0,
-    cursorId: String? = null
+    cursorId: String? = null,
+    orden: String = "asc"
 ): List<ClienteBackend.UrlBloqueada> = withContext(Dispatchers.IO) {
-    val url = buildDeltaUrl("$base/urls-bloqueadas", modificadosDesde, limite, offset, cursorId)
+    val url = buildDeltaUrl("$base/urls-bloqueadas", modificadosDesde, limite, offset, cursorId, orden)
     val respuesta = get(url, token)
     json.decodeFromString(
         ListSerializer(ClienteBackend.UrlBloqueada.serializer()),

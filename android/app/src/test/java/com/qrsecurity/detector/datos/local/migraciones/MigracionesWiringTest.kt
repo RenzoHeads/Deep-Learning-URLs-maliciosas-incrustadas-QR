@@ -24,7 +24,7 @@ class MigracionesWiringTest {
 
     @Test
     fun `el camino 1 hasta la version del esquema esta cubierto de forma contigua`() {
-        val versionEsquema = 9 // BaseDatosSeguridad.version
+        val versionEsquema = 10 // BaseDatosSeguridad.version
 
         val pasos = BaseDatosSeguridad.TODAS_MIGRACIONES
             .map { it.startVersion to it.endVersion }

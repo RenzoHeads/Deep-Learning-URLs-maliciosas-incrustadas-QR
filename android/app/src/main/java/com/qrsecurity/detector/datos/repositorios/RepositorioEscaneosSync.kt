@@ -42,17 +42,69 @@ suspend fun RepositorioEscaneos.sincronizarDelta(
 )
 
 /**
- * Aplica un batch de escaneos (tombstones + upsert + cursor) en una
- * transaccion Room. D-3 sibling fix: sincroniza `urls_catalogo` para
- * cada `urlLimpia` afectada.
+ * Backfill inicial DESC (v10) — primer pull de un usuario nuevo.
+ *
+ * La primera pagina trae lo mas reciente primero y fija [cursor incremental]
+ * al timestamp mas nuevo visto; las siguientes retroceden por el historial
+ * con el cursor de backfill. Ver [fetchBackfill] y [BackfillDelta].
+ *
+ * Al terminar (`pullCompleto`), persiste el centinela COMPLETADO para que
+ * corridas futuras no re-arranquen el backfill.
  */
-internal suspend fun RepositorioEscaneos.aplicarBatchEscaneos(
+suspend fun RepositorioEscaneos.sincronizarBackfill(
+    token: String,
+    cursorBackfill: String?
+): ResultadoSync {
+    val resultado = fetchBackfill(
+        ioDispatcher = ioDispatcher,
+        cursorBackfill = cursorBackfill,
+        limitePagina = LIMITE_PAGINA,
+        maxPaginasPorRun = MAX_PAGINAS_POR_RUN,
+        fetchPagina = { cursorTs, cursorId ->
+            backend.listarEscaneosDelta(
+                token, cursorTs, LIMITE_PAGINA, cursorId = cursorId, orden = "desc"
+            )
+        },
+        aplicarPrimerBatch = { delta, ahora ->
+            aplicarBatchEscaneosBackfill(delta, ahora, fijarCursorIncremental = true)
+        },
+        aplicarBatch = { delta, ahora ->
+            aplicarBatchEscaneosBackfill(delta, ahora, fijarCursorIncremental = false)
+        },
+        extraerCursor = { escaneo ->
+            escaneo.updatedAt?.let { ts -> CursorDelta(ts, escaneo.id) }
+        },
+        mensajeError = "Error desconocido en backfill de escaneos"
+    )
+    if (resultado is ResultadoSync.Exitoso && resultado.pullCompleto) {
+        kotlinx.coroutines.withContext(ioDispatcher) {
+            db.withTransaction {
+                // Cuenta vacia: ningun batch aplico → la fila puede no existir
+                // y el UPDATE del centinela seria no-op (re-arranque eterno).
+                db.asegurarFilaSyncState(PendingOpEntity.TABLA_ESCANEOS)
+                db.syncStateDao().actualizarBackfill(
+                    PendingOpEntity.TABLA_ESCANEOS, BackfillDelta.COMPLETADO
+                )
+            }
+        }
+    }
+    return resultado
+}
+
+/**
+ * Aplica SOLO las filas de un batch (tombstones + upsert + reconciliacion de
+ * `urls_catalogo`) en una transaccion Room, SIN tocar cursores — el caller
+ * decide que cursor escribir (incremental ASC o backfill DESC).
+ */
+private suspend fun RepositorioEscaneos.aplicarFilasEscaneos(
     delta: List<ClienteBackend.Escaneo>,
     ahora: Long
 ): List<String> = db.withTransaction {
+    // v10 fix (fila fantasma): siembra sync_state antes de los UPDATE de cursor.
+    db.asegurarFilaSyncState(PendingOpEntity.TABLA_ESCANEOS)
+
     val tombstones = delta.filter { it.deletedAt != null }
     val vivos = delta.filter { it.deletedAt == null }
-    val urlLimpiaAfectadas = delta.map { it.urlLimpia }.toSet()
 
     if (tombstones.isNotEmpty()) {
         db.escaneoDao().eliminarPorIds(tombstones.map { it.id })
@@ -67,7 +119,21 @@ internal suspend fun RepositorioEscaneos.aplicarBatchEscaneos(
     // en vez del loop N+1 (3-4 queries por URL). Preserva el contador
     // existente: el batch PULL puede no contener TODOS los escaneos de la
     // URL, así que `vecesEscaneada` del catálogo sigue siendo la fuente.
-    db.reconciliarUrlsCatalogoBatch(urlLimpiaAfectadas, preservarVecesEscaneada = true)
+    db.reconciliarUrlsCatalogoBatch(delta.map { it.urlLimpia }.toSet(), preservarVecesEscaneada = true)
+
+    vivos.map { it.id }
+}
+
+/**
+ * Aplica un batch de escaneos (tombstones + upsert + cursor) en una
+ * transaccion Room. D-3 sibling fix: sincroniza `urls_catalogo` para
+ * cada `urlLimpia` afectada.
+ */
+internal suspend fun RepositorioEscaneos.aplicarBatchEscaneos(
+    delta: List<ClienteBackend.Escaneo>,
+    ahora: Long
+): List<String> = db.withTransaction {
+    val idsVivos = aplicarFilasEscaneos(delta, ahora)
 
     // Bug A1 fix: cursor keyset compuesto "ts|id" (ver [CursorDelta]).
     val ultima = delta.last()
@@ -79,7 +145,45 @@ internal suspend fun RepositorioEscaneos.aplicarBatchEscaneos(
     }
     db.syncStateDao().actualizar(PendingOpEntity.TABLA_ESCANEOS, ahora, exitosa = true)
 
-    vivos.map { it.id }
+    idsVivos
+}
+
+/**
+ * Aplica un batch del backfill DESC: filas + cursor de backfill (ultima
+ * fila = la mas vieja de la pagina) y, en la primera pagina
+ * ([fijarCursorIncremental]), el cursor incremental ASC al timestamp mas
+ * nuevo visto (primera fila) — solo si aun no habia cursor incremental
+ * (no pisa uno ya avanzado por deltas o writes posteriores).
+ */
+internal suspend fun RepositorioEscaneos.aplicarBatchEscaneosBackfill(
+    delta: List<ClienteBackend.Escaneo>,
+    ahora: Long,
+    fijarCursorIncremental: Boolean
+): List<String> = db.withTransaction {
+    val idsVivos = aplicarFilasEscaneos(delta, ahora)
+
+    if (fijarCursorIncremental) {
+        val primera = delta.first()
+        val cursorActual = db.syncStateDao()
+            .obtener(PendingOpEntity.TABLA_ESCANEOS)?.ultimoCursorModificacion
+        if (primera.updatedAt != null && cursorActual.isNullOrBlank()) {
+            db.syncStateDao().actualizarCursor(
+                PendingOpEntity.TABLA_ESCANEOS,
+                CursorDelta(primera.updatedAt, primera.id).aString()
+            )
+        }
+    }
+
+    val ultima = delta.last()
+    if (ultima.updatedAt != null) {
+        db.syncStateDao().actualizarBackfill(
+            PendingOpEntity.TABLA_ESCANEOS,
+            CursorDelta(ultima.updatedAt, ultima.id).aString()
+        )
+    }
+    db.syncStateDao().actualizar(PendingOpEntity.TABLA_ESCANEOS, ahora, exitosa = true)
+
+    idsVivos
 }
 
 /**

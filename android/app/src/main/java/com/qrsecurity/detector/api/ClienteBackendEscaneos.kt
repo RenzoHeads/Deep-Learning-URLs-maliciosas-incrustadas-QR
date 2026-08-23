@@ -42,15 +42,19 @@ suspend fun ClienteBackend.registrarEscaneo(
  * Bug A1 fix (keyset pagination): si [cursorId] no es null,_OMITE offset
  * y usa `(updated_at, id) > (modificados_desde, cursorId)` — sin OFFSET.
  * Incluye tombstones (deleted_at != null) — el cliente debe eliminarlos local.
+ *
+ * Backfill DESC: [orden] = "desc" pide lo mas reciente primero (primera
+ * pagina sin cursorId; siguientes retroceden con `(updated_at, id) < ...`).
  */
 suspend fun ClienteBackend.listarEscaneosDelta(
     token: String,
     modificadosDesde: String,
     limite: Int = 200,
     offset: Int = 0,
-    cursorId: String? = null
+    cursorId: String? = null,
+    orden: String = "asc"
 ): List<ClienteBackend.Escaneo> = withContext(Dispatchers.IO) {
-    val url = buildDeltaUrl("$base/escaneos", modificadosDesde, limite, offset, cursorId)
+    val url = buildDeltaUrl("$base/escaneos", modificadosDesde, limite, offset, cursorId, orden)
     val respuesta = get(url, token)
     json.decodeFromString(
         ListSerializer(ClienteBackend.Escaneo.serializer()),

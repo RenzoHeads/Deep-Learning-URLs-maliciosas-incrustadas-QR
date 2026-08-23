@@ -1,5 +1,6 @@
 package com.qrsecurity.detector.datos.sync
 
+import androidx.work.NetworkType
 import kotlinx.coroutines.sync.Mutex
 
 /**
@@ -90,6 +91,23 @@ internal fun decidirModoSync(
     !hayPendingOps && syncReciente -> SyncMode.OMITIR
     else -> SyncMode.PULL_Y_PUSH
 }
+
+/**
+ * v10 — restriccion de red del sync PERIODICO segun el estado del sync
+ * inicial.
+ *
+ * Mientras el backfill inicial no termina (`initial_sync_completed=false`),
+ * el periodico corre con [NetworkType.CONNECTED] (incluye datos moviles):
+ * sin esto, un usuario solo-movil que no reabre la app ni escribe localmente
+ * nunca completa su historial — el periodico UNMETERED no corre en datos
+ * medidos y el backfill queda estancado indefinidamente. El coste es acotado
+ * (el backfill ocurre una sola vez por cuenta).
+ *
+ * Al completarse, vuelve a [NetworkType.UNMETERED] (Bug M11: el ciclo de
+ * 15 min rutinario no debe consumir datos medidos).
+ */
+internal fun restriccionRedSyncPeriodico(initialSyncCompleted: Boolean): NetworkType =
+    if (initialSyncCompleted) NetworkType.UNMETERED else NetworkType.CONNECTED
 
 internal fun debeCederPresupuestoPush(
     inicioMs: Long,

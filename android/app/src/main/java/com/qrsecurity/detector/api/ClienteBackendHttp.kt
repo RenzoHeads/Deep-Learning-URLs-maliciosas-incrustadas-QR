@@ -11,13 +11,18 @@ import okhttp3.RequestBody.Companion.toRequestBody
  * Bug A1 fix (keyset pagination): si [cursorId] no es null, agrega `cursor_id`
  * y OMITE `offset` (el backend ignora offset en modo keyset). Si es null,
  * modo legacy con `offset`.
+ *
+ * Backfill DESC (v10): [orden] = "desc" agrega `&orden=desc` — el backend
+ * invierte la comparacion keyset y el ORDER BY (lo mas reciente primero).
+ * Con "asc" (default) la URL queda byte-identica a la de siempre.
  */
 internal fun buildDeltaUrl(
     base: String,
     modificadosDesde: String,
     limite: Int,
     offset: Int,
-    cursorId: String?
+    cursorId: String?,
+    orden: String = "asc"
 ): String {
     val url = StringBuilder(
         "$base?modificados_desde=${java.net.URLEncoder.encode(modificadosDesde, "UTF-8")}" +
@@ -27,6 +32,9 @@ internal fun buildDeltaUrl(
         url.append("&cursor_id=${java.net.URLEncoder.encode(cursorId, "UTF-8")}")
     } else {
         url.append("&offset=$offset")
+    }
+    if (orden == "desc") {
+        url.append("&orden=desc")
     }
     return url.toString()
 }

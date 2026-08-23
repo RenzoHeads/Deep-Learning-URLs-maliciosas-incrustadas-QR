@@ -47,7 +47,8 @@ class SyncWorker @AssistedInject constructor(
     private val backend: ClienteBackend,
     internal val repoEscaneos: RepositorioEscaneos,
     internal val repoUrls: RepositorioUrlsBloqueadas,
-    private val logoutCoordinator: LogoutCoordinator
+    private val logoutCoordinator: LogoutCoordinator,
+    private val mediadorSincronizacion: MediadorSincronizacion
 ) : CoroutineWorker(appContext, params) {
 
     /**
@@ -178,11 +179,22 @@ class SyncWorker @AssistedInject constructor(
             syncPrefs.edit().putLong(KEY_ULTIMO_SYNC, System.currentTimeMillis()).apply()
 
             // Incremental sync unificado — marcar initial_sync_completed=true solo
-            // cuando TODAS las tablas reportan masPorSincronizar=false (al dia).
+            // cuando TODAS las tablas reportan masPorSincronizar=false (al dia):
+            // delta incremental al dia Y backfill DESC terminado.
             val masPorSincronizar = (estadoPulls as? EstadoPulls.Ok)?.masPorSincronizar == true
             if (!initialSyncCompleted && !masPorSincronizar) {
                 syncPrefs.edit().putBoolean(KEY_INITIAL_SYNC_COMPLETED, true).apply()
                 Log.d(TAG, "doWork() initial_sync_completed=true — todas las tablas al dia")
+                // v10 — el backfill termino: re-programar el periodico para
+                // volver a UNMETERED (durante el backfill corria CONNECTED;
+                // ExistingPeriodicWorkPolicy.UPDATE aplica el nuevo constraint
+                // sin reiniciar el ciclo).
+                try {
+                    mediadorSincronizacion.programarSyncPeriodica()
+                } catch (e: Exception) {
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    Log.w(TAG, "doWork() no se pudo re-programar el periodico: ${e.message}")
+                }
             } else if (masPorSincronizar) {
                 Log.d(TAG, "doWork() initial sync aun en progreso — quedan paginas por sincronizar")
             }

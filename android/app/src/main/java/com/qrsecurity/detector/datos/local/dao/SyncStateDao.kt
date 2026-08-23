@@ -15,6 +15,18 @@ interface SyncStateDao {
     @Query("SELECT * FROM sync_state WHERE tabla = :tabla LIMIT 1")
     suspend fun obtener(tabla: String): SyncStateEntity?
 
+    /**
+     * v10 fix (fila fantasma): UPDATE puro — si la fila no existe, el
+     * caller debe sembrarla antes via [asegurarFilaSyncState] (helper de
+     * SyncHelpers) o [upsert]. En un login fresh sin writes locales previos
+     * la fila `sync_state` no existe todavia (solo [RepositorioEscaneosEscritura.
+     * registrarLocal] la sembraba) y un UPDATE silenciosamente no-op'eaba:
+     * el cursor del primer PULL se perdia y cada corrida repetia el full pull.
+     *
+     * NOTA: no usar `INSERT ... ON CONFLICT DO UPDATE` aqui — requiere
+     * SQLite >= 3.24 y minSdk 26 trae 3.18 (y el SQLite legacy de
+     * Robolectric tampoco lo parsea).
+     */
     @Query("UPDATE sync_state SET ultimaSincronizacionAtMillis = :millis, ultimaSincronizacionExitosa = :exitosa WHERE tabla = :tabla")
     suspend fun actualizar(tabla: String, millis: Long, exitosa: Boolean)
 
@@ -52,9 +64,12 @@ interface SyncStateDao {
      *
      * Compatibilidad: cursores viejos sin '|' (solo ISO) siguen validos —
      * el repo los envia sin `cursor_id` y el backend usa el modo legacy `>=`.
+     *
+     * v10 fix (fila fantasma): UPDATE puro — ver nota de [actualizar] sobre
+     * por que no se usa UPSERT SQL ni aqui (SQLite < 3.24 en minSdk 26).
      */
     @Query("UPDATE sync_state SET ultimoCursorModificacion = :cursor, ultimaSincronizacionExitosa = 1 WHERE tabla = :tabla")
-    suspend fun actualizarCursor(tabla: String, cursor: String): Int
+    suspend fun actualizarCursor(tabla: String, cursor: String)
 
     /**
      * WAVE 16 fix (S422 stale-stall): resetea el cursor de modificacion a NULL.
@@ -65,9 +80,23 @@ interface SyncStateDao {
      * para siempre (stale-stall). Al resetear a NULL, el proximo PULL usa
      * epoch (1970-01-01T00:00:00Z) → full pull paginado → sana el stall.
      *
+     * v10: tambien resetea el cursor de backfill — ambos cursores derivan del
+     * mismo storage y un 422 los invalida por igual.
+     *
      * Llamado desde [com.qrsecurity.detector.datos.sync.SyncWorker] dentro de
      * la rama 422, en la misma transaccion conceptual que el PULL.
      */
-    @Query("UPDATE sync_state SET ultimoCursorModificacion = NULL, ultimaSincronizacionExitosa = 0 WHERE tabla = :tabla")
+    @Query("UPDATE sync_state SET ultimoCursorModificacion = NULL, ultimoCursorBackfill = NULL, ultimaSincronizacionExitosa = 0 WHERE tabla = :tabla")
     suspend fun resetCursor(tabla: String): Int
+
+    /**
+     * Backfill DESC (v10) — persiste el progreso del backfill hacia atras.
+     *
+     * [cursor] es el "ts|id" de la fila mas vieja recibida (proxima pagina
+     * DESC) o el centinela [com.qrsecurity.detector.datos.repositorios.
+     * BackfillDelta.COMPLETADO] cuando el backfill termino. Null limpia el
+     * estado (tras reset). UPDATE puro — ver nota de [actualizar].
+     */
+    @Query("UPDATE sync_state SET ultimoCursorBackfill = :cursor WHERE tabla = :tabla")
+    suspend fun actualizarBackfill(tabla: String, cursor: String?)
 }

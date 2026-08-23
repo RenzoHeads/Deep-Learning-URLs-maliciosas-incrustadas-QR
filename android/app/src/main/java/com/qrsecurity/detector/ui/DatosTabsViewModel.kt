@@ -3,6 +3,13 @@ package com.qrsecurity.detector.ui
 import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.paging.Pager
+import androidx.paging.PagingConfig
+import androidx.paging.PagingData
+import androidx.paging.cachedIn
+import androidx.paging.insertSeparators
+import androidx.paging.map
+import com.qrsecurity.detector.datos.local.dao.ConteosHistorial
 import com.qrsecurity.detector.datos.local.entidades.EscaneoEntity
 import com.qrsecurity.detector.datos.local.entidades.UrlBloqueadaEntity
 import com.qrsecurity.detector.datos.repositorios.RepositorioEscaneos
@@ -16,7 +23,7 @@ import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.FlowPreview
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -25,34 +32,73 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 
 /**
- * M5 audit fix — página inicial del historial y paso incremental de
- * "Cargar más". Con ≤ LIMITE URLs únicas el comportamiento es idéntico al
- * de antes (lista completa); solo usuarios con historial masivo pagan el
- * paso extra, acotando memoria retenida y recomputo por emisión.
+ * v10 — tamaño de página del historial (Paging 3 local sobre Room). La
+ * memoria retenida es proporcional a la ventana (pageSize + prefetch
+ * alrededor del scroll), no al total de URLs únicas ni a lo scrolleado.
  */
-private const val LIMITE_HISTORIAL_INICIAL = 500
-private const val PASO_CARGAR_MAS_HISTORIAL = 500
+private const val TAMANO_PAGINA_HISTORIAL = 50
 
-// M6 audit fix — @Immutable: estas data classes se emiten una vez y nunca
-// se mutan tras la emisión (las listas son read-only para la UI) y
-// EscaneoEntity es estable (todos los campos val de tipos primitivos/String,
-// mismo módulo). Sin la anotación, el parámetro `List` es tratado como
-// inestable por el compiler de Compose (sin Strong Skipping en Kotlin 1.9)
-// y bloquea el skip de PantallaHistorial en cada emisión del StateFlow.
+// M6 audit fix — @Immutable: emitidas una vez y nunca mutadas tras la
+// emision (EscaneoEntity es estable — todos los campos val de tipos
+// primitivos/String, mismo módulo). Sin la anotación, el parámetro es
+// tratado como inestable por el compiler de Compose (sin Strong Skipping
+// en Kotlin 1.9) y bloquea el skip de las pantallas en cada emisión.
 @Immutable
-data class GrupoHistorial(
-    val titulo: String,
-    val escaneos: List<EscaneoEntity>
-)
+sealed interface FilaHistorial {
+
+    /**
+     * Clave del grupo temporal al que pertenece la fila — compartida por
+     * ambos tipos para que `insertSeparators` compare adyacentes sin
+     * conocer el subtipo (null en cargas en curso).
+     */
+    val claveGrupo: String?
+
+    /** Fila de escaneo, anotada con su clave de grupo de fecha (v10). */
+    @Immutable
+    data class Entrada(
+        val escaneo: EscaneoEntity,
+        override val claveGrupo: String
+    ) : FilaHistorial
+
+    /** Cabecera de grupo temporal ("Hoy", "Ayer", "dd/MM/yyyy"). */
+    @Immutable
+    data class Cabecera(val titulo: String) : FilaHistorial {
+        override val claveGrupo: String get() = titulo
+    }
+}
+
+/**
+ * Clave (= título) del grupo temporal de una fila del historial.
+ *
+ * v10 — reemplaza a `agruparHistorialPorFecha` (que materializaba todos los
+ * grupos en memoria): con Paging los headers se insertan via
+ * `insertSeparators` comparando esta clave entre filas adyacentes, y se
+ * computan contra [ahora] capturado al crear el Pager (el `diaActual`
+ * alimentado por el ticker de medianoche lo recrea al cambiar de día —
+ * fix P6 preservado).
+ *
+ * Jerarquía temporal (idéntica a la de la agrupación anterior): "Hoy"
+ * (incluye fechas futuras por reloj atrasado — fix fechas-futuras), "Ayer",
+ * "Anteayer" y a partir de ahí un grupo por día calendario con fecha
+ * concreta "dd/MM/yyyy".
+ */
+internal fun claveGrupoHistorial(
+    creadoEnMillis: Long,
+    ahora: Long = System.currentTimeMillis()
+): String = when (val dias = diasDeDiferencia(creadoEnMillis, ahora)) {
+    in Long.MIN_VALUE..0L -> "Hoy"
+    1L -> "Ayer"
+    2L -> "Anteayer"
+    else -> formatoFechaCorta(creadoEnMillis)
+}
 
 @Immutable
 data class HistorialUiState(
-    val grupos: List<GrupoHistorial> = emptyList(),
     // V-1 fix: nullable para distinguir "cargando" (null) de "realmente cero" (0).
     // Antes eran Int = 0, y el valor inicial del StateFlow (HistorialUiState())
     // mostraba "0 escaneos" / "0% seguros" antes de los datos reales.
@@ -72,78 +118,32 @@ data class HistorialUiState(
     val totalUrlsBloqueadas: Int = 0
 )
 
-internal fun filtrarHistorial(
-    historial: List<EscaneoEntity>,
-    filtro: String,
-    busqueda: String,
-    bloqueadasUrls: Set<String>
-): List<EscaneoEntity> {
-    // Audit fix D2: comparar contra NivelAlerta (single source of truth)
-    // en vez de literales "SEGURO"/"SOSPECHOSO" sueltos.
-    val porFiltro = when (filtro) {
-        "SEGURAS" -> historial.filter { it.nivelAlerta == NivelAlerta.SEGURO.id }
-        "SOSPECHOSAS" -> historial.filter { it.nivelAlerta == NivelAlerta.SOSPECHOSO.id }
-        "BLOQUEADAS" -> historial.filter { it.urlLimpia in bloqueadasUrls }
-        else -> historial
-    }
-    return if (busqueda.isBlank()) {
-        porFiltro
-    } else {
-        // Audit fix P9: la busqueda matchea tambien la URL original (la que
-        // el usuario vio en el QR), no solo la limpia.
-        porFiltro.filter {
-            it.urlLimpia.contains(busqueda, ignoreCase = true) ||
-                it.urlOriginal.contains(busqueda, ignoreCase = true)
-        }
-    }
-}
-
-internal fun agruparHistorialPorFecha(
-    escaneos: List<EscaneoEntity>,
-    ahora: Long = System.currentTimeMillis()
-): List<GrupoHistorial> {
-    val ordenados = escaneos.sortedByDescending { it.creadoEnMillis }
-    // M2 audit fix — single-pass. Antes hacía 4 pasadas (`filter` x3 +
-    // `filter`+`groupBy`) con 4 llamadas a `diasDeDiferencia` por elemento.
-    // Ahora una sola pasada con 1 `diasDeDiferencia` por elemento → O(n)
-    // post-sort en vez de O(4n). Comportamiento idéntico:
-    //   - `hoy`    = dias <= 0 (incluye fechas futuras por reloj atrasado)
-    //   - `ayer`   = dias == 1
-    //   - `anteayer` = dias == 2
-    //   - `anteriores` = dias >= 3, agrupados por `formatoFechaCorta`.
-    // LinkedHashMap preserva orden de inserción = DESC (ordenados está DESC
-    // por creadoEnMillis), así los grupos más recientes van primero —
-    // equivalente al `groupBy` sobre lista DESC original.
-    val hoy = mutableListOf<EscaneoEntity>()
-    val ayer = mutableListOf<EscaneoEntity>()
-    val anteayer = mutableListOf<EscaneoEntity>()
-    val anteriores = LinkedHashMap<String, MutableList<EscaneoEntity>>()
-    for (escaneo in ordenados) {
-        val dias = diasDeDiferencia(escaneo.creadoEnMillis, ahora)
-        when {
-            dias <= 0L -> hoy.add(escaneo)
-            dias == 1L -> ayer.add(escaneo)
-            dias == 2L -> anteayer.add(escaneo)
-            else -> anteriores.getOrPut(formatoFechaCorta(escaneo.creadoEnMillis)) { mutableListOf() }
-                .add(escaneo)
-        }
-    }
-    return buildList {
-        if (hoy.isNotEmpty()) add(GrupoHistorial("Hoy", hoy))
-        if (ayer.isNotEmpty()) add(GrupoHistorial("Ayer", ayer))
-        if (anteayer.isNotEmpty()) add(GrupoHistorial("Anteayer", anteayer))
-        anteriores.forEach { (fecha, escaneosDelDia) ->
-            add(GrupoHistorial(fecha, escaneosDelDia))
-        }
-    }
+/**
+ * Filtro del historial (M2 — auditoría frontend): antes un `String` tecleado
+ * a mano en dos capas (chips de HistorialScreen + `filtrarHistorial`); un
+ * typo en cualquiera producía un filtro silenciosamente muerto sin error de
+ * compilación. El enum hace el contrato verificable en ambos lados.
+ *
+ * v10: el filtro se aplica en SQL ([RepositorioEscaneos.paginarHistorial])
+ * — solo se materializan las filas que matchean.
+ */
+enum class FiltroHistorial {
+    TODAS,
+    SEGURAS,
+    SOSPECHOSAS,
+    BLOQUEADAS
 }
 
 /**
  * ViewModel compartido entre las tabs ESCANEAR, HISTORIAL y BLOQUEADAS.
  *
- * Hilt: migrado de AndroidViewModel a @HiltViewModel con @Inject constructor
- * — los repositorios se inyectan via Hilt (RepositoryModule) en lugar de
- * construirse manualmente con BaseDatosSeguridad.get() + ClienteBackend().
+ * v10 — Paging 3 en el Historial: la lista es [historialPaging]
+ * (`Flow<PagingData<FilaHistorial>>`, scroll infinito, filtros/búsqueda en
+ * SQL, headers de fecha via insertSeparators). El botón "Cargar más" y la
+ * ventana LIMIT creciente (M5) desaparecen — la memoria queda acotada a la
+ * ventana de Paging aunque el usuario tenga 10.000 URLs únicas. Los
+ * contadores siguen viniendo del COUNT indexado del DAO (M3), separados de
+ * la lista paginada.
  */
 @OptIn(FlowPreview::class, ExperimentalCoroutinesApi::class)
 @HiltViewModel
@@ -153,65 +153,15 @@ class DatosTabsViewModel @Inject constructor(
     private val mediadorSync: MediadorSincronizacion
 ) : ViewModel() {
 
-    // ── HISTORIAL: Flow persistente con la ventana actual de la lista ──
-    //
-    // V-2 fix: Eagerly (activo desde la creacion del VM en NavGuardian)
-    // en vez de WhileSubscribed(3_000). Antes, al dejar HistorialScreen
-    // por >3s el Flow se detenia; al volver reiniciaba desde emptyList()
-    // hasta que Room re-emitia — flash de lista vacia en cada re-entrada.
-    // Con Eagerly el Flow colecta continuamente (como urlsBloqueadas), y
-    // Room emite la lista cacheada antes de que la UI llegue a pintar. La
-    // memoria retenida es real pero acotada: una referencia a la
-    // List<EscaneoEntity> ya materializada por Room en su cache interno;
-    // el Flow solo mantiene la referencia, no duplica los datos.
-    //
-    // Room controla el dispatcher de sus consultas; el filtrado y la
-    // agrupacion se aplican despues en [historialUiState] sobre Default.
-    //
-    // M5 audit fix: la consulta se acota con `LIMIT _limiteHistorial`
-    // (flatMapLatest re-suscribe el Flow del DAO cuando el límite cambia).
-    // Con ≤ LIMITE_HISTORIAL_INICIAL URLs únicas el resultado y los
-    // contadores derivados son idénticos a la lista completa; más allá,
-    // `cargarMasHistorial()` amplía la ventana y [hayMasHistorial] expone
-    // si puede haber más filas (size == limite). La lista es DESC — la
-    // fila recién escaneada siempre está en la ventana.
-    private val _limiteHistorial = MutableStateFlow(LIMITE_HISTORIAL_INICIAL)
-
-    val historialTodos: StateFlow<List<EscaneoEntity>> =
-        _limiteHistorial
-            .flatMapLatest { limite -> repoEscaneos.observarTodos(limite) }
-            .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
-
-    /**
-     * true cuando la ventana cargada alcanzó el límite — puede haber más
-     * URLs más allá (M5). La UI muestra el botón "Cargar más" con esto.
-     * Si el tamaño coincide por casualidad con el total exacto, el botón
-     * aparece una vez y desaparece tras el siguiente "cargar más".
-     */
-    val hayMasHistorial: StateFlow<Boolean> =
-        combine(historialTodos, _limiteHistorial) { lista, limite ->
-            lista.size >= limite
-        }
-            .distinctUntilChanged()
-            .stateIn(viewModelScope, SharingStarted.Eagerly, false)
-
-    /** Amplía la ventana del historial en [PASO_CARGAR_MAS_HISTORIAL] (M5). */
-    fun cargarMasHistorial() {
-        _limiteHistorial.value += PASO_CARGAR_MAS_HISTORIAL
-    }
-
     private val _busquedaHistorial = MutableStateFlow("")
     val busquedaHistorial: StateFlow<String> = _busquedaHistorial.asStateFlow()
 
-    private val _filtroHistorial = MutableStateFlow("TODAS")
-    val filtroHistorial: StateFlow<String> = _filtroHistorial.asStateFlow()
+    private val _filtroHistorial = MutableStateFlow(FiltroHistorial.TODAS)
+    val filtroHistorial: StateFlow<FiltroHistorial> = _filtroHistorial.asStateFlow()
 
     // V-2 fix: debounce SOLO sobre el texto de busqueda, no sobre todo el
-    // combine. Antes, debounce(300) encadenado al final de historialUiState
-    // retardaba TODAS las emisiones — incluyendo datos de Room al re-entrar
-    // y updates de sync — en 300ms. Ahora el debounce aislado agrupa
-    // keystrokes del usuario; los Flows de datos (historialTodos,
-    // urlsBloqueadas) fluyen sin demora a traves del combine.
+    // combine (antes retardaba TODAS las emisiones 300ms). Agrupa keystrokes
+    // del usuario; el resto de Flows fluyen sin demora.
     private val busquedaHistorialDebounced: StateFlow<String> =
         _busquedaHistorial
             .debounce(300)
@@ -221,16 +171,14 @@ class DatosTabsViewModel @Inject constructor(
     //
     // Eran dos StateFlow Eagerly corriendo para siempre desde el arranque
     // sin NINGUN consumidor en la UI (solo tests). Los contadores que la
-    // UI pinta se derivan en [historialUiState] desde la lista ya cargada.
+    // UI pinta vienen de [historialUiState] (COUNT del DAO, M3).
 
     // ── BLOQUEADAS: Flow eager para eliminar parpadeo de contador ──
     // Bug fix: antes usaba WhileSubscribed(5_000) con emptyList() como
     // initial value. Al reabrir Bloqueadas tras >5s sin suscriptores, la UI
     // mostraba "No hay URLs bloqueadas" por ~1 frame antes de que Room
-    // emitira la lista real. Ahora con Eagerly el Flow colecta desde el
-    // momento en que se crea el ViewModel, y Room emite la lista cacheada
-    // antes de que BloqueadasScreen llegue a pintar.
-    //
+    // emitiera la lista real. Con Eagerly el Flow colecta desde el
+    // momento en que se crea el ViewModel.
     val urlsBloqueadas: StateFlow<List<UrlBloqueadaEntity>> =
         repoUrls.observarTodos()
             .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
@@ -241,88 +189,162 @@ class DatosTabsViewModel @Inject constructor(
     }
 
     /** Actualiza el filtro activo del historial. */
-    fun actualizarFiltroHistorial(filtro: String) {
+    fun actualizarFiltroHistorial(filtro: FiltroHistorial) {
         _filtroHistorial.value = filtro
     }
 
     /**
-     * Ticker que emite al pasar cada medianoche local (audit fix P6): los
-     * grupos "Hoy/Ayer" se computan contra `System.currentTimeMillis()`,
-     * pero el combine solo re-emite cuando cambian Room/filtro/busqueda.
-     * Sin este ticker, al pasar medianoche con la app abia los headers
-     * quedaban stale hasta la proxima mutacion. El valor emitido es
-     * irrelevante — solo fuerza el recomputo de [historialUiState].
+     * Día calendario actual (epoch-days) — P6/v10: al cruzar medianoche
+     * cambia el valor y `flatMapLatest` recrea el Pager del historial, de
+     * modo que las claves "Hoy/Ayer" de las filas y los headers insertados
+     * se recomputan contra el nuevo día.
+     *
+     * v10 fix (hang de tests): el refresco de medianoche vive en un
+     * `Handler.postDelayed` al main looper y NO en un Flow infinito de
+     * `delay()`s. La versión con ticker-corutina coleccionada Eagerly
+     * colgaba `runTest` para siempre: su drain final (`advanceUntilIdle`)
+     * avanzaba el reloj virtual a través de la cadena INFINITA de delays
+     * del ticker (confirmado por thread dump). Con Handler, el production
+     * behavior es idéntico (un callback por medianoche en el main looper)
+     * y el scheduler de tests nunca lo ve.
      */
-    private val medianocheTicker: kotlinx.coroutines.flow.Flow<Long> = flow {
-        // P6 fix: combine no emite hasta que TODAS las fuentes emiten al menos
-        // una vez; sin esta emision inicial inmediata, el primer valor del
-        // ticker llegaba recien en la proxima medianoche y [historialUiState]
-        // quedaba congelado en su valor inicial (historial "vacio" en la UI).
-        emit(System.currentTimeMillis())
-        while (true) {
-            val ahora = ZonedDateTime.now(ZoneId.systemDefault())
-            val proximaMedianoche = ahora.toLocalDate().plusDays(1)
-                .atStartOfDay(ZoneId.systemDefault())
-            delay(Duration.between(ahora, proximaMedianoche).toMillis())
-            emit(System.currentTimeMillis())
-        }
-    }
+    private val handlerCambioDeDia = android.os.Handler(android.os.Looper.getMainLooper())
+    private val _diaActual = MutableStateFlow(System.currentTimeMillis() / 86_400_000L)
 
-    /**
-     * Estado derivado del historial. La busqueda, el filtro y la agrupacion
-     * se ejecutan fuera del hilo principal para que la recomposicion solo
-     * reciba el resultado listo para pintar.
-     *
-     * V-1+V-2 fix: antes usaba WhileSubscribed(3_000) con HistorialUiState()
-     * (todos los contadores en 0) como valor inicial + debounce(300) sobre
-     * TODO el combine. Eso causaba:
-     *  1. Flash de "0 escaneos", "0 bloqueados", "0% seguros" antes de los
-     *     datos reales (HistorialUiState() = zeros indistinguibles de
-     *     "realmente cero").
-     *  2. Al re-entrar al historial tras >3s, el Flow se reiniciaba desde
-     *     el valor inicial (zeros) + 300ms de debounce adicional.
-     *
-     * Ahora: Eagerly (activo desde la creacion del VM, como urlsBloqueadas),
-     * initialValue = HistorialUiState() (todos los contadores en null → la
-     * UI muestra "—" en vez de "0"). El debounce se aplica solo a
-     * busquedaHistorialDebounced para que Room data fluya sin demora.
-     */
-    val historialUiState: StateFlow<HistorialUiState> = combine(
-        historialTodos,
-        urlsBloqueadas,
-        _filtroHistorial,
-        busquedaHistorialDebounced,
-        medianocheTicker
-    ) { historial, urlsBloqueadas, filtro, busqueda, _ ->
-        val bloqueadasUrls = urlsBloqueadas.mapTo(hashSetOf()) { it.url }
-        val filtradas = filtrarHistorial(historial, filtro, busqueda, bloqueadasUrls)
-        val totalTodos = historial.size
-        val totalSeguras = historial.count { it.nivelAlerta == NivelAlerta.SEGURO.id }
-        val totalSospechosas = historial.count { it.nivelAlerta == NivelAlerta.SOSPECHOSO.id }
-        val totalBloqueadas = historial.count { it.urlLimpia in bloqueadasUrls }
-        HistorialUiState(
-            grupos = agruparHistorialPorFecha(filtradas),
-            totalTodos = totalTodos,
-            totalSeguras = totalSeguras,
-            totalSospechosas = totalSospechosas,
-            totalBloqueadas = totalBloqueadas,
-            segurosPct = if (totalTodos > 0) 100 * totalSeguras / totalTodos else 0,
-            // F4.3: derivados de urlsBloqueadas una sola vez (antes la
-            // pantalla duplicaba el toSet y colectaba el flow aparte).
-            urlsBloqueadasSet = bloqueadasUrls,
-            totalUrlsBloqueadas = urlsBloqueadas.size
+    /** Programa el refresco del día para la próxima medianoche local (P6). */
+    private fun programarCambioDeDia() {
+        val ahora = ZonedDateTime.now(ZoneId.systemDefault())
+        val proximaMedianoche = ahora.toLocalDate().plusDays(1)
+            .atStartOfDay(ZoneId.systemDefault())
+        handlerCambioDeDia.postDelayed(
+            {
+                _diaActual.value = System.currentTimeMillis() / 86_400_000L
+                programarCambioDeDia()
+            },
+            Duration.between(ahora, proximaMedianoche).toMillis()
         )
     }
+
+    override fun onCleared() {
+        handlerCambioDeDia.removeCallbacksAndMessages(null)
+        super.onCleared()
+    }
+
+    init {
+        programarCambioDeDia()
+    }
+
+    private val diaActual: StateFlow<Long> get() = _diaActual
+
+    /**
+     * v10 — Lista del Historial paginada (Paging 3 sobre Room, sin
+     * RemoteMediator: la red nunca está atada a la navegación).
+     *
+     * - Cambios de filtro/búsqueda (debounced) o de día recrean el Pager
+     *   (`flatMapLatest`) con los nuevos parámetros SQL.
+     * - `cachedIn(viewModelScope)`: la ventana cargada sobrevive a
+     *   re-entradas a la pantalla — al volver pinta al instante.
+     * - Headers de fecha via [androidx.paging.PagingData.insertSeparators]:
+     *   se inserta una [FilaHistorial.Cabecera] cuando cambia la clave de
+     *   grupo entre filas adyacentes (incluida la primera fila).
+     * - `enablePlaceholders = false`: los headers se deciden entre filas
+     *   cargadas; no hay numeración dependiente del índice absoluto (a
+     *   diferencia de Análisis anteriores).
+     */
+    val historialPaging: Flow<PagingData<FilaHistorial>> =
+        combine(
+            _filtroHistorial,
+            busquedaHistorialDebounced,
+            diaActual
+        ) { filtro, busqueda, dia -> Triple(filtro, busqueda, dia) }
+            .distinctUntilChanged()
+            .flatMapLatest { (filtro, busqueda, dia) ->
+                // `dia` (epoch-days) es solo el TRIGGER de recreación del
+                // Pager al cruzar medianoche (P6); las claves de grupo se
+                // computan contra millis REALES — un epoch-day (~20.714)
+                // leído como millis dejaría todas las fechas del siglo
+                // XXI en el grupo "Hoy" (bug de la primera iteración v10).
+                val ahoraMillis = System.currentTimeMillis()
+                Pager(
+                    config = PagingConfig(
+                        pageSize = TAMANO_PAGINA_HISTORIAL,
+                        initialLoadSize = TAMANO_PAGINA_HISTORIAL,
+                        prefetchDistance = TAMANO_PAGINA_HISTORIAL,
+                        enablePlaceholders = false
+                    ),
+                    pagingSourceFactory = {
+                        repoEscaneos.paginarHistorial(
+                            nivelAlerta = when (filtro) {
+                                FiltroHistorial.SEGURAS -> NivelAlerta.SEGURO.id
+                                FiltroHistorial.SOSPECHOSAS -> NivelAlerta.SOSPECHOSO.id
+                                FiltroHistorial.TODAS, FiltroHistorial.BLOQUEADAS -> null
+                            },
+                            soloBloqueadas = filtro == FiltroHistorial.BLOQUEADAS,
+                            busqueda = busqueda
+                        )
+                    }
+                ).flow.map { datos: PagingData<EscaneoEntity> ->
+                    // map + insertSeparators encadenados sobre PagingData
+                    // (en Paging 3 la extension vive en PagingData, no en el
+                    // Flow): cada pagina se transforma al vuelo.
+                    datos
+                        .map { escaneo ->
+                            FilaHistorial.Entrada(
+                                escaneo = escaneo,
+                                claveGrupo = claveGrupoHistorial(escaneo.creadoEnMillis, ahoraMillis)
+                            )
+                        }
+                        .insertSeparators { antes, despues ->
+                            if (despues != null && antes?.claveGrupo != despues.claveGrupo) {
+                                FilaHistorial.Cabecera(despues.claveGrupo ?: "")
+                            } else {
+                                null
+                            }
+                        }
+                }
+            }
+            .cachedIn(viewModelScope)
+
+    /**
+     * Estado derivado del historial SIN la lista (v10): contadores del
+     * COUNT indexado (M3 — independientes de la paginación) y el set de
+     * URLs bloqueadas para el badge de fila (F4.3).
+     *
+     * V-1 fix: initialValue con contadores null — la UI muestra "—" hasta
+     * que Room emite, sin flash de "0 escaneos".
+     */
+    private val conteosTotales: StateFlow<ConteosHistorial> =
+        repoEscaneos.observarConteosHistorial()
+            .stateIn(
+                viewModelScope,
+                SharingStarted.Eagerly,
+                ConteosHistorial(
+                    totalTodos = 0, totalSeguras = 0,
+                    totalSospechosas = 0, totalBloqueadas = 0
+                )
+            )
+
+    val historialUiState: StateFlow<HistorialUiState> =
+        combine(urlsBloqueadas, conteosTotales) { urlsBloqueadas, conteos ->
+            HistorialUiState(
+                // F4.3: derivados de urlsBloqueadas una sola vez (antes la
+                // pantalla duplicaba el toSet y colectaba el flow aparte).
+                urlsBloqueadasSet = urlsBloqueadas.mapTo(hashSetOf()) { it.url },
+                totalUrlsBloqueadas = urlsBloqueadas.size,
+                totalTodos = conteos.totalTodos,
+                totalSeguras = conteos.totalSeguras,
+                totalSospechosas = conteos.totalSospechosas,
+                totalBloqueadas = conteos.totalBloqueadas,
+                segurosPct = if (conteos.totalTodos > 0) {
+                    100 * conteos.totalSeguras / conteos.totalTodos
+                } else {
+                    0
+                }
+            )
+        }
         // A3-b audit fix — `distinctUntilChanged` filtra re-emisiones
-        // idénticas del combine. Room puede re-emitir `historialTodos`
-        // con el mismo contenido (referencia distinta) cuando una tabla
-        // ajena cambia o el observador sale y re-entra. Sin este filtro
-        // la UI recomponía sin que cambiara ningún dato visible.
-        // historialUiState final es un data class → equals compara todos
-        // los campos (grupos, contadores, pct). El coste del equals es
-        // O(grupos) que es diminuto frente a una recomposición.
-        // Se aplica ANTES de `flowOn(Default)` para que la comparación
-        // corra en Default, no en el hilo del colector.
+        // idénticas del combine; se aplica ANTES de `flowOn(Default)` para
+        // que la comparación corra en Default, no en el hilo del colector.
         .distinctUntilChanged()
         .flowOn(Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.Eagerly, HistorialUiState())
@@ -331,9 +353,6 @@ class DatosTabsViewModel @Inject constructor(
     // syncEnCurso emite true mientras el SyncWorker esta ENQUEUED o RUNNING.
     // La UI lo usa para mostrar skeleton/loading en el Historial en lugar de
     // "Aun no hay escaneos" cuando Room esta vacio y el PULL inicial esta corriendo.
-    // Eagerly: el flujo de WorkInfo debe estar activo desde el arranque para
-    // que syncEnCurso refleje inmediatamente el estado real del worker sin
-    // depender de que un suscriptor este presente.
     val syncEnCurso: StateFlow<Boolean> =
         mediadorSync.observarSyncEnCurso()
             .stateIn(viewModelScope, SharingStarted.Eagerly, false)

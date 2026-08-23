@@ -20,6 +20,7 @@ import com.qrsecurity.detector.datos.local.migraciones.Migracion5A6
 import com.qrsecurity.detector.datos.local.migraciones.Migracion6A7
 import com.qrsecurity.detector.datos.local.migraciones.Migracion7A8
 import com.qrsecurity.detector.datos.local.migraciones.Migracion8A9
+import com.qrsecurity.detector.datos.local.migraciones.Migracion9A10
 
 /**
  * Base de datos Room — fuente de verdad local (offline-first).
@@ -67,7 +68,7 @@ import com.qrsecurity.detector.datos.local.migraciones.Migracion8A9
         SyncStateEntity::class,
         UrlCatalogoEntity::class
     ],
-    version = 9,
+    version = 10,
     exportSchema = true
 )
 abstract class BaseDatosSeguridad : RoomDatabase() {
@@ -334,6 +335,16 @@ abstract class BaseDatosSeguridad : RoomDatabase() {
         }
 
         /**
+         * Migration 9 → 10: añade `sync_state.ultimoCursorBackfill` para el
+         * backfill inicial DESC (doble cursor — ver [Migracion9A10]).
+         */
+        val MIGRATION_9_10: Migration = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                Migracion9A10.migrar(db)
+            }
+        }
+
+        /**
          * Única lista de migraciones válida del esquema — consumida por
          * [com.qrsecurity.detector.di.DatabaseModule] al construir la
          * instancia Hilt.
@@ -348,7 +359,8 @@ abstract class BaseDatosSeguridad : RoomDatabase() {
          */
         val TODAS_MIGRACIONES: Array<Migration> = arrayOf(
             MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5,
-            MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9
+            MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9,
+            MIGRATION_9_10
         )
     }
 }

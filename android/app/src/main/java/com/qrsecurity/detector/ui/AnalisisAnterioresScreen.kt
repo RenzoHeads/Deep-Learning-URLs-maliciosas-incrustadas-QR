@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
 
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -33,6 +32,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.paging.LoadState
+import androidx.paging.compose.collectAsLazyPagingItems
 import com.qrsecurity.detector.ui.theme.Borde
 import com.qrsecurity.detector.ui.theme.CyberCyan
 import com.qrsecurity.detector.ui.theme.CyberFondo
@@ -88,15 +89,15 @@ fun PantallaAnalisisAnteriores(
 
     val estado by viewModel.estadoAnalisisAnteriores.collectAsStateWithLifecycle()
     val syncEnCurso by datosViewModel.syncEnCurso.collectAsStateWithLifecycle()
+    val versiones = viewModel.versiones.collectAsLazyPagingItems()
 
-    val dataCoincide = estado.url == urlLimpia && estado.id == idActual
-    // F4.2 audit fix — sin re-sort: el contrato de
-    // `EscaneoDao.observarReescaneosTodos` ya entrega la lista ordenada por
-    // `creadoEnMillis DESC, id DESC`. El `sortedByDescending` por emisión era
-    // O(n log n) redundante (y `remember(estado.lista)` comparaba la lista
-    // entera por equals en cada emisión para decidir si re-sortear).
-    val listaOrdenada = estado.lista
-    val total = estado.total
+    // S1: el estado de la cabecera es sellado — solo un Cargado cuya etiqueta
+    // (url, id) coincide con la pantalla actual aporta el total; un Cargado
+    // de la URL anterior (swap durante flatMapLatest) o Cargando no pintan.
+    val cargado = estado as? EstadoAnalisisAnteriores.Cargado
+    val dataCoincide = cargado != null &&
+        cargado.url == urlLimpia && cargado.id == idActual
+    val total = if (dataCoincide) cargado!!.total else 0
 
     LazyColumn(
         modifier = Modifier
@@ -243,7 +244,12 @@ fun PantallaAnalisisAnteriores(
                     }
                 }
             }
-            listaOrdenada.isEmpty() -> {
+            versiones.loadState.refresh is LoadState.Loading && versiones.itemCount == 0 -> {
+                item(key = "loading") {
+                    FilaPlaceholderVersion()
+                }
+            }
+            versiones.itemCount == 0 -> {
                 item(key = "empty") {
                     EstadoVacio(
                         icono = Icons.Filled.History,
@@ -253,23 +259,47 @@ fun PantallaAnalisisAnteriores(
                 }
             }
             else -> {
-                // BUG #2 fix: cada entrada es un item individual del LazyColumn
-                // con key=id → virtualizacion completa.
-                // F4.1: contentType homogéneo — todas las entradas comparten
-                // el mismo "shape", el recycler reutiliza el pool completo.
-                itemsIndexed(
-                    items = listaOrdenada,
-                    key = { _, escaneo -> escaneo.id },
-                    contentType = { _, _ -> "entrada_linea_tiempo" }
-                ) { index, escaneo ->
-                    val version = total - index
-                    val esUltimo = index == listaOrdenada.lastIndex
-                    EntradaLineaTiempo(
-                        escaneo = escaneo,
-                        version = version,
-                        esUltimo = esUltimo,
-                        onClick = { onVerDetalle(escaneo.id) }
-                    )
+                // v10 — Paging 3: `items(count)` con lookup por indice. Con
+                // enablePlaceholders el indice es ABSOLUTO (incluye huecos
+                // no cargados), de modo que el badge `version = total - index`
+                // y `esUltimo` son correctos aunque la fila se cargue tarde.
+                // Las filas null son placeholders ligeros mientras Paging
+                // trae la pagina — memoria acotada a la ventana de scroll,
+                // no al total de versiones de la URL.
+                //
+                // T3 — deriva transitoria de la numeracion durante backfill:
+                // `version = total - indice` depende de `total` (COUNT del
+                // header). Mientras el sync inicial sigue escribiendo versiones
+                // MAS VIEJAS que todas (backfill DESC), `total` crece pero el
+                // indice de las filas ya visibles no cambia (orden DESC: las
+                // viejas se anclan al FINAL). La etiqueta de una fila visible i
+                // pasa de `total0 - i` a `totalN - i` — el numero puede saltar
+                // bajo los ojos del usuario mientras dura el backfill. Decisión
+                // consciente: NO se re-ancla la fórmula (cambio de UI no
+                // justificado); la deriva es acotada a la ventana del sync
+                // inicial. Ver test
+                // AnalisisAnterioresViewModelTest.`numeracion_total_menos_indice_semantica_fijada_deriva_durante_backfill`.
+                items(
+                    count = versiones.itemCount,
+                    key = { indice -> versiones[indice]?.id ?: "ph_$indice" },
+                    contentType = { "entrada_linea_tiempo" }
+                ) { indice ->
+                    val escaneo = versiones[indice]
+                    if (escaneo == null) {
+                        FilaPlaceholderVersion()
+                    } else {
+                        EntradaLineaTiempo(
+                            escaneo = escaneo,
+                            version = total - indice,
+                            esUltimo = indice == total - 1,
+                            onClick = { onVerDetalle(escaneo.id) }
+                        )
+                    }
+                }
+                if (versiones.loadState.append is LoadState.Loading) {
+                    item(key = "append_loading") {
+                        FilaPlaceholderVersion()
+                    }
                 }
             }
         }
@@ -296,5 +326,33 @@ fun PantallaAnalisisAnteriores(
                 )
             }
         }
+    }
+}
+
+/**
+ * Placeholder de fila para los huecos de Paging (enablePlaceholders=true):
+ * mientras Paging trae la pagina correspondiente al hueco, se pinta una
+ * fila ligera con la misma geometria de vidrio que [EntradaLineaTiempo].
+ */
+@Composable
+private fun FilaPlaceholderVersion() {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(RadioBorde.lg))
+            .background(CyberGlass)
+            .border(
+                width = Borde.fino,
+                color = CyberGlassBorde,
+                shape = RoundedCornerShape(RadioBorde.lg)
+            )
+            .padding(vertical = Espaciado.xl),
+        contentAlignment = Alignment.Center
+    ) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(TamanosIcono.chico),
+            color = CyberCyan,
+            strokeWidth = 2.dp
+        )
     }
 }

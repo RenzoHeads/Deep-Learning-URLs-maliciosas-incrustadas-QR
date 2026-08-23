@@ -1,7 +1,9 @@
 package com.qrsecurity.detector.datos.repositorios
 
+import androidx.paging.PagingSource
 import com.qrsecurity.detector.api.ClienteBackend
 import com.qrsecurity.detector.datos.local.BaseDatosSeguridad
+import com.qrsecurity.detector.datos.local.dao.ConteosHistorial
 import com.qrsecurity.detector.datos.local.entidades.EscaneoEntity
 import com.qrsecurity.detector.datos.local.entidades.UrlCatalogoEntity
 import com.qrsecurity.detector.datos.local.sha256Hex
@@ -50,23 +52,52 @@ class RepositorioEscaneos(
     // ── Observacion reactiva (UI usa estos Flows) ──
 
     /**
-     * Historial deduplicado acotado a las [limite] URLs más recientes
-     * (M5 audit fix — ver [EscaneoDao.observarTodosUnicos]).
+     * Historial deduplicado y filtrado, paginado con Paging 3 sobre Room
+     * (v10 — reemplaza a `observarTodos(limite)` + filtrado en memoria).
+     *
+     * @param nivelAlerta null = todas; si no, filtro exacto (SEGURO/SOSPECHOSO).
+     * @param soloBloqueadas true = solo URLs presentes en urls_bloqueadas.
+     * @param busqueda texto libre — LIKE NOCASE sobre urlLimpia y urlOriginal,
+     *   con wildcards escapados por el usuario incluidos literales.
      */
-    fun observarTodos(limite: Int): Flow<List<EscaneoEntity>> =
-        db.escaneoDao().observarTodosUnicos(limite)
+    fun paginarHistorial(
+        nivelAlerta: String?,
+        soloBloqueadas: Boolean,
+        busqueda: String
+    ): PagingSource<Int, EscaneoEntity> = db.escaneoDao().paginarHistorial(
+        nivelAlerta = nivelAlerta,
+        soloBloqueadas = soloBloqueadas,
+        busqueda = escaparWildcardsLike(busqueda)
+    )
 
     /**
-     * Devuelve el Flow reactivo con TODOS los reescaneos de [urlLimpia]
-     * (excluyendo [idActual]), sin paginar.
-     *
-     * Consumer: [AnalisisAnterioresViewModel].
+     * v10 — escapa los wildcards de LIKE (`%`, `_` y el propio `\`) del
+     * input del usuario para que la busqueda los trate como literales
+     * (la query del DAO usa `ESCAPE '\'`).
      */
-    fun observarReescaneosTodos(
+    private fun escaparWildcardsLike(busqueda: String): String =
+        if (busqueda.isEmpty()) "" else busqueda
+            .replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_")
+
+    /**
+     * M3 (auditoría frontend): contadores TOTALES del historial
+     * deduplicado (COUNT del DAO, sin la ventana LIMIT del listado).
+     */
+    fun observarConteosHistorial(): Flow<ConteosHistorial> =
+        db.escaneoDao().observarConteosHistorial()
+
+    /**
+     * Versiones anteriores de [urlLimpia] (excluyendo [idActual]) como
+     * [PagingSource] — Paging 3 local sobre Room (v10). El Pager vive en
+     * [AnalisisAnterioresViewModel].
+     */
+    fun paginarReescaneos(
         urlLimpia: String,
         idActual: String
-    ): Flow<List<EscaneoEntity>> =
-        db.escaneoDao().observarReescaneosTodos(urlLimpia, idActual)
+    ): PagingSource<Int, EscaneoEntity> =
+        db.escaneoDao().paginarReescaneos(urlLimpia, idActual)
 
     fun observarTotalReescaneos(urlLimpia: String, idActual: String): Flow<Int> =
         db.escaneoDao().observarTotalReescaneos(urlLimpia, idActual)

@@ -1,7 +1,6 @@
 package com.qrsecurity.detector.ui
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -12,7 +11,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -22,6 +20,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SearchOff
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.FloatingActionButton
@@ -31,7 +30,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -42,6 +40,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.paging.LoadState
+import androidx.paging.compose.collectAsLazyPagingItems
 import com.qrsecurity.detector.ui.theme.CyberCyan
 import com.qrsecurity.detector.ui.theme.CyberFondo
 import com.qrsecurity.detector.ui.theme.CyberGlass
@@ -98,7 +98,7 @@ fun PantallaHistorial(
     val syncEnCurso by datosViewModel.syncEnCurso.collectAsStateWithLifecycle()
     val busqueda by datosViewModel.busquedaHistorial.collectAsStateWithLifecycle()
     val filtroSeleccionado by datosViewModel.filtroHistorial.collectAsStateWithLifecycle()
-    val hayMasHistorial by datosViewModel.hayMasHistorial.collectAsStateWithLifecycle()
+    val filas = datosViewModel.historialPaging.collectAsLazyPagingItems()
 
     // F4.3 audit fix — el set de URLs bloqueadas viene en el UiState (derivado
     // una vez en el combine del VM). Antes la pantalla colectaba
@@ -110,7 +110,6 @@ fun PantallaHistorial(
     // (la UI muestra "—"), 0 = realmente cero. Esto elimina el flash de
     // "0 escaneos" / "0% seguros" que aparecia antes de que Room emitiera
     // los datos reales.
-    val grupos = historialUiState.grupos
     val totalTodos = historialUiState.totalTodos
     val totalSeguras = historialUiState.totalSeguras
     val totalSospechosas = historialUiState.totalSospechosas
@@ -193,26 +192,26 @@ fun PantallaHistorial(
                     horizontalArrangement = Arrangement.spacedBy(Espaciado.sm)
                 ) {
                     FilterChip(
-                        selected = filtroSeleccionado == "TODAS",
-                        onClick = { datosViewModel.actualizarFiltroHistorial("TODAS") },
+                        selected = filtroSeleccionado == FiltroHistorial.TODAS,
+                        onClick = { datosViewModel.actualizarFiltroHistorial(FiltroHistorial.TODAS) },
                         label = { Text("Todas ${totalTodos ?: "—"}") },
                         colors = chipColoresFiltro()
                     )
                     FilterChip(
-                        selected = filtroSeleccionado == "SEGURAS",
-                        onClick = { datosViewModel.actualizarFiltroHistorial("SEGURAS") },
+                        selected = filtroSeleccionado == FiltroHistorial.SEGURAS,
+                        onClick = { datosViewModel.actualizarFiltroHistorial(FiltroHistorial.SEGURAS) },
                         label = { Text("Seguras ${totalSeguras ?: "—"}") },
                         colors = chipColoresFiltro()
                     )
                     FilterChip(
-                        selected = filtroSeleccionado == "SOSPECHOSAS",
-                        onClick = { datosViewModel.actualizarFiltroHistorial("SOSPECHOSAS") },
+                        selected = filtroSeleccionado == FiltroHistorial.SOSPECHOSAS,
+                        onClick = { datosViewModel.actualizarFiltroHistorial(FiltroHistorial.SOSPECHOSAS) },
                         label = { Text("Sospechosas ${totalSospechosas ?: "—"}") },
                         colors = chipColoresFiltro()
                     )
                     FilterChip(
-                        selected = filtroSeleccionado == "BLOQUEADAS",
-                        onClick = { datosViewModel.actualizarFiltroHistorial("BLOQUEADAS") },
+                        selected = filtroSeleccionado == FiltroHistorial.BLOQUEADAS,
+                        onClick = { datosViewModel.actualizarFiltroHistorial(FiltroHistorial.BLOQUEADAS) },
                         label = { Text("Bloqueadas ${totalBloqueadas ?: "—"}") },
                         colors = chipColoresFiltro()
                     )
@@ -241,10 +240,13 @@ fun PantallaHistorial(
 
             // ─── List / Empty ───
             // V-1 fix: solo mostramos el estado vacio cuando los datos estan
-            // cargados (totalTodos != null). Cuando totalTodos es null (cargando),
-            // grupos es emptyList() pero NO mostramos "No hay escaneos" — evita
-            // flash del empty-state durante el sub-frame de carga.
-            if (historialUiState.totalTodos != null && grupos.isEmpty()) {
+            // cargados (totalTodos != null) y el refresh del Pager termino sin
+            // filas. Cuando totalTodos es null (cargando) NO mostramos "No hay
+            // escaneos" — evita flash del empty-state durante la carga.
+            if (historialUiState.totalTodos != null &&
+                filas.loadState.refresh is LoadState.NotLoading &&
+                filas.itemCount == 0
+            ) {
                 item(key = "empty_state") {
                     EstadoVacio(
                         icono = Icons.Filled.SearchOff,
@@ -256,84 +258,77 @@ fun PantallaHistorial(
                     )
                 }
             } else {
-                // BUG #2 fix: cada grupo se particiona en header + items individuales.
-                // LazyColumn virtualiza los items individuales (solo compone los
-                // visibles + buffer). Con miles de filas en "Anteriores", solo
-                // las visibles en pantalla ocupan memoria/computation — el resto
-                // se dispone al salir del viewport. `key = { it.id }` permite al
-                // recycler identificar items movidos entre grupos/ordenes sin
-                // recomponerlos desde cero (mantiene estado y animaciones).
-                grupos.forEach { grupo ->
-                    item(key = "grp_header_${grupo.titulo}", contentType = "grupo_header") {
-                        // Auditoría UI 2: título + contador + divisor — la
-                        // sección temporal se lee como bloque delimitado, no
-                        // como una etiqueta suelta flotando sobre la lista.
-                        Column(verticalArrangement = Arrangement.spacedBy(Espaciado.xs)) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
+                // v10 — Paging 3: filas y cabeceras de fecha vienen del stream
+                // paginado (insertSeparators del VM). Cada fila es un item
+                // individual del LazyColumn con key=id → virtualizacion
+                // completa; los headers comparten el LazyColumn con
+                // contentType separado (F4.1 — pools de reutilización
+                // distintos para "shapes" distintos).
+                items(
+                    count = filas.itemCount,
+                    key = { indice ->
+                        when (val fila = filas[indice]) {
+                            is FilaHistorial.Entrada -> "e_${fila.escaneo.id}"
+                            is FilaHistorial.Cabecera -> "h_${fila.titulo}"
+                            null -> "ph_$indice"
+                        }
+                    },
+                    contentType = { indice ->
+                        when (filas[indice]) {
+                            is FilaHistorial.Cabecera -> "grupo_header"
+                            else -> "fila_escaneo"
+                        }
+                    }
+                ) { indice ->
+                    when (val fila = filas[indice]) {
+                        is FilaHistorial.Cabecera -> {
+                            // Auditoría UI 2: título + divisor — la sección
+                            // temporal se lee como bloque delimitado.
+                            Column(verticalArrangement = Arrangement.spacedBy(Espaciado.xs)) {
                                 Text(
-                                    text = grupo.titulo,
+                                    text = fila.titulo,
                                     style = MaterialTheme.typography.labelMedium,
                                     fontWeight = FontWeight.Bold,
                                     color = CyberTextoSecundario
                                 )
-                                Text(
-                                    text = "${grupo.escaneos.size}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = CyberTextoSecundario
+                                HorizontalDivider(
+                                    thickness = Borde.fino,
+                                    color = CyberGlassBorde
                                 )
                             }
-                            HorizontalDivider(
-                                thickness = Borde.fino,
-                                color = CyberGlassBorde
-                            )
                         }
-                    }
-                    itemsIndexed(
-                        items = grupo.escaneos,
-                        key = { _, escaneo -> escaneo.id },
-                        // F4.1: headers y filas comparten el LazyColumn — el
-                        // contentType separa los pools de reutilización para
-                        // que el recycler no mezcle "shapes" distintos.
-                        contentType = { _, _ -> "fila_escaneo" }
-                    ) { _, escaneo ->
-                        val bloqueada = escaneo.urlLimpia in bloqueadasUrls
-                        // Cada fila obtiene su propio Card cyber-glass con esquinas
-                        // redondeadas — reemplaza al Card unico por grupo que
-                        // instanciaba todas las filas simultaneamente. Visual:
-                        // lista de cards individuales agrupadas por header.
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(RadioBorde.xl),
-                            colors = CardDefaults.cardColors(containerColor = CyberGlass),
-                            elevation = CardDefaults.cardElevation(defaultElevation = Elevacion.ninguna)
-                        ) {
-                            FilaEscaneo(
-                                escaneo = escaneo,
-                                bloqueada = bloqueada,
-                                onVerDetalle = onVerDetalle,
-                            )
+                        is FilaHistorial.Entrada -> {
+                            val bloqueada = fila.escaneo.urlLimpia in bloqueadasUrls
+                            // Cada fila obtiene su propio Card cyber-glass con esquinas
+                            // redondeadas — lista de cards individuales agrupadas
+                            // por header.
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(RadioBorde.xl),
+                                colors = CardDefaults.cardColors(containerColor = CyberGlass),
+                                elevation = CardDefaults.cardElevation(defaultElevation = Elevacion.ninguna)
+                            ) {
+                                FilaEscaneo(
+                                    escaneo = fila.escaneo,
+                                    bloqueada = bloqueada,
+                                    onVerDetalle = onVerDetalle,
+                                )
+                            }
                         }
-                    }
-                }
-
-                // ─── Cargar más (M5 audit fix) ───
-                // Amplía la ventana LIMIT del historial cuando la lista
-                // cargada alcanzó el límite (solo visible con >500 URLs).
-                if (hayMasHistorial) {
-                    item(key = "cargar_mas") {
-                        TextButton(
-                            onClick = datosViewModel::cargarMasHistorial,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                text = "Cargar más",
-                                style = MaterialTheme.typography.labelLarge,
-                                color = CyberCyan
-                            )
+                        null -> {
+                            // Fila en carga (append en curso) — placeholder ligero.
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = Espaciado.xl),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(TamanosIcono.chico),
+                                    color = CyberCyan,
+                                    strokeWidth = 2.dp
+                                )
+                            }
                         }
                     }
                 }
