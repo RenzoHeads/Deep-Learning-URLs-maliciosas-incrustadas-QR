@@ -1,5 +1,6 @@
 package com.qrsecurity.detector.ui
 
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.viewModelScope
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
@@ -7,6 +8,7 @@ import androidx.work.Configuration
 import androidx.work.testing.WorkManagerTestInitHelper
 import com.qrsecurity.detector.api.ClienteBackend
 import com.qrsecurity.detector.cache.CacheDetalleEscaneos
+import com.qrsecurity.detector.cache.DetalleEscaneoCacheado
 import com.qrsecurity.detector.datos.local.BaseDatosSeguridad
 import com.qrsecurity.detector.datos.local.entidades.EscaneoEntity
 import com.qrsecurity.detector.datos.local.entidades.UrlBloqueadaEntity
@@ -59,6 +61,7 @@ class DetalleUrlViewModelTest {
     private lateinit var db: BaseDatosSeguridad
     private lateinit var repoEscaneos: RepositorioEscaneos
     private lateinit var repoUrls: RepositorioUrlsBloqueadas
+    private lateinit var cacheDetalle: CacheDetalleEscaneos
     private lateinit var viewModel: DetalleUrlViewModel
     private val collectorJobs = mutableListOf<Job>()
 
@@ -81,8 +84,11 @@ class DetalleUrlViewModelTest {
         val backend = ClienteBackend()
         repoEscaneos = RepositorioEscaneos(db, backend, json, Dispatchers.Unconfined)
         repoUrls = RepositorioUrlsBloqueadas(db, backend, json, Dispatchers.Unconfined)
-        val mediadorSync = FakeMediadorSincronizacion(context)
-        viewModel = DetalleUrlViewModel(repoEscaneos, repoUrls, mediadorSync, CacheDetalleEscaneos())
+        cacheDetalle = CacheDetalleEscaneos()
+        viewModel = DetalleUrlViewModel(
+            repoEscaneos, repoUrls, FakeMediadorSincronizacion(context), cacheDetalle,
+            SavedStateHandle()
+        )
     }
 
     @After
@@ -339,6 +345,94 @@ class DetalleUrlViewModelTest {
         assertTrue(
             "Sin fila viva de la misma URL, el estado debe ser NoEncontrado (no un Cargado fantasma). Fue: ${viewModel.uiState.value}",
             viewModel.uiState.value is DetalleUrlUiState.NoEncontrado
+        )
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // RC1 — prefill síncrono del cache en el constructor (SavedStateHandle)
+    // ──────────────────────────────────────────────────────────────
+
+    @Test
+    fun init_idEnSavedStateHandleYCacheHit_arrancaCargadoSinAvanzarElDispatcher() = runTest(testDispatcher) {
+        db.escaneoDao().insertar(
+            escaneoSemilla(id = "cacheado-1", urlLimpia = "https://cacheada.com")
+        )
+        cacheDetalle.guardar(
+            DetalleEscaneoCacheado(
+                escaneo = escaneoSemilla(id = "cacheado-1", urlLimpia = "https://cacheada.com"),
+                urlBloqueada = false,
+                esUltimaVersion = true,
+                totalReescaneos = 0
+            )
+        )
+
+        val vm = DetalleUrlViewModel(
+            repoEscaneos,
+            repoUrls,
+            FakeMediadorSincronizacion(ApplicationProvider.getApplicationContext()),
+            cacheDetalle,
+            SavedStateHandle(mapOf("id" to "cacheado-1"))
+        )
+
+        // SIN advanceUntilIdle: el estado inicial debe salir del prefill
+        // síncrono del constructor (lectura de map en memoria), no de la
+        // cadena reactiva — así la PRIMERA composición ya pinta el detalle,
+        // sin frames de spinner.
+        val estadoInicial = vm.uiState.value
+        assertTrue(
+            "Con cache hit + id en SavedStateHandle, el VM debe nacer Cargado. Fue: $estadoInicial",
+            estadoInicial is DetalleUrlUiState.Cargado
+        )
+        assertEquals(
+            "El prefill debe exponer el escaneo del id navegado",
+            "cacheado-1",
+            (estadoInicial as DetalleUrlUiState.Cargado).escaneo.id
+        )
+
+        // La cadena reactiva re-valida contra Room en background y el
+        // estado se mantiene (sin flash de Cargando intermedio).
+        repeat(5) {
+            Thread.sleep(50)
+            advanceUntilIdle()
+        }
+        advanceUntilIdle()
+        val estadoFinal = vm.uiState.value
+        assertTrue(
+            "Tras la re-validación de Room el estado debe seguir Cargado. Fue: $estadoFinal",
+            estadoFinal is DetalleUrlUiState.Cargado
+        )
+        assertEquals("cacheado-1", (estadoFinal as DetalleUrlUiState.Cargado).escaneo.id)
+    }
+
+    @Test
+    fun init_idEnSavedStateHandleSinCache_arrancaCargandoHastaRoom() = runTest(testDispatcher) {
+        db.escaneoDao().insertar(
+            escaneoSemilla(id = "frio-1", urlLimpia = "https://fria.com")
+        )
+
+        val vm = DetalleUrlViewModel(
+            repoEscaneos,
+            repoUrls,
+            FakeMediadorSincronizacion(ApplicationProvider.getApplicationContext()),
+            cacheDetalle,
+            SavedStateHandle(mapOf("id" to "frio-1"))
+        )
+
+        // Cache miss: el constructor NO tiene nada que prefillar — el
+        // estado inicial sigue siendo Cargando hasta que Room emita.
+        assertTrue(
+            "Sin cache hit el VM arranca en Cargando (spinner breve honesto). Fue: ${vm.uiState.value}",
+            vm.uiState.value is DetalleUrlUiState.Cargando
+        )
+
+        repeat(5) {
+            Thread.sleep(50)
+            advanceUntilIdle()
+        }
+        advanceUntilIdle()
+        assertTrue(
+            "Tras el drain, Room debe haber llevado el estado a Cargado. Fue: ${vm.uiState.value}",
+            vm.uiState.value is DetalleUrlUiState.Cargado
         )
     }
 }

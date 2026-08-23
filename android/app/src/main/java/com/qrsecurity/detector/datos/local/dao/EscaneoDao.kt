@@ -2,6 +2,7 @@ package com.qrsecurity.detector.datos.local.dao
 
 import androidx.paging.PagingSource
 import androidx.room.Dao
+import androidx.room.Embedded
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
@@ -57,6 +58,27 @@ private const val IDS_SIN_DELETE_PENDIENTE =
         "WHERE tabla = 'escaneos' AND tipoOperacion = 'DELETE' AND fallida = 0)"
 
 /**
+ * Espejo de [IDS_SIN_DELETE_PENDIENTE] para la tabla `urls_bloqueadas`:
+ * ids SIN un op DELETE pendiente (no fallido) — una fila con DELETE
+ * pendiente esta "logicamente desbloqueada" antes de que el PUSH la borre.
+ */
+private const val IDS_SIN_DELETE_PENDIENTE_URLS =
+    "(SELECT idLocal FROM pending_ops " +
+        "WHERE tabla = 'urls_bloqueadas' AND tipoOperacion = 'DELETE' AND fallida = 0)"
+
+/**
+ * Predicado "esta URL esta bloqueada" (sin DELETE pendiente) — usado como
+ * columna calculada [paginarHistorial] (badge de candado por fila, F4.3-b)
+ * y como filtro `soloBloqueadas`, alineado con el COUNT de
+ * [observarConteosHistorial] (`totalBloqueadas` excluye los DELETEs
+ * pendientes desde siempre — antes el filtro y el badge no lo hacían).
+ */
+private const val URL_BLOQUEADA_ACTIVA =
+    "EXISTS(SELECT 1 FROM urls_bloqueadas ub " +
+        "WHERE ub.url = e.urlLimpia " +
+        "AND ub.id NOT IN $IDS_SIN_DELETE_PENDIENTE_URLS)"
+
+/**
  * M4: resultado de [EscaneoDao.contarPorUrlLimpiaBatch] — URL + conteo de
  * filas vivas. POJO para queries de batch (no es una entidad Room).
  */
@@ -78,6 +100,19 @@ data class ConteosHistorial(
     val totalSeguras: Int,
     val totalSospechosas: Int,
     val totalBloqueadas: Int
+)
+
+/**
+ * Fila del historial con el flag de bloqueo calculado EN SQL (F4.3-b):
+ * `EXISTS(...)` contra `urls_bloqueadas` (sin DELETEs pendientes) como
+ * columna adicional. Reemplaza el Set completo de URLs bloqueadas que el
+ * ViewModel derivaba de un Flow de la TABLA COMPLETA (`observarTodos()`)
+ * — el badge de candado viaja con cada fila, sin colección perpetua desde
+ * el arranque ni re-derivación del set en cada invalidación.
+ */
+data class EscaneoConBloqueo(
+    @Embedded val escaneo: EscaneoEntity,
+    val bloqueada: Boolean
 )
 
 @Dao
@@ -105,26 +140,33 @@ interface EscaneoDao {
      * El filtro vive en SQL (no materializa filas que no matchean):
      *  - [nivelAlerta]: null = TODAS; si no, filtro exacto sobre la ultima
      *    version de cada URL.
-     *  - [soloBloqueadas]: solo URLs presentes en `urls_bloqueadas` (join
-     *    reactivo — bloquear/desbloquear re-emite la pagina).
+     *  - [soloBloqueadas]: solo URLs presentes en `urls_bloqueadas` SIN un
+     *    DELETE pendiente (join reactivo — bloquear/desbloquear re-emite la
+     *    pagina). Mismo predicado que `totalBloqueadas` de
+     *    [observarConteosHistorial] (antes el filtro contaba también las
+     *    filas con desbloqueo pendiente y el número no cuadraba con el chip).
      *  - [busqueda]: LIKE case-insensitive (COLLATE NOCASE) sobre urlLimpia
      *    y urlOriginal, con ESCAPE '\' — el repositorio escapa los
      *    wildcards del input del usuario.
+     *
+     * F4.3-b: cada fila trae [EscaneoConBloqueo.bloqueada] calculada en SQL
+     * (EXISTS indexado por `url` de urls_bloqueadas) — el badge de candado
+     * no necesita el Set completo de URLs bloqueadas en memoria.
      *
      * Memoria acotada a la ventana de Paging: con 10.000 URLs unicas, la
      * huella es proporcional a las paginas alrededor del scroll, no al
      * total scrolleado.
      */
     @Query(
-        "SELECT e.* FROM escaneos e WHERE e.id = (" +
+        "SELECT e.*, $URL_BLOQUEADA_ACTIVA AS bloqueada FROM escaneos e " +
+            "WHERE e.id = (" +
                 "SELECT e2.id FROM escaneos e2 " +
                 "WHERE e2.urlLimpia = e.urlLimpia " +
                 "AND e2.id NOT IN $IDS_SIN_DELETE_PENDIENTE" +
                 "ORDER BY e2.creadoEnMillis DESC, e2.id DESC LIMIT 1" +
             ") " +
             "AND (:nivelAlerta IS NULL OR e.nivelAlerta = :nivelAlerta) " +
-            "AND (:soloBloqueadas = 0 OR e.urlLimpia IN " +
-                "(SELECT url FROM urls_bloqueadas)) " +
+            "AND (:soloBloqueadas = 0 OR $URL_BLOQUEADA_ACTIVA) " +
             "AND (:busqueda = '' OR " +
                 "(e.urlLimpia COLLATE NOCASE LIKE '%' || :busqueda || '%' ESCAPE '\\') OR " +
                 "(e.urlOriginal COLLATE NOCASE LIKE '%' || :busqueda || '%' ESCAPE '\\')) " +
@@ -134,7 +176,7 @@ interface EscaneoDao {
         nivelAlerta: String?,
         soloBloqueadas: Boolean,
         busqueda: String
-    ): PagingSource<Int, EscaneoEntity>
+    ): PagingSource<Int, EscaneoConBloqueo>
 
     /**
      * M3 (auditoría frontend): contadores totales del historial

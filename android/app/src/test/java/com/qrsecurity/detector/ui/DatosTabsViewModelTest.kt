@@ -9,6 +9,7 @@ import androidx.work.testing.WorkManagerTestInitHelper
 import com.qrsecurity.detector.api.ClienteBackend
 import com.qrsecurity.detector.datos.local.BaseDatosSeguridad
 import com.qrsecurity.detector.datos.local.entidades.EscaneoEntity
+import com.qrsecurity.detector.datos.local.entidades.PendingOpEntity
 import com.qrsecurity.detector.datos.local.entidades.UrlBloqueadaEntity
 import com.qrsecurity.detector.datos.repositorios.RepositorioEscaneos
 import com.qrsecurity.detector.datos.repositorios.RepositorioUrlsBloqueadas
@@ -28,6 +29,7 @@ import kotlinx.coroutines.test.setMain
 import kotlinx.serialization.json.Json
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -83,7 +85,7 @@ class DatosTabsViewModelTest {
         repoEscaneos = RepositorioEscaneos(db, backend, json, Dispatchers.Unconfined)
         repoUrls = RepositorioUrlsBloqueadas(db, backend, json, Dispatchers.Unconfined)
         mediadorSync = FakeMediadorSincronizacion(context)
-        viewModel = DatosTabsViewModel(repoEscaneos, repoUrls, mediadorSync)
+        viewModel = DatosTabsViewModel(repoEscaneos, mediadorSync)
     }
 
     @After
@@ -123,10 +125,10 @@ class DatosTabsViewModelTest {
      *
      * Audit fix M1: totalEscaneos/amenazas eliminados del VM (flows eager
      * sin consumidor en la UI) — sus subscriptores y tests tambien se
-     * retiraron.
+     * retiraron. F4.3-b: urlsBloqueadas eliminado del VM (badge por fila en
+     * SQL) — sus tests viven a nivel repo.
      */
     private fun subscribirTodos() {
-        collectorJobs += viewModel.viewModelScope.launch { viewModel.urlsBloqueadas.collect { } }
         collectorJobs += viewModel.viewModelScope.launch { viewModel.historialUiState.collect { } }
     }
 
@@ -138,8 +140,63 @@ class DatosTabsViewModelTest {
     }
 
     @Test
-    fun estadoInicial_urlsBloqueadas_emptyList() {
-        assertEquals(emptyList<UrlBloqueadaEntity>(), viewModel.urlsBloqueadas.value)
+    fun estadoInicial_urlsBloqueadas_repoVacio() = runTest(testDispatcher) {
+        // F4.3-b: el Flow de urls_bloqueadas salió del VM (badge por fila en
+        // SQL) — el contrato reactivo del repo se testea aquí directamente.
+        assertEquals(emptyList<UrlBloqueadaEntity>(), repoUrls.observarTodos().first())
+    }
+
+    /**
+     * RC2 — hasta que Room emita los conteos reales, el estado expone los
+     * contadores en null ("—" en la UI). Antes el valor inicial de
+     * conteosTotales era ConteosHistorial(0,0,0,0): el estado emitía
+     * totalTodos=0 ANTES del dato real y los chips destellaban "0 escaneos /
+     * 0% seguros" en el arranque frío (derrotaba el fix V-1).
+     *
+     * Determinista: se inserta la fila ANTES de crear el VM de prueba y el
+     * colector se lanza sin suspensions intermedias — la primera emisión es
+     * el valor inicial (nulls) y la siguiente el dato real (1). Un
+     * totalTodos=0 intermedio solo puede venir del valor inicial zeros
+     * eliminado: con el código viejo la secuencia era [nulls, 0, 1].
+     */
+    @Test
+    fun rc2_primerasEmisiones_contadoresNullHastaElDatoRealDeRoom() = runTest(testDispatcher) {
+        db.escaneoDao().insertar(
+            EscaneoEntity(
+                id = "esc-rc2",
+                urlOriginal = "https://rc2.example.com",
+                urlLimpia = "rc2.example.com",
+                probabilidad = 0.5f,
+                nivelAlerta = "SOSPECHOSO",
+                delegado = null,
+                esMalicioso = false,
+                creadoEnMillis = System.currentTimeMillis(),
+                dirty = false,
+                syncedAtMillis = System.currentTimeMillis()
+            )
+        )
+
+        val vmPrueba = DatosTabsViewModel(repoEscaneos, mediadorSync)
+        val estados = mutableListOf<HistorialUiState>()
+        val job = launch { vmPrueba.historialUiState.collect { estados += it } }
+        runCurrent()
+        drenarRoomYDispatcher()
+        job.cancel()
+
+        assertTrue(
+            "El estado inicial (pre-Room) debe tener contadores null. Fue: $estados",
+            estados.first().totalTodos == null
+        )
+        assertTrue(
+            "Con 1 escaneo en Room NO puede aparecer un totalTodos=0 intermedio " +
+                "(flash de '0 escaneos' del RC2). Fue: $estados",
+            estados.none { it.totalTodos == 0 }
+        )
+        assertEquals(
+            "La última emisión debe ser el conteo real",
+            1,
+            estados.last().totalTodos
+        )
     }
 
     // ── Emision reactiva desde Room ──
@@ -169,6 +226,61 @@ class DatosTabsViewModelTest {
         assertTrue(snapshot[0] is FilaHistorial.Cabecera)
         assertEquals("Hoy", (snapshot[0] as FilaHistorial.Cabecera).titulo)
         assertEquals("esc-1", (snapshot[1] as FilaHistorial.Entrada).escaneo.id)
+    }
+
+    /**
+     * F4.3-b — el flag de bloqueo viaja en la fila (EXISTS en SQL, sin Set
+     * derivado de la tabla completa de urls_bloqueadas) y respeta un DELETE
+     * pendiente de desbloqueo (la fila sigue físicamente en la tabla pero
+     * está lógicamente desbloqueada — mismo predicado que totalBloqueadas).
+     */
+    @Test
+    fun filaHistorial_flagBloqueada_calculadaEnSqlYRespetaDeletePendiente() = runTest(testDispatcher) {
+        subscribirTodos()
+        val ahora = System.currentTimeMillis()
+        db.escaneoDao().insertar(
+            escaneoDePrueba("bloq-1", ahora).copy(
+                urlOriginal = "https://evil.example.com",
+                urlLimpia = "evil.example.com"
+            )
+        )
+        db.urlBloqueadaDao().insertar(
+            UrlBloqueadaEntity(
+                id = "ub-1",
+                url = "evil.example.com",
+                razon = "Malicioso",
+                creadoEnMillis = ahora,
+                dirty = false,
+                syncedAtMillis = ahora
+            )
+        )
+        drenarRoomYDispatcher()
+
+        val conBloqueo = viewModel.historialPaging.asSnapshot()
+            .filterIsInstance<FilaHistorial.Entrada>()
+            .first()
+        assertTrue("URL bloqueada → Entrada.bloqueada=true (EXISTS en SQL)", conBloqueo.bloqueada)
+
+        // Desbloqueo pendiente: DELETE en el outbox — la fila sigue en
+        // urls_bloqueadas pero el flag debe pasar a false.
+        db.pendingOpDao().insertar(
+            PendingOpEntity(
+                tabla = PendingOpEntity.TABLA_URLS_BLOQUEADAS,
+                tipoOperacion = PendingOpEntity.OP_DELETE,
+                idLocal = "ub-1",
+                payloadJson = null,
+                creadoEnMillis = ahora
+            )
+        )
+        drenarRoomYDispatcher()
+
+        val trasDesbloqueoPendiente = viewModel.historialPaging.asSnapshot()
+            .filterIsInstance<FilaHistorial.Entrada>()
+            .first()
+        assertFalse(
+            "DELETE pendiente de desbloqueo → Entrada.bloqueada=false (mismo predicado que el COUNT)",
+            trasDesbloqueoPendiente.bloqueada
+        )
     }
 
     @Test
@@ -203,8 +315,9 @@ class DatosTabsViewModelTest {
     }
 
     @Test
-    fun urlsBloqueadas_emiteTrasInsert() = runTest(testDispatcher) {
-        subscribirTodos()
+    fun urlsBloqueadas_repoEmiteTrasInsert() = runTest(testDispatcher) {
+        // F4.3-b: el Flow salió del VM; el contrato reactivo del repo queda
+        // cubierto aquí.
         val ahora = System.currentTimeMillis()
         db.urlBloqueadaDao().insertar(
             UrlBloqueadaEntity(
@@ -218,8 +331,9 @@ class DatosTabsViewModelTest {
         )
         drenarRoomYDispatcher()
 
-        assertEquals("urlsBloqueadas debe emitir 1 tras insert", 1, viewModel.urlsBloqueadas.value.size)
-        assertEquals("evil.example.com", viewModel.urlsBloqueadas.value[0].url)
+        val emitidas = repoUrls.observarTodos().first()
+        assertEquals("el repo debe emitir 1 tras insert", 1, emitidas.size)
+        assertEquals("evil.example.com", emitidas[0].url)
     }
 
     @Test

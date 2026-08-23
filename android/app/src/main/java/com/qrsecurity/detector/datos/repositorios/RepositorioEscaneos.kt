@@ -4,6 +4,7 @@ import androidx.paging.PagingSource
 import com.qrsecurity.detector.api.ClienteBackend
 import com.qrsecurity.detector.datos.local.BaseDatosSeguridad
 import com.qrsecurity.detector.datos.local.dao.ConteosHistorial
+import com.qrsecurity.detector.datos.local.dao.EscaneoConBloqueo
 import com.qrsecurity.detector.datos.local.entidades.EscaneoEntity
 import com.qrsecurity.detector.datos.local.entidades.UrlCatalogoEntity
 import com.qrsecurity.detector.datos.local.sha256Hex
@@ -54,9 +55,10 @@ class RepositorioEscaneos(
     /**
      * Historial deduplicado y filtrado, paginado con Paging 3 sobre Room
      * (v10 — reemplaza a `observarTodos(limite)` + filtrado en memoria).
+     * Cada fila trae el flag de bloqueo calculado en SQL (F4.3-b).
      *
      * @param nivelAlerta null = todas; si no, filtro exacto (SEGURO/SOSPECHOSO).
-     * @param soloBloqueadas true = solo URLs presentes en urls_bloqueadas.
+     * @param soloBloqueadas true = solo URLs bloqueadas SIN DELETE pendiente.
      * @param busqueda texto libre — LIKE NOCASE sobre urlLimpia y urlOriginal,
      *   con wildcards escapados por el usuario incluidos literales.
      */
@@ -64,7 +66,7 @@ class RepositorioEscaneos(
         nivelAlerta: String?,
         soloBloqueadas: Boolean,
         busqueda: String
-    ): PagingSource<Int, EscaneoEntity> = db.escaneoDao().paginarHistorial(
+    ): PagingSource<Int, EscaneoConBloqueo> = db.escaneoDao().paginarHistorial(
         nivelAlerta = nivelAlerta,
         soloBloqueadas = soloBloqueadas,
         busqueda = escaparWildcardsLike(busqueda)

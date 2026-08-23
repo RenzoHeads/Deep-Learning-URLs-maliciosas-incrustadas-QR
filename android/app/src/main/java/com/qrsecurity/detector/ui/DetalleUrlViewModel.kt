@@ -1,5 +1,6 @@
 package com.qrsecurity.detector.ui
 
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.qrsecurity.detector.cache.CacheDetalleEscaneos
@@ -174,7 +175,8 @@ class DetalleUrlViewModel @Inject constructor(
     private val repositorioEscaneos: RepositorioEscaneos,
     private val repositorioUrlsBloqueadas: RepositorioUrlsBloqueadas,
     private val mediadorSincronizacion: MediadorSincronizacion,
-    private val cacheDetalle: CacheDetalleEscaneos
+    private val cacheDetalle: CacheDetalleEscaneos,
+    savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow<DetalleUrlUiState>(DetalleUrlUiState.Cargando)
@@ -189,6 +191,22 @@ class DetalleUrlViewModel @Inject constructor(
     private val idObservado = MutableStateFlow<String?>(null)
 
     init {
+        // RC1 fix (parpadeo de "Cargando..."): este VM se instancia por
+        // NavBackStackEntry y su estado inicial era Cargando hasta que la
+        // cadena reactiva — disparada por el LaunchedEffect de la pantalla,
+        // DESPUÉS del primer frame — hiciera el prefill del cache. Eso
+        // dejaba 1-3 frames de spinner en cada navegación, incluso con
+        // cache hit. El nav arg "id" de la ruta detalle_url/{id} ya vive en
+        // el SavedStateHandle del entry: leerlo aquí permite pintar el
+        // detalle cacheado en la PRIMERA composición (obtener() es una
+        // lectura síncrona de un map en memoria — ver CacheDetalleEscaneos,
+        // que documenta este diseño desde su creación). La cadena reactiva
+        // de abajo re-valida contra Room en background (~ms, invisible).
+        val idNav = savedStateHandle.get<String>("id")
+        if (!idNav.isNullOrEmpty()) {
+            cacheDetalle.obtener(idNav)?.let { _uiState.value = it.aCargado() }
+            idObservado.value = idNav
+        }
         idObservado
             .filterNotNull()
             .flatMapLatest { id -> observarEscaneo(id) }

@@ -59,6 +59,16 @@ import com.qrsecurity.detector.ui.theme.TamanosIcono
 import java.util.Locale
 
 /**
+ * RC5 — filas placeholder que se muestran mientras el refresh inicial del
+ * Paging aún no entrega items (re-entrada a la pantalla o recarga tras una
+ * invalidación de Room) o durante la sync inicial con Room vacío. Pintar un
+ * bloque estable con la misma geometría de las filas reales evita el
+ * "parpadeo de vacío" (área de lista en blanco por 1-2 frames) antes de que
+ * lleguen los datos cacheados.
+ */
+private const val FILAS_PLACEHOLDER_HISTORIAL = 8
+
+/**
  * Pantalla de Historial (Pencil frame fvsVa).
  *
  * F3.3: implementacion del layout de Pencil fvsVa. La firma NO debe cambiar.
@@ -100,11 +110,8 @@ fun PantallaHistorial(
     val filtroSeleccionado by datosViewModel.filtroHistorial.collectAsStateWithLifecycle()
     val filas = datosViewModel.historialPaging.collectAsLazyPagingItems()
 
-    // F4.3 audit fix — el set de URLs bloqueadas viene en el UiState (derivado
-    // una vez en el combine del VM). Antes la pantalla colectaba
-    // `urlsBloqueadas` aparte y recomputaba `map { it.url }.toSet()` con
-    // remember en cada emisión.
-    val bloqueadasUrls = historialUiState.urlsBloqueadasSet
+    // F4.3-b: el badge de bloqueo viaja en cada fila (EXISTS en SQL del
+    // paging) — ya no se colecta el Set completo de URLs bloqueadas aquí.
 
     // V-1 fix: campos de historialUiState son nullable Int? — null = cargando
     // (la UI muestra "—"), 0 = realmente cero. Esto elimina el flash de
@@ -228,7 +235,10 @@ fun PantallaHistorial(
                 ) {
                     ChipResumen("$escaneosFormateado escaneos", CyberCyan)
                     ChipResumen(
-                        "${historialUiState.totalUrlsBloqueadas} bloqueados",
+                        // F4.3-b: mismo COUNT del chip de filtro "Bloqueadas"
+                        // (excluye DELETEs pendientes) — antes venía del
+                        // `.size` de la tabla completa de urls_bloqueadas.
+                        "${totalBloqueadas ?: "—"} bloqueados",
                         CyberRojo
                     )
                     ChipResumen(
@@ -238,12 +248,26 @@ fun PantallaHistorial(
                 }
             }
 
-            // ─── List / Empty ───
+            // ─── List / Skeleton / Empty ───
             // V-1 fix: solo mostramos el estado vacio cuando los datos estan
             // cargados (totalTodos != null) y el refresh del Pager termino sin
             // filas. Cuando totalTodos es null (cargando) NO mostramos "No hay
             // escaneos" — evita flash del empty-state durante la carga.
-            if (historialUiState.totalTodos != null &&
+            //
+            // RC5: mientras el refresh inicial del Paging no entrega items, o
+            // la sync inicial corre con Room vacío, se pinta un SKELETON de
+            // filas (misma geometría que las reales) — antes el área quedaba
+            // en blanco 1-2 frames con el hint visible, el "parpadeo de
+            // vacío" reportado en cada re-entrada a la pantalla.
+            if (filas.itemCount == 0 &&
+                (filas.loadState.refresh is LoadState.Loading || syncEnCurso)
+            ) {
+                items(
+                    count = FILAS_PLACEHOLDER_HISTORIAL,
+                    key = { indice -> "ph_carga_$indice" },
+                    contentType = { "fila_escaneo" }
+                ) { FilaPlaceholderHistorial() }
+            } else if (historialUiState.totalTodos != null &&
                 filas.loadState.refresh is LoadState.NotLoading &&
                 filas.itemCount == 0
             ) {
@@ -298,10 +322,8 @@ fun PantallaHistorial(
                             }
                         }
                         is FilaHistorial.Entrada -> {
-                            val bloqueada = fila.escaneo.urlLimpia in bloqueadasUrls
-                            // Cada fila obtiene su propio Card cyber-glass con esquinas
-                            // redondeadas — lista de cards individuales agrupadas
-                            // por header.
+                            // F4.3-b: el flag de bloqueo llega calculado en
+                            // SQL con la propia fila (EXISTS indexado).
                             Card(
                                 modifier = Modifier.fillMaxWidth(),
                                 shape = RoundedCornerShape(RadioBorde.xl),
@@ -310,7 +332,7 @@ fun PantallaHistorial(
                             ) {
                                 FilaEscaneo(
                                     escaneo = fila.escaneo,
-                                    bloqueada = bloqueada,
+                                    bloqueada = fila.bloqueada,
                                     onVerDetalle = onVerDetalle,
                                 )
                             }
@@ -395,5 +417,34 @@ private fun ChipResumen(texto: String, colorPunto: Color) {
             style = MaterialTheme.typography.labelMedium,
             color = CyberTextoSecundario
         )
+    }
+}
+
+/**
+ * RC5 — fila skeleton del Historial: misma envoltura Card cyber-glass y
+ * misma señal de carga ligera (spinner chico centrado) que usa la rama de
+ * huecos de append, para que el bloque de carga y las filas reales
+ * compartan lenguaje visual y alto aproximado.
+ */
+@Composable
+private fun FilaPlaceholderHistorial() {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(RadioBorde.xl),
+        colors = CardDefaults.cardColors(containerColor = CyberGlass),
+        elevation = CardDefaults.cardElevation(defaultElevation = Elevacion.ninguna)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = Espaciado.xl),
+            contentAlignment = Alignment.Center
+        ) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(TamanosIcono.chico),
+                color = CyberCyan,
+                strokeWidth = 2.dp
+            )
+        }
     }
 }

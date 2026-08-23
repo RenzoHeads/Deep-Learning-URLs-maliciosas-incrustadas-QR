@@ -10,10 +10,9 @@ import androidx.paging.cachedIn
 import androidx.paging.insertSeparators
 import androidx.paging.map
 import com.qrsecurity.detector.datos.local.dao.ConteosHistorial
+import com.qrsecurity.detector.datos.local.dao.EscaneoConBloqueo
 import com.qrsecurity.detector.datos.local.entidades.EscaneoEntity
-import com.qrsecurity.detector.datos.local.entidades.UrlBloqueadaEntity
 import com.qrsecurity.detector.datos.repositorios.RepositorioEscaneos
-import com.qrsecurity.detector.datos.repositorios.RepositorioUrlsBloqueadas
 import com.qrsecurity.detector.datos.sync.MediadorSincronizacion
 import dagger.hilt.android.lifecycle.HiltViewModel
 import java.time.Duration
@@ -58,10 +57,13 @@ sealed interface FilaHistorial {
      */
     val claveGrupo: String?
 
-    /** Fila de escaneo, anotada con su clave de grupo de fecha (v10). */
+    /** Fila de escaneo, anotada con su clave de grupo de fecha (v10) y el
+     *  flag de bloqueo calculado en SQL (F4.3-b — el badge de candado viaja
+     *  con la fila; ya no se deriva un Set de URLs bloqueadas en el VM). */
     @Immutable
     data class Entrada(
         val escaneo: EscaneoEntity,
+        val bloqueada: Boolean,
         override val claveGrupo: String
     ) : FilaHistorial
 
@@ -106,16 +108,11 @@ data class HistorialUiState(
     val totalSeguras: Int? = null,
     val totalSospechosas: Int? = null,
     val totalBloqueadas: Int? = null,
-    val segurosPct: Int? = null,
-    // F4.3 audit fix — set de URLs bloqueadas derivado UNA vez en el combine.
-    // Antes la pantalla lo recomputaba con `remember(urlsBloqueadas)
-    // { map { it.url }.toSet() }` (hashing de la lista completa por emisión)
-    // y colectaba `urlsBloqueadas` aparte solo para `.size`. Read-only tras
-    // la emisión → seguro bajo @Immutable.
-    val urlsBloqueadasSet: Set<String> = emptySet(),
-    // F4.3: total de filas de la tabla urls_bloqueadas — el mismo valor que
-    // la pantalla leía de `urlsBloqueadas.size` para el chip "N bloqueados".
-    val totalUrlsBloqueadas: Int = 0
+    val segurosPct: Int? = null
+    // F4.3-b: urlsBloqueadasSet y totalUrlsBloqueadas ELIMINADOS — el badge
+    // de candado ahora viaja en cada FilaHistorial.Entrada (EXISTS en SQL)
+    // y el chip "N bloqueados" usa totalBloqueadas (mismo COUNT del chip de
+    // filtro, sin el Flow de la tabla completa de urls_bloqueadas).
 )
 
 /**
@@ -149,7 +146,6 @@ enum class FiltroHistorial {
 @HiltViewModel
 class DatosTabsViewModel @Inject constructor(
     private val repoEscaneos: RepositorioEscaneos,
-    private val repoUrls: RepositorioUrlsBloqueadas,
     private val mediadorSync: MediadorSincronizacion
 ) : ViewModel() {
 
@@ -172,16 +168,11 @@ class DatosTabsViewModel @Inject constructor(
     // Eran dos StateFlow Eagerly corriendo para siempre desde el arranque
     // sin NINGUN consumidor en la UI (solo tests). Los contadores que la
     // UI pinta vienen de [historialUiState] (COUNT del DAO, M3).
-
-    // ── BLOQUEADAS: Flow eager para eliminar parpadeo de contador ──
-    // Bug fix: antes usaba WhileSubscribed(5_000) con emptyList() como
-    // initial value. Al reabrir Bloqueadas tras >5s sin suscriptores, la UI
-    // mostraba "No hay URLs bloqueadas" por ~1 frame antes de que Room
-    // emitiera la lista real. Con Eagerly el Flow colecta desde el
-    // momento en que se crea el ViewModel.
-    val urlsBloqueadas: StateFlow<List<UrlBloqueadaEntity>> =
-        repoUrls.observarTodos()
-            .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+    //
+    // F4.3-b: el Flow eager de la TABLA COMPLETA de urls_bloqueadas
+    // (`repoUrls.observarTodos()`) también fue eliminado — su único consumo
+    // era derivar el Set de badges y el `.size` del chip; ambos salen ahora
+    // del SQL del paging (EXISTS por fila) y del COUNT totalBloqueadas.
 
     /** Actualiza la búsqueda; el filtrado se aplica tras 300 ms sin tecleo. */
     fun actualizarBusquedaHistorial(busqueda: String) {
@@ -283,15 +274,16 @@ class DatosTabsViewModel @Inject constructor(
                             busqueda = busqueda
                         )
                     }
-                ).flow.map { datos: PagingData<EscaneoEntity> ->
+                ).flow.map { datos: PagingData<EscaneoConBloqueo> ->
                     // map + insertSeparators encadenados sobre PagingData
                     // (en Paging 3 la extension vive en PagingData, no en el
                     // Flow): cada pagina se transforma al vuelo.
                     datos
-                        .map { escaneo ->
+                        .map { fila ->
                             FilaHistorial.Entrada(
-                                escaneo = escaneo,
-                                claveGrupo = claveGrupoHistorial(escaneo.creadoEnMillis, ahoraMillis)
+                                escaneo = fila.escaneo,
+                                bloqueada = fila.bloqueada,
+                                claveGrupo = claveGrupoHistorial(fila.escaneo.creadoEnMillis, ahoraMillis)
                             )
                         }
                         .insertSeparators { antes, despues ->
@@ -307,47 +299,54 @@ class DatosTabsViewModel @Inject constructor(
 
     /**
      * Estado derivado del historial SIN la lista (v10): contadores del
-     * COUNT indexado (M3 — independientes de la paginación) y el set de
-     * URLs bloqueadas para el badge de fila (F4.3).
+     * COUNT indexado (M3 — independientes de la paginación).
      *
      * V-1 fix: initialValue con contadores null — la UI muestra "—" hasta
      * que Room emite, sin flash de "0 escaneos".
+     *
+     * F4.3-b: sin combine — la única fuente es [conteosTotales] (el Set de
+     * URLs bloqueadas y su total salieron del estado: badge por fila en SQL,
+     * chip "N bloqueados" = [HistorialUiState.totalBloqueadas]).
      */
-    private val conteosTotales: StateFlow<ConteosHistorial> =
+    private val conteosTotales: StateFlow<ConteosHistorial?> =
         repoEscaneos.observarConteosHistorial()
             .stateIn(
                 viewModelScope,
                 SharingStarted.Eagerly,
-                ConteosHistorial(
-                    totalTodos = 0, totalSeguras = 0,
-                    totalSospechosas = 0, totalBloqueadas = 0
-                )
+                // RC2 fix: null = Room todavía no emitió. El valor inicial
+                // anterior (ConteosHistorial(0,0,0,0)) hacía que el combine
+                // de abajo emitiera totalTodos=0 ANTES de la primera emisión
+                // real, pisando los null del fix V-1 y destellando
+                // "0 escaneos / 0% seguros" en el arranque frío.
+                null
             )
 
     val historialUiState: StateFlow<HistorialUiState> =
-        combine(urlsBloqueadas, conteosTotales) { urlsBloqueadas, conteos ->
-            HistorialUiState(
-                // F4.3: derivados de urlsBloqueadas una sola vez (antes la
-                // pantalla duplicaba el toSet y colectaba el flow aparte).
-                urlsBloqueadasSet = urlsBloqueadas.mapTo(hashSetOf()) { it.url },
-                totalUrlsBloqueadas = urlsBloqueadas.size,
-                totalTodos = conteos.totalTodos,
-                totalSeguras = conteos.totalSeguras,
-                totalSospechosas = conteos.totalSospechosas,
-                totalBloqueadas = conteos.totalBloqueadas,
-                segurosPct = if (conteos.totalTodos > 0) {
-                    100 * conteos.totalSeguras / conteos.totalTodos
+        conteosTotales
+            .map { conteos ->
+                if (conteos == null) {
+                    // RC2 fix: contadores en null → la UI pinta "—" (V-1).
+                    HistorialUiState()
                 } else {
-                    0
+                    HistorialUiState(
+                        totalTodos = conteos.totalTodos,
+                        totalSeguras = conteos.totalSeguras,
+                        totalSospechosas = conteos.totalSospechosas,
+                        totalBloqueadas = conteos.totalBloqueadas,
+                        segurosPct = if (conteos.totalTodos > 0) {
+                            100 * conteos.totalSeguras / conteos.totalTodos
+                        } else {
+                            0
+                        }
+                    )
                 }
-            )
-        }
-        // A3-b audit fix — `distinctUntilChanged` filtra re-emisiones
-        // idénticas del combine; se aplica ANTES de `flowOn(Default)` para
-        // que la comparación corra en Default, no en el hilo del colector.
-        .distinctUntilChanged()
-        .flowOn(Dispatchers.Default)
-        .stateIn(viewModelScope, SharingStarted.Eagerly, HistorialUiState())
+            }
+            // A3-b audit fix — `distinctUntilChanged` filtra re-emisiones
+            // idénticas; se aplica ANTES de `flowOn(Default)` para
+            // que la comparación corra en Default, no en el hilo del colector.
+            .distinctUntilChanged()
+            .flowOn(Dispatchers.Default)
+            .stateIn(viewModelScope, SharingStarted.Eagerly, HistorialUiState())
 
     // ── Fix #3: Estado de sincronizacion ──
     // syncEnCurso emite true mientras el SyncWorker esta ENQUEUED o RUNNING.

@@ -47,6 +47,15 @@ import com.qrsecurity.detector.ui.theme.RadioBorde
 import com.qrsecurity.detector.ui.theme.TamanosIcono
 
 /**
+ * RC4 — filas placeholder que se muestran mientras el header no coincide
+ * (primera carga o swap de URL) o el refresh inicial del Paging no entrega
+ * items. Un bloque de alto ESTABLE (mismo número de filas y misma geometría
+ * que las reales) evita el salto de layout y el parpadeo que producían el
+ * spinner central y la fila única.
+ */
+private const val FILAS_PLACEHOLDER_CARGA = 8
+
+/**
  * Pantalla de Analisis Anteriores / Versiones anteriores de una URL
  * (Pencil frame Lb1HV).
  *
@@ -98,7 +107,6 @@ fun PantallaAnalisisAnteriores(
     val dataCoincide = cargado != null &&
         cargado.url == urlLimpia && cargado.id == idActual
     val total = if (dataCoincide) cargado!!.total else 0
-
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -148,7 +156,11 @@ fun PantallaAnalisisAnteriores(
                                 .padding(horizontal = Espaciado.md, vertical = Espaciado.xs)
                         ) {
                             Text(
-                                text = "$total análisis",
+                                // RC4: "—" mientras la etiqueta (url, id) del
+                                // header no coincide (primera carga o swap de
+                                // URL) — antes pintaba "0 análisis", que se leía
+                                // como un total real que luego "crecía".
+                                text = if (dataCoincide) "$total análisis" else "— análisis",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = CyberTextoSecundario
                             )
@@ -221,33 +233,27 @@ fun PantallaAnalisisAnteriores(
             )
         }
 
+        // RC4: mientras el header no coincide (primera carga o swap de URL —
+        // S1) o el refresh inicial del Paging aún no entrega items, se pinta
+        // un bloque ESTABLE de placeholders con la misma geometría de las
+        // filas reales — antes eran un spinner central y una fila única
+        // respectivamente, y la transición a datos producía salto de layout
+        // y parpadeo. El empty-state solo aparece cuando la etiqueta coincide
+        // Y el refresh terminó sin filas.
         when {
             !dataCoincide -> {
-                item(key = "loading") {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = Espaciado.gigante),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(Espaciado.md)
-                    ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(TamanosIcono.cargando),
-                            color = CyberCyan,
-                            strokeWidth = 2.dp
-                        )
-                        Text(
-                            text = "Cargando…",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = CyberTextoSecundario
-                        )
-                    }
-                }
+                items(
+                    count = FILAS_PLACEHOLDER_CARGA,
+                    key = { indice -> "ph_carga_$indice" },
+                    contentType = { "entrada_linea_tiempo" }
+                ) { FilaPlaceholderVersion() }
             }
             versiones.loadState.refresh is LoadState.Loading && versiones.itemCount == 0 -> {
-                item(key = "loading") {
-                    FilaPlaceholderVersion()
-                }
+                items(
+                    count = FILAS_PLACEHOLDER_CARGA,
+                    key = { indice -> "ph_refresh_$indice" },
+                    contentType = { "entrada_linea_tiempo" }
+                ) { FilaPlaceholderVersion() }
             }
             versiones.itemCount == 0 -> {
                 item(key = "empty") {
