@@ -132,7 +132,7 @@ class DetalleUrlViewModelTest {
         )
 
         val desbloqueos = mutableListOf<Unit>()
-        val mensajes = mutableListOf<MensajeUi>()
+        val mensajes = mutableListOf<MensajeDetalleUrl>()
         collectorJobs += viewModel.viewModelScope.launch { viewModel.desbloqueoCompletado.collect { desbloqueos += it } }
         collectorJobs += viewModel.viewModelScope.launch { viewModel.mensaje.collect { mensajes += it } }
 
@@ -145,8 +145,8 @@ class DetalleUrlViewModelTest {
             desbloqueos.size
         )
         assertTrue(
-            "El mensaje acompanante debe ser EXITO. Fue: ${mensajes.map { it.tipo }}",
-            mensajes.any { it.tipo == TipoMensaje.EXITO }
+            "El mensaje acompañante debe ser el EXITO tipado. Fue: $mensajes",
+            MensajeDetalleUrl.UrlDesbloqueada in mensajes
         )
     }
 
@@ -244,6 +244,101 @@ class DetalleUrlViewModelTest {
             "La versión eliminada debe desaparecer de Room",
             null,
             db.escaneoDao().obtenerPorId("id-a")
+        )
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // S3 — cadena reactiva: carga feliz, reKey del SyncWorker, NoEncontrado
+    // ──────────────────────────────────────────────────────────────
+
+    @Test
+    fun cargarEscaneo_idExistente_llegaACargado() = runTest(testDispatcher) {
+        db.escaneoDao().insertar(escaneoSemilla(id = "vivo-1", urlLimpia = "https://vivo.com"))
+
+        viewModel.cargarEscaneo("vivo-1")
+        drenarRoomYDispatcher()
+
+        val estado = viewModel.uiState.value
+        assertTrue(
+            "Un id existente debe llegar a Cargado. Fue: $estado",
+            estado is DetalleUrlUiState.Cargado
+        )
+        assertEquals(
+            "El Cargado debe exponer el escaneo pedido",
+            "vivo-1",
+            (estado as DetalleUrlUiState.Cargado).escaneo.id
+        )
+    }
+
+    @Test
+    fun cargarEscaneo_idInexistente_llegaANoEncontrado() = runTest(testDispatcher) {
+        viewModel.cargarEscaneo("no-existe")
+        drenarRoomYDispatcher()
+
+        assertTrue(
+            "Un id inexistente (sin fila viva de la misma URL) debe llegar a NoEncontrado. Fue: ${viewModel.uiState.value}",
+            viewModel.uiState.value is DetalleUrlUiState.NoEncontrado
+        )
+    }
+
+    @Test
+    fun cargarEscaneo_reKey_rescribeLaObservacionAlIdNuevo() = runTest(testDispatcher) {
+        // Escaneo bajo client UUID; el SyncWorker hará reKey a server UUID.
+        db.escaneoDao().insertar(
+            escaneoSemilla(id = "client-uuid", urlLimpia = "https://rekey.com", creadoEnMillis = 1_000L)
+        )
+        viewModel.cargarEscaneo("client-uuid")
+        drenarRoomYDispatcher()
+        assertTrue(
+            "Pre-condicion: Cargado bajo el client UUID",
+            viewModel.uiState.value is DetalleUrlUiState.Cargado
+        )
+
+        // Simular el reKey: la fila cambia su PK (borrar la vieja, insertar
+        // la misma fila con el id del server, mismo urlLimpia/creadoEnMillis).
+        db.escaneoDao().eliminarPorId("client-uuid")
+        db.escaneoDao().insertar(
+            escaneoSemilla(id = "server-uuid", urlLimpia = "https://rekey.com", creadoEnMillis = 1_000L)
+        )
+        // Drain reforzado: la migracion reKey encadena varios hops reales
+        // (invalidacion de Room → null → resolucion del id vivo →
+        // re-subscripcion via flatMapLatest → nueva emision), cada uno en
+        // un thread distinto (tracker de Room / Main virtual).
+        repeat(15) {
+            Thread.sleep(100)
+            advanceUntilIdle()
+        }
+        advanceUntilIdle()
+
+        val estado = viewModel.uiState.value
+        assertTrue(
+            "Tras el reKey el estado debe seguir siendo Cargado (no NoEncontrado ni flash). Fue: $estado",
+            estado is DetalleUrlUiState.Cargado
+        )
+        assertEquals(
+            "La observacion debe haber migrado al server UUID real",
+            "server-uuid",
+            (estado as DetalleUrlUiState.Cargado).escaneo.id
+        )
+    }
+
+    @Test
+    fun cargarEscaneo_borradoRealSinFilaViva_llegaANoEncontrado() = runTest(testDispatcher) {
+        db.escaneoDao().insertar(
+            escaneoSemilla(id = "efimero", urlLimpia = "https://efimera.com", creadoEnMillis = 1_000L)
+        )
+        viewModel.cargarEscaneo("efimero")
+        drenarRoomYDispatcher()
+        assertTrue(viewModel.uiState.value is DetalleUrlUiState.Cargado)
+
+        // DELETE real: la fila desaparece y NO queda ninguna otra version
+        // viva de la misma URL (U6) — no es un reKey.
+        db.escaneoDao().eliminarPorId("efimero")
+        drenarRoomYDispatcher()
+
+        assertTrue(
+            "Sin fila viva de la misma URL, el estado debe ser NoEncontrado (no un Cargado fantasma). Fue: ${viewModel.uiState.value}",
+            viewModel.uiState.value is DetalleUrlUiState.NoEncontrado
         )
     }
 }

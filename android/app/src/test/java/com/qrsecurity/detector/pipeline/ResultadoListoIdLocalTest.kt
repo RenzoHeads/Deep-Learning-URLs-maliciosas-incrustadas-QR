@@ -21,7 +21,6 @@ import kotlinx.serialization.json.Json
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -167,29 +166,19 @@ class ResultadoListoIdLocalTest {
         }
 
     @Test
-    fun `analizar no url produce ResultadoListo con idLocal null`() =
+    fun `analizar no url produce NoUrlListo sin persistir nada`() =
         runTest(testDispatcher) {
             // When: escanear un payload que NO contiene una URL (vCard).
             vm.analizar("BEGIN:VCARD\nFN:Test\nEND:VCARD")
             drenar(this)
 
-            // Then: el estado es ResultadoListo con resultado NoUrl.
+            // Then: el estado es NoUrlListo (B6 split del sealed: el
+            // resultado NoUrl ya no viaja dentro de ResultadoListo — el
+            // estado expresa directamente "sin URL, sin id").
             val estado = vm.estado.value
             assertTrue(
-                "El estado debe ser ResultadoListo, fue: $estado",
-                estado is Estado.ResultadoListo
-            )
-            val resultadoListo = estado as Estado.ResultadoListo
-            assertTrue(
-                "El resultado debe ser NoUrl, fue: ${resultadoListo.resultado}",
-                resultadoListo.resultado is ResultadoAnalisis.NoUrl
-            )
-
-            // ── Bug 1 contrato: NoUrl no persiste → idLocal es null ──
-            // Red: esta linea no compila porque ResultadoListo aun no tiene idLocal.
-            assertNull(
-                "idLocal debe ser null cuando el QR no contenia URL (no hay persistencia)",
-                resultadoListo.idLocal
+                "El estado debe ser NoUrlListo, fue: $estado",
+                estado is Estado.NoUrlListo
             )
 
             // Y efectivamente no se inserto ningun escaneo en la DB.

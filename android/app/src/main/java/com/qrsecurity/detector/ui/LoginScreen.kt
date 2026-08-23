@@ -8,14 +8,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -36,12 +35,9 @@ import androidx.lifecycle.Lifecycle.State.STARTED
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import com.qrsecurity.detector.ui.theme.CyberCyan
-import com.qrsecurity.detector.ui.theme.CyberGlass
 import com.qrsecurity.detector.ui.theme.CyberTextoPrincipal
 import com.qrsecurity.detector.ui.theme.CyberTextoSecundario
-import com.qrsecurity.detector.ui.theme.Elevacion
 import com.qrsecurity.detector.ui.theme.Espaciado
-import com.qrsecurity.detector.ui.theme.RadioBorde
 import com.qrsecurity.detector.ui.theme.TamanosIcono
 
 /**
@@ -77,14 +73,11 @@ fun PantallaLogin(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val lifecycleOwner = LocalLifecycleOwner.current
 
-    LaunchedEffect(viewModel) {
-        lifecycleOwner.repeatOnLifecycle(STARTED) {
-            viewModel.eventos.collect { evento ->
-                when (evento) {
-                    is LoginEvento.Exito -> onExito()
-                    is LoginEvento.Error -> onMensaje(TipoMensaje.ERROR, evento.mensaje)
-                }
-            }
+    // M13: RecolectorEventos encapsula el boilerplate repeatOnLifecycle.
+    RecolectorEventos(viewModel.eventos) { evento ->
+        when (evento) {
+            is LoginEvento.Exito -> onExito()
+            is LoginEvento.Error -> onMensaje(TipoMensaje.ERROR, evento.mensaje)
         }
     }
 
@@ -108,16 +101,10 @@ fun PantallaLogin(
         )
 
         // ─── Login Form Card ───
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(RadioBorde.xxl),
-            colors = CardDefaults.cardColors(containerColor = CyberGlass),
-            elevation = CardDefaults.cardElevation(defaultElevation = Elevacion.ninguna)
-        ) {
+        // M13: receta Card glass absorbida por TarjetaCyber.
+        TarjetaCyber {
             Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(Espaciado.xl),
+                modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(Espaciado.lg)
             ) {
                 Text(
@@ -155,8 +142,8 @@ fun PantallaLogin(
                 // boton muerto (no hay ruta de recuperacion en la app). El
                 // reset se hace desde la pagina web de Auth0 si se activa.
 
-                // Primary Login button
-                BotonSubmit(
+                // Primary Login button (S5: BotonCyber absorbió a BotonSubmit)
+                BotonCyber(
                     texto = "Iniciar sesión",
                     procesando = uiState.procesando,
                     onClick = {
@@ -167,7 +154,7 @@ fun PantallaLogin(
                             )
                         )
                     },
-                    mostrarIcono = true,
+                    icono = Icons.AutoMirrored.Filled.ArrowForward,
                 )
 
                 // Trust note

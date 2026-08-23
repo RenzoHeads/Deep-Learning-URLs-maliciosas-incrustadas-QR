@@ -2,14 +2,11 @@ package com.qrsecurity.detector.ui
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.auth0.android.authentication.storage.SecureCredentialsManager
-import com.qrsecurity.detector.datos.sync.MediadorSincronizacion
 import com.qrsecurity.detector.sesion.ExcepcionAuth0App
-import com.qrsecurity.detector.sesion.PerfilIdToken
 import com.qrsecurity.detector.sesion.ServicioAuth0
-import com.qrsecurity.detector.sesion.SesionUsuario
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -69,9 +66,7 @@ sealed interface LoginAction {
 @HiltViewModel
 class LoginViewModel @Inject constructor(
     private val servicioAuth0: ServicioAuth0,
-    private val credentialsManager: SecureCredentialsManager,
-    private val sesionUsuario: SesionUsuario,
-    private val mediadorSincronizacion: MediadorSincronizacion
+    private val iniciarSesionTrasAuth: IniciarSesionTrasAuth
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(LoginUiState())
@@ -99,16 +94,14 @@ class LoginViewModel @Inject constructor(
         if (_uiState.value.procesando) return
 
         // BUG-M5 fix: validacion local antes de gastar red/timeout —
-        // fallo rapido en el cliente con mensaje claro.
-        if (correo.isBlank() || password.isBlank()) {
+        // falla rapido en el cliente con mensaje claro. S2: la política
+        // vive en [ValidadorCredenciales], compartida con Registro.
+        val errorValidacion =
+            ValidadorCredenciales.validarCamposCompletos(correo, password)
+                ?: ValidadorCredenciales.validarCorreo(correo)
+        if (errorValidacion != null) {
             viewModelScope.launch {
-                _eventos.send(LoginEvento.Error("Completa todos los campos."))
-            }
-            return
-        }
-        if (!PATRON_CORREO.matches(correo)) {
-            viewModelScope.launch {
-                _eventos.send(LoginEvento.Error("El correo no tiene un formato válido."))
+                _eventos.send(LoginEvento.Error(errorValidacion))
             }
             return
         }
@@ -119,29 +112,17 @@ class LoginViewModel @Inject constructor(
                 val credenciales = withContext(Dispatchers.IO) {
                     servicioAuth0.iniciarSesion(correo, password)
                 }
-                if (credenciales.accessToken.isBlank()) {
-                    _uiState.update { it.copy(procesando = false) }
-                    _eventos.send(LoginEvento.Error("El servidor devolvió un token vacío. Inténtalo de nuevo."))
-                    return@launch
-                }
-                withContext(Dispatchers.IO) {
-                    // Cifrado en reposo del paquete completo (access + id +
-                    // refresh) — la password ya no existe en memoria.
-                    credentialsManager.saveCredentials(credenciales)
-                }
-                val perfil = PerfilIdToken.desdeIdToken(credenciales.idToken)
-                sesionUsuario.guardarSesion(
-                    token = credenciales.accessToken,
-                    usuario = perfil?.nombreMostrable() ?: correo.substringBefore("@"),
-                    correo = perfil?.correo ?: correo
-                )
-                // Tras login exitoso, disparar sync inmediato para hacer PULL
-                // de los datos del usuario desde la nube (escaneos, URLs
-                // bloqueadas, denuncias, categorias). Sin esto, el usuario
-                // no veria su historial hasta hacer un nuevo escaneo.
-                mediadorSincronizacion.dispararSyncUnica()
+                // S2: persistencia de credenciales + sesión + PULL inicial
+                // centralizados en el caso de uso compartido con Registro.
+                val error = iniciarSesionTrasAuth.invocar(credenciales, correo)
                 _uiState.update { it.copy(procesando = false) }
-                _eventos.send(LoginEvento.Exito)
+                if (error == null) {
+                    _eventos.send(LoginEvento.Exito)
+                } else {
+                    _eventos.send(LoginEvento.Error(error))
+                }
+            } catch (c: CancellationException) {
+                throw c
             } catch (e: ExcepcionAuth0App) {
                 _uiState.update { it.copy(procesando = false) }
                 _eventos.send(LoginEvento.Error(servicioAuth0.mensajeError(e)))
@@ -150,10 +131,5 @@ class LoginViewModel @Inject constructor(
                 _eventos.send(LoginEvento.Error("No pudimos conectar. Revisa tu conexión e inténtalo de nuevo."))
             }
         }
-    }
-
-    private companion object {
-        /** RFC-lite: algo@algo.algo — igual que el registro. */
-        val PATRON_CORREO = Regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")
     }
 }

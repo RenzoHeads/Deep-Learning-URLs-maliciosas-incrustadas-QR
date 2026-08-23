@@ -78,7 +78,6 @@ import com.qrsecurity.detector.ui.theme.TamanosIcono
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import com.qrsecurity.detector.pipeline.Estado
-import com.qrsecurity.detector.pipeline.ResultadoAnalisis
 import com.qrsecurity.detector.ui.escaner.OverlayResaltadoQr
 import com.qrsecurity.detector.ui.escaner.ScanReticle
 import com.qrsecurity.detector.ui.escaner.qrDentroDeReticulo
@@ -171,6 +170,7 @@ private val DeteccionQrSaver: Saver<DeteccionQr?, android.os.Bundle> = Saver(
 @Composable
 fun PantallaHome(
     onEscanear: () -> Unit,
+    onResultado: (idEscaneo: String) -> Unit,
     pipelineViewModel: PipelineViewModel,
     onMensaje: (TipoMensaje, String) -> Unit = { _, _ -> }
 ) {
@@ -178,6 +178,7 @@ fun PantallaHome(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val analizando by pipelineViewModel.analizando.collectAsStateWithLifecycle()
+    val escaneoActivo by pipelineViewModel.escaneoActivo.collectAsStateWithLifecycle()
     val estado by pipelineViewModel.estado.collectAsStateWithLifecycle()
 
     var moduloCamara by remember { mutableStateOf<ModuloCamara?>(null) }
@@ -214,61 +215,76 @@ fun PantallaHome(
         )
     }
 
-    // ── Navegacion a AnalisisScreen cuando el pipeline emite un resultado ──
-    // E3 fix (auditoria v2): la navegacion se deriva del sealed `estado`, no
-    // de un boolean paralelo (`yaNavegoAnalisis` era una doble fuente de
-    // verdad). El StateFlow de `estado` deduplica emisiones iguales, asi que
-    // este LaunchedEffect(estado) dispara EXACTAMENTE una vez cuando el
-    // pipeline llega a ResultadoListo con un ResultadoUrl real (NoUrl y
-    // Error se manejan en los efectos de abajo, no navegan). El guard
-    // `analizando` preserva el comportamiento de no navegar en una
-    // restauracion de process death (donde `estado` puede quedar en
-    // ResultadoListo sin un escaneo activo).
+    // ── Navegación durante/con el escaneo ──
+    // UX: el modal de Home solo cubre la fase de dedup + preview de la URL
+    // (por eso muestra "Procesando…" brevemente); en cuanto el pipeline
+    // entra en [Estado.Analizando] (inferencia real en vuelo), el usuario
+    // aterriza en la pantalla de análisis en vivo (PantallaAnalisis), que
+    // es quien navega al detalle cuando el resultado está listo.
+    //
+    // Gate `escaneoActivo` (señal de INTENCIÓN, no de ejecución): se
+    // enciende al INICIAR el escaneo (frames antes del resultado, sin
+    // carrera de conflagción de StateFlow) y se consume al navegar. Un
+    // `ResultadoListo` restaurado por process-death (sin escaneo en esta
+    // vida del VM) tiene `escaneoActivo == false` y no navega solo.
+    //
+    // Fast-path (conflagción): si la inferencia es tan rápida que Compose
+    // nunca observa el estado intermedio `Analizando`, el propio Home
+    // resuelve el ResultadoListo — y llama reiniciar() ANTES de navegar
+    // para que esta pantalla, al recomponerse tras volver del detalle,
+    // resetee el modal y reanude la cámara (bug: el modal quedaba
+    // congelado mostrando el QR detectado con la cámara pausada).
     LaunchedEffect(estado) {
         val e = estado
-        if (analizando &&
-            e is Estado.ResultadoListo &&
-            e.resultado is ResultadoAnalisis.ResultadoUrl
-        ) {
-            onEscanear()
+        when {
+            escaneoActivo && e is Estado.Analizando -> onEscanear()
+            escaneoActivo && e is Estado.ResultadoListo -> {
+                pipelineViewModel.consumirEscaneoActivo()
+                pipelineViewModel.reiniciar()
+                onResultado(e.idLocal)
+            }
         }
+    }
+
+    // ── E2: secuencia de reset del escaneador ──
+    // Antes copiada en cada handler terminal (reanudar camara, NoUrlListo,
+    // Error, cancelar modal, safety net UrlDuplicada): limpiar el QR
+    // detectado (cierra el modal inferior), reanudar la deteccion de la
+    // camara y, opcionalmente, devolver el pipeline a Escaneando (los
+    // callers que ya resetean el pipeline via cancelarReescaneo pasan
+    // reiniciarPipeline = false).
+    fun resetearEscaner(reiniciarPipeline: Boolean = true) {
+        deteccionQr = null
+        moduloCamara?.reanudarDeteccion()
+        if (reiniciarPipeline) pipelineViewModel.reiniciar()
     }
 
     // ── Reanudar camara cuando volvemos a Escaneando ──
     LaunchedEffect(estado) {
         if (estado is Estado.Escaneando && deteccionQr != null) {
-            deteccionQr = null
-            moduloCamara?.reanudarDeteccion()
+            resetearEscaner(reiniciarPipeline = false)
         }
     }
 
-    // ── QR no-URL: el pipeline resuelve NoUrl tan rapido que el gate
+    // ── QR no-URL: el pipeline resuelve NoUrlListo tan rapido que el gate
     //    de navegacion nunca lo pilla (analizando ya es false). Manejar
     //    aqui: limpiar modal, reanudar camara, mostrar mensaje. ──
     LaunchedEffect(estado) {
         val e = estado
-        if (e is Estado.ResultadoListo &&
-            e.resultado is ResultadoAnalisis.NoUrl
-        ) {
-            deteccionQr = null
-            moduloCamara?.reanudarDeteccion()
-            pipelineViewModel.reiniciar()
+        if (e is Estado.NoUrlListo) {
+            resetearEscaner()
             // E2/B2 fix: mensaje en un unico punto de verdad (mensajeNoUrl).
-            val noUrl = e.resultado as ResultadoAnalisis.NoUrl
-            onMensaje(TipoMensaje.INFO, mensajeNoUrl(noUrl.tipoContenido))
+            onMensaje(TipoMensaje.INFO, mensajeNoUrl(e.resultado.tipoContenido))
         }
     }
 
     // ── U3: Estado.Error sin manejo local dejaba el modal "Procesando..."
-    //    congelado y la camara pausada para siempre (el handler de Error
-    //    solo vivia en AnalisisScreen, pantalla a la que nunca se llego).
-    //    Igual que NoUrl: limpiar, reanudar, reiniciar y notificar. ──
+    //    congelado y la camara pausada para siempre. Igual que NoUrl:
+    //    limpiar, reanudar, reiniciar y notificar. ──
     LaunchedEffect(estado) {
         val e = estado
         if (e is Estado.Error && !analizando) {
-            deteccionQr = null
-            moduloCamara?.reanudarDeteccion()
-            pipelineViewModel.reiniciar()
+            resetearEscaner()
             onMensaje(TipoMensaje.ERROR, e.mensaje)
         }
     }
@@ -280,7 +296,7 @@ fun PantallaHome(
     LaunchedEffect(estado, deteccionQr, analizando) {
         if (estado is Estado.UrlDuplicada && deteccionQr == null && !analizando) {
             pipelineViewModel.cancelarReescaneo()
-            moduloCamara?.reanudarDeteccion()
+            resetearEscaner(reiniciarPipeline = false)
         }
     }
 
@@ -573,14 +589,13 @@ fun PantallaHome(
                             color = CyberTextoSecundario
                         )
                     }
-                    // U8: el boton Cancelar solo existia en AnalisisScreen,
-                    // pantalla a la que no se llega mientras corre el dedup
-                    // de una URL nueva (hasta 60s con red colgada) — el
-                    // usuario quedaba atrapado mirando este modal.
+                    // U8: el boton Cancelar del analisis en curso (dedup de
+                    // una URL nueva puede tardar hasta 60s con red colgada)
+                    // — sin el, el usuario quedaba atrapado mirando este
+                    // modal. cancelarReescaneo ya resetea el pipeline.
                     TextButton(onClick = {
-                        deteccionQr = null
                         pipelineViewModel.cancelarReescaneo()
-                        moduloCamara?.reanudarDeteccion()
+                        resetearEscaner(reiniciarPipeline = false)
                     }) {
                         Text("Cancelar", color = CyberTextoSecundario)
                     }

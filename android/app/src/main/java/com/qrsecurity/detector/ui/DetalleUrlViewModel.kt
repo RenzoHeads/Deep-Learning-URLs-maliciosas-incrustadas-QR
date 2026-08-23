@@ -14,18 +14,25 @@ import com.qrsecurity.detector.datos.repositorios.eliminarLocalPorUrlLimpia
 import com.qrsecurity.detector.datos.sync.MediadorSincronizacion
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Job
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.transformLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -75,7 +82,14 @@ private fun DetalleEscaneoCacheado.aCargado() = DetalleUrlUiState.Cargado(
  * la pantalla de detalle.
  */
 sealed interface DetalleUrlAction {
-    data class BloquearUrl(val url: String, val razon: String) : DetalleUrlAction
+    /**
+     * Bloquea la URL. M1 (auditoría frontend): sin `razon` — la política de
+     * NEGOCIO (qué razón se registra al bloquear desde el detalle) vive en
+     * el VM, no en el payload de la acción armado por la UI (antes la
+     * pantalla importaba `RepositorioUrlsBloqueadas.RAZON_MALICIOSA`,
+     * constante de la capa datos).
+     */
+    data class BloquearUrl(val url: String) : DetalleUrlAction
     /**
      * Desbloquea (elimina) una URL de la lista de bloqueadas.
      * Toma la URL (no el id del row) para que la UI no necesite conocer
@@ -102,6 +116,44 @@ sealed interface DetalleUrlAction {
 }
 
 /**
+ * Mensajes one-shot del detalle, tipados (S6 — auditoría frontend): la capa
+ * de lógica emite QUÉ pasó; la copy (texto + severidad) se resuelve en la
+ * UI vía [aMensajeUi] — antes los strings de usuario vivían en el ViewModel,
+ * acoplando lógica y presentación.
+ */
+sealed interface MensajeDetalleUrl {
+    data object UrlBloqueada : MensajeDetalleUrl
+    data object UrlDesbloqueada : MensajeDetalleUrl
+    data object UrlNoEstabaBloqueada : MensajeDetalleUrl
+    data object UrlEliminada : MensajeDetalleUrl
+    data object VersionEliminada : MensajeDetalleUrl
+    data object FalloBloqueo : MensajeDetalleUrl
+    data object FalloDesbloqueo : MensajeDetalleUrl
+    data object FalloEliminarUrl : MensajeDetalleUrl
+    data object FalloEliminarVersion : MensajeDetalleUrl
+}
+
+/** Severidad + copy de cada mensaje — única fuente, viviendo en la capa UI. */
+internal fun MensajeDetalleUrl.aMensajeUi(): MensajeUi = when (this) {
+    MensajeDetalleUrl.UrlBloqueada -> MensajeUi(TipoMensaje.EXITO, "URL bloqueada.")
+    MensajeDetalleUrl.UrlDesbloqueada -> MensajeUi(TipoMensaje.EXITO, "URL desbloqueada.")
+    MensajeDetalleUrl.UrlNoEstabaBloqueada ->
+        MensajeUi(TipoMensaje.INFO, "La URL no estaba bloqueada.")
+    MensajeDetalleUrl.UrlEliminada ->
+        MensajeUi(TipoMensaje.EXITO, "URL eliminada del historial.")
+    MensajeDetalleUrl.VersionEliminada ->
+        MensajeUi(TipoMensaje.EXITO, "Versión eliminada del historial.")
+    MensajeDetalleUrl.FalloBloqueo ->
+        MensajeUi(TipoMensaje.ERROR, "No pudimos bloquear la URL. Inténtalo de nuevo.")
+    MensajeDetalleUrl.FalloDesbloqueo ->
+        MensajeUi(TipoMensaje.ERROR, "No pudimos desbloquear la URL. Inténtalo de nuevo.")
+    MensajeDetalleUrl.FalloEliminarUrl ->
+        MensajeUi(TipoMensaje.ERROR, "No pudimos eliminar la URL. Inténtalo de nuevo.")
+    MensajeDetalleUrl.FalloEliminarVersion ->
+        MensajeUi(TipoMensaje.ERROR, "No pudimos eliminar la versión. Inténtalo de nuevo.")
+}
+
+/**
  * ViewModel para la pantalla de Detalle de URL.
  *
  * Muestra la entidad [EscaneoEntity] con botones de bloquear/denunciar.
@@ -116,6 +168,7 @@ sealed interface DetalleUrlAction {
  * Tambien, `cache.guardar(estado: Cargado)` toma el estado completo,
  * no `(id, escaneo)`.
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class DetalleUrlViewModel @Inject constructor(
     private val repositorioEscaneos: RepositorioEscaneos,
@@ -127,19 +180,25 @@ class DetalleUrlViewModel @Inject constructor(
     private val _uiState = MutableStateFlow<DetalleUrlUiState>(DetalleUrlUiState.Cargando)
     val uiState: StateFlow<DetalleUrlUiState> = _uiState.asStateFlow()
 
-    // V-6 fix: job de la coleccion reactiva de cargarEscaneo. Se cancela
-    // al cargar un nuevo id (navegacion a otro detalle) para evitar
-    // coleccionadores duplicados.
-    private var cargarJob: Job? = null
+    // S3 (auditoría frontend): id del escaneo observado. Cambiarlo
+    // re-subscribe la cadena reactiva completa (flatMapLatest cancela la
+    // observación anterior) — reemplaza los Jobs manuales `cargarJob` /
+    // `innerJob` y la recursión pública de `cargarEscaneo(nuevoId,
+    // yaTeniaCargado = true)`, que cancelaba el Job que estaba ejecutando
+    // la propia llamada.
+    private val idObservado = MutableStateFlow<String?>(null)
 
-    // Audit A2+M1 fix: job de la suscripción interna reactiva (combine de
-    // observarPorUrl + snapshot) montada por cada escaneo NO-NULO emitido
-    // por observarPorId. Se cancela al llegar un nuevo escaneo para que el
-    // urlLimpia y los parámetros del escaneo sean siempre los del último.
-    private var innerJob: Job? = null
+    init {
+        idObservado
+            .filterNotNull()
+            .flatMapLatest { id -> observarEscaneo(id) }
+            .distinctUntilChanged()
+            .onEach { _uiState.value = it }
+            .launchIn(viewModelScope)
+    }
 
     // Eventos one-shot via Channel — cada evento se entrega una sola vez.
-    private val _mensaje = Channel<MensajeUi>(Channel.BUFFERED)
+    private val _mensaje = Channel<MensajeDetalleUrl>(Channel.BUFFERED)
     val mensaje = _mensaje.receiveAsFlow()
 
     // Evento one-shot: se emite cuando la URL fue eliminada del historial.
@@ -164,129 +223,76 @@ class DetalleUrlViewModel @Inject constructor(
     private var operandoUrl = false
 
     /**
-     * Carga el escaneo por id. Pre-llena _uiState desde el cache (si hay)
-     * para evitar flash de "Cargando...", luego observa Room reactivamente.
+     * Carga el escaneo por id: alimenta [idObservado] y deja que la cadena
+     * reactiva del `init` (flatMapLatest) haga el resto — prefill de cache
+     * incluido dentro de [observarEscaneo] para evitar flash de "Cargando...".
      *
-     * V-6 fix: antes usaba [RepositorioEscaneos.obtenerPorId] (suspend
-     * one-shot) — si un sync actualizaba el escaneo mientras el usuario
-     * estaba en el detalle, la UI mostraba datos stale hasta salir y
-     * re-entrar. Ahora usa [RepositorioEscaneos.observarPorId] (Flow) —
-     * Room re-emite automaticamente cuando la fila cambia, refrescando
-     * el detalle en vivo. El cache se actualiza en cada emision, asi la
-     * re-entrada a un detalle ya visitado trae datos frescos.
-     *
-     * **Bug A + Bug D fix (reKey resilience)**: el SyncWorker hace reKey
-     * del id del escaneo (client UUID -> server UUID via
-     * `UPDATE escaneos SET id=...`) cuando el POST al backend devuelve un
-     * id propio. Tras el reKey, `observarPorId(clientUUID)` re-emite null
-     * porque la fila con ese id ya no existe — solo existe bajo el
-     * server UUID.
-     *
-     * Solucion estandarizada: en lugar de solo preservar el ultimo Cargado
-     * con el id obsoleto (Bug A fix original), resolvemos el id real de la
-     * fila viva mas reciente via
-     * [RepositorioEscaneos.ultimoIdVivoPorUrlLimpia] y **re-subscribimos** el
-     * Flow con ese nuevo id. Esto asegura que:
-     *   - `Cargado.escaneo.id` always tenga el serverUUID real (no el
-     *     clientUUID stale)
-     *   - El cache se guarda bajo el key correcto (serverUUID)
-     *   - Los downstream consumers (DetalleUrlScreen -> AnalisisAnteriores)
-     *     reciben el id correcto sin necesidad de workarounds
-     *   - `esUltimaVersion` y `contarReescaneosSnapshot` usan el id real
-     *
-     * @param id el id del escaneo a observar (client UUID o server UUID).
-     * @param yaTeniaCargado true si ya hay un Cargado preservado (evita
-     *     flash de NoEncontrado si el re-subscribed Flow tarda 1 frame).
+     * V-6: reactiva via [RepositorioEscaneos.observarPorId] (Room re-emite
+     * cuando la fila cambia — sin datos stale). Idempotente: re-llamar con
+     * el mismo id (recomposición del LaunchedEffect) no re-subscribe nada.
      */
-    fun cargarEscaneo(id: String, yaTeniaCargado: Boolean = false) {
-        // Cancelar coleccion anterior (p.ej. navegacion a otro detalle).
-        cargarJob?.cancel()
+    fun cargarEscaneo(id: String) {
+        if (idObservado.value == id) return
+        idObservado.value = id
+    }
 
+    /**
+     * Cadena reactiva de un escaneo — S3 (auditoría frontend): antes eran
+     * 125 líneas con 2 Jobs manuales (`cargarJob`/`innerJob`) y una
+     * recursión pública que cancelaba el Job que la ejecutaba.
+     *
+     *  1. Prefill del cache ([CacheDetalleEscaneos]) — evita flash de
+     *     "Cargando..." al re-entrar a un detalle ya visitado.
+     *  2. `observarPorId(id)` + [transformLatest]: cada escaneo NO-NULO
+     *     monta el combine (bloqueo reactivo + snapshot paralelo
+     *     esUltimaVersion/contarReescaneos) y CANCELA el anterior — antes
+     *     era `innerJob?.cancel()` a mano.
+     *  3. Emisión null con fila viva previa (reKey del SyncWorker: client
+     *     UUID → server UUID): resuelve el id real via
+     *     [RepositorioEscaneos.ultimoIdVivoPorUrlLimpia] y muta
+     *     [idObservado] — el flatMapLatest del init cancela esta cadena
+     *     (incluidos los nulls stale del id viejo) y re-subscribe con el
+     *     serverUUID real, preservando el Cargado vigente (sin flash).
+     *  4. Null sin fila viva de la misma URL (U6): la fila fue eliminada
+     *     de verdad — invalida caches y emite NoEncontrado (no dejar
+     *     actuar sobre un escaneo fantasma).
+     */
+    private fun observarEscaneo(id: String): Flow<DetalleUrlUiState> = flow {
         val preFill = cacheDetalle.obtener(id)
-        var tuvoEmisionNoNula = preFill != null || yaTeniaCargado
-        if (preFill != null) _uiState.value = preFill.aCargado()
+        if (preFill != null) emit(preFill.aCargado())
+        var urlLimpiaViva: String? = preFill?.escaneo?.urlLimpia
 
-        cargarJob = viewModelScope.launch {
-            repositorioEscaneos.observarPorId(id).collect { escaneo ->
+        emitAll(
+            repositorioEscaneos.observarPorId(id).transformLatest { escaneo ->
                 if (escaneo == null) {
-                    if (!tuvoEmisionNoNula) {
+                    val urlLimpia = urlLimpiaViva
+                    if (urlLimpia == null) {
                         // Caso legit: id inexistente (navegacion a detalle
-                        // borrado o id invalido). Cache miss + Flow first
-                        // emit null -> NoEncontrado.
-                        _uiState.value = DetalleUrlUiState.NoEncontrado
+                        // borrado o id invalido). Cache miss + primer emit
+                        // null -> NoEncontrado.
+                        emit(DetalleUrlUiState.NoEncontrado)
                     } else {
-                        // reKey detectado: la fila cambio su PK de clientUUID
-                        // a serverUUID. Resolver el id real y re-subscribir.
-                        val cargado = _uiState.value as? DetalleUrlUiState.Cargado
-                        if (cargado != null) {
-                            val nuevoId = repositorioEscaneos
-                                .ultimoIdVivoPorUrlLimpia(cargado.escaneo.urlLimpia)
-                            if (nuevoId != null && nuevoId != id) {
-                                // Re-subscribir con el serverUUID real. El
-                                // Cargado actual se preserva (no hay cache
-                                // hit para nuevoId, _uiState no se resetea),
-                                // y el nuevo Flow emitira el escaneo con el
-                                // id correcto en <1ms.
-                                cargarEscaneo(nuevoId, yaTeniaCargado = true)
-                            } else {
-                                // U6: sin reescaneos vivos de la misma URL,
-                                // la fila fue eliminada de verdad (DELETE del
-                                // usuario o tombstone del pull). Preservar el
-                                // Cargado dejaba al usuario actuando (abrir/
-                                // bloquear/eliminar) sobre un escaneo
-                                // fantasma, y el cache re-inyectaba el dato
-                                // muerto en cada re-entrada al detalle.
-                                cacheDetalle.invalidar(id)
-                                cacheDetalle.invalidarPorUrlLimpia(
-                                    cargado.escaneo.urlLimpia
-                                )
-                                _uiState.value = DetalleUrlUiState.NoEncontrado
-                            }
+                        val nuevoId = repositorioEscaneos
+                            .ultimoIdVivoPorUrlLimpia(urlLimpia)
+                        if (nuevoId != null && nuevoId != id) {
+                            idObservado.value = nuevoId
+                        } else {
+                            cacheDetalle.invalidar(id)
+                            cacheDetalle.invalidarPorUrlLimpia(urlLimpia)
+                            emit(DetalleUrlUiState.NoEncontrado)
                         }
                     }
-                    return@collect
-                }
-                tuvoEmisionNoNula = true
-                // Audit A2+M1 fix — reemplaza la cascada de 3 queries en
-                // serie (obtenerPorUrl + esUltimaVersion(id) que re-fetchea
-                // obtenerPorId + contarReescaneosSnapshot) por:
-                //
-                //  1. `observarPorUrl(urlLimpia)` (M1): Flow reactivo al
-                //     estado de bloqueo. Combina con el snapshot para que el
-                //     flag `urlBloqueada` del Cargado se actualice en vivo
-                //     sin re-query cuando `urls_bloqueadas` o `pending_ops`
-                //     cambian (p.ej., el usuario bloquea desde esta misma
-                //     pantalla o el sync confirma un DELETE).
-                //
-                //  2. `esUltimaVersion(urlLimpia, creadoEnMillis, id)` (A2.a):
-                //     sobrecarga directa al DAO — elimina el re-fetch del
-                //     escaneo dentro de RepositorioEscaneos.esUltimaVersion(id).
-                //
-                //  3. `async` paralelo (A2.b): esUltimaVersion y
-                //     contarReescaneosSnapshot corren en concurrente; la
-                //     latencia de la emisión es max(esUltima, reesc) en vez
-                //     de su suma.
-                //
-                //  4. `distinctUntilChanged` (A2.c) sobre el Cargado final
-                //     filtra re-emisiones idénticas (p.ej., Room desconecta
-                //     y re-emite el mismo row). Cargado es data class, su
-                //     equals compara los 4 campos → filtra correctamente.
-                //
-                // El `innerJob` se cancela al llegar el siguiente escaneo
-                // (cambia urlLimpia o id) — descarta el `combine` anterior y
-                // monta uno nuevo con los parámetros correctos.
-                innerJob?.cancel()
-                innerJob = launch {
+                } else {
+                    urlLimpiaViva = escaneo.urlLimpia
                     val urlBloqueadaFlow = repositorioUrlsBloqueadas
                         .observarPorUrl(escaneo.urlLimpia)
                         .map { it != null }
                         .distinctUntilChanged()
 
+                    // Snapshot paralelo (A2.b): esUltimaVersion y
+                    // contarReescaneosSnapshot corren concurrentes; ambas
+                    // delegan en `ioDispatcher` via el repos.
                     val snapshotFlow = flow<Pair<Boolean, Int>> {
-                        // coroutineScope garantiza que si una async falla, la
-                        // otra se cancela (structured concurrency). Ambas
-                        // delegan en `ioDispatcher` via el repos ⇒ no roban
-                        // hilos del Main.
                         coroutineScope {
                             val deferredUltima = async {
                                 repositorioEscaneos.esUltimaVersion(
@@ -305,23 +311,21 @@ class DetalleUrlViewModel @Inject constructor(
                         }
                     }
 
-                    combine(urlBloqueadaFlow, snapshotFlow) { urlBloqueada, snapshot ->
-                        val (esUltima, totalReesc) = snapshot
-                        DetalleUrlUiState.Cargado(
-                            escaneo = escaneo,
-                            urlBloqueada = urlBloqueada,
-                            esUltimaVersion = esUltima,
-                            totalReescaneos = totalReesc
-                        )
-                    }
-                    .distinctUntilChanged()
-                    .collect { cargado ->
-                        cacheDetalle.guardar(cargado.aCacheado())
-                        _uiState.value = cargado
-                    }
+                    emitAll(
+                        combine(urlBloqueadaFlow, snapshotFlow) { urlBloqueada, snapshot ->
+                            val (esUltima, totalReesc) = snapshot
+                            DetalleUrlUiState.Cargado(
+                                escaneo = escaneo,
+                                urlBloqueada = urlBloqueada,
+                                esUltimaVersion = esUltima,
+                                totalReescaneos = totalReesc
+                            )
+                        }
+                            .onEach { cargado -> cacheDetalle.guardar(cargado.aCacheado()) }
+                    )
                 }
             }
-        }
+        )
     }
 
     /**
@@ -333,17 +337,20 @@ class DetalleUrlViewModel @Inject constructor(
         if (operandoUrl) return
         operandoUrl = true
         when (action) {
-            is DetalleUrlAction.BloquearUrl -> bloquearUrl(action.url, action.razon)
+            is DetalleUrlAction.BloquearUrl -> bloquearUrl(action.url)
             is DetalleUrlAction.DesbloquearUrl -> desbloquearUrl(action.url)
             is DetalleUrlAction.EliminarUrl -> eliminarUrl(action.urlLimpia)
             is DetalleUrlAction.EliminarVersion -> eliminarVersion(action.id)
         }
     }
 
-    private fun bloquearUrl(url: String, razon: String) {
+    private fun bloquearUrl(url: String) {
         viewModelScope.launch {
             try {
-                repositorioUrlsBloqueadas.bloquearLocal(url = url, razon = razon)
+                repositorioUrlsBloqueadas.bloquearLocal(
+                    url = url,
+                    razon = RepositorioUrlsBloqueadas.RAZON_MALICIOSA
+                )
                 mediadorSincronizacion.dispararSyncUnica()
                 // Propagar al cache para que otros detalles de la misma URL
                 // reflejen el bloqueo sin esperar al refresh de Room.
@@ -355,11 +362,11 @@ class DetalleUrlViewModel @Inject constructor(
                         estado
                     }
                 }
-                _mensaje.send(MensajeUi(TipoMensaje.EXITO, "URL bloqueada."))
+                _mensaje.send(MensajeDetalleUrl.UrlBloqueada)
             } catch (c: CancellationException) {
                 throw c
             } catch (e: Exception) {
-                _mensaje.send(MensajeUi(TipoMensaje.ERROR, "No pudimos bloquear la URL. Inténtalo de nuevo."))
+                _mensaje.send(MensajeDetalleUrl.FalloBloqueo)
             } finally {
                 operandoUrl = false
             }
@@ -382,17 +389,17 @@ class DetalleUrlViewModel @Inject constructor(
                             estado
                         }
                     }
-                    _mensaje.send(MensajeUi(TipoMensaje.EXITO, "URL desbloqueada."))
+                    _mensaje.send(MensajeDetalleUrl.UrlDesbloqueada)
                     // Evento tipado en vez de sniffear el tipo del mensaje:
                     // la UI abre OkDesbloqueo solo con esta señal.
                     _desbloqueoCompletado.send(Unit)
                 } else {
-                    _mensaje.send(MensajeUi(TipoMensaje.INFO, "La URL no estaba bloqueada."))
+                    _mensaje.send(MensajeDetalleUrl.UrlNoEstabaBloqueada)
                 }
             } catch (c: CancellationException) {
                 throw c
             } catch (e: Exception) {
-                _mensaje.send(MensajeUi(TipoMensaje.ERROR, "No pudimos desbloquear la URL. Inténtalo de nuevo."))
+                _mensaje.send(MensajeDetalleUrl.FalloDesbloqueo)
             } finally {
                 operandoUrl = false
             }
@@ -421,12 +428,12 @@ class DetalleUrlViewModel @Inject constructor(
                 // como Cargado stale y pintaban un detalle fantasma al
                 // re-entrar desde AnalisisAnteriores).
                 cacheDetalle.invalidarPorUrlLimpia(urlLimpia)
-                _mensaje.send(MensajeUi(TipoMensaje.EXITO, "URL eliminada del historial."))
+                _mensaje.send(MensajeDetalleUrl.UrlEliminada)
                 _eliminarCompletado.send(Unit)
             } catch (c: CancellationException) {
                 throw c
             } catch (e: Exception) {
-                _mensaje.send(MensajeUi(TipoMensaje.ERROR, "No pudimos eliminar la URL. Inténtalo de nuevo."))
+                _mensaje.send(MensajeDetalleUrl.FalloEliminarUrl)
             } finally {
                 operandoUrl = false
             }
@@ -451,12 +458,12 @@ class DetalleUrlViewModel @Inject constructor(
                 repositorioEscaneos.eliminarLocal(id)
                 mediadorSincronizacion.dispararSyncUnica()
                 cacheDetalle.invalidar(id)
-                _mensaje.send(MensajeUi(TipoMensaje.EXITO, "Versión eliminada del historial."))
+                _mensaje.send(MensajeDetalleUrl.VersionEliminada)
                 _eliminarCompletado.send(Unit)
             } catch (c: CancellationException) {
                 throw c
             } catch (e: Exception) {
-                _mensaje.send(MensajeUi(TipoMensaje.ERROR, "No pudimos eliminar la versión. Inténtalo de nuevo."))
+                _mensaje.send(MensajeDetalleUrl.FalloEliminarVersion)
             } finally {
                 operandoUrl = false
             }

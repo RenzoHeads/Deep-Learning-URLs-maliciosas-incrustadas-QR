@@ -56,19 +56,30 @@ sealed class Estado {
     ) : Estado()
 
     /**
-     * Inferencia completada y un resultado esta listo.
+     * Inferencia de URL completada y persistida.
      *
-     * [idLocal]: UUID del escaneo persistido en Room cuando el QR contenia
-     * una URL. Es `null` cuando el QR NO contenia una URL (path
-     * [ResultadoAnalisis.NoUrl], que no persiste). La UI ([AnalisisScreen])
-     * usa este id para navegar a DetalleUrl con el id exacto en vez de un
-     * match heuristico en el Flow `historial` — ese Flow sufre race con la
-     * emision de Room tras INSERT, lo que producía navegacion con id
-     * invalido → DetalleUrl "NoEncontrado".
+     * [idLocal]: UUID del escaneo persistido en Room. **No-null garantizado**
+     * (auditoría frontend B6): si el INSERT en Room falla, el pipeline emite
+     * [Estado.Error] en vez de un ResultadoListo sin id — antes el id podía
+     * ser null y la UI caía a un match heurístico sobre el Flow `historial`
+     * que podía navegar al escaneo ANTERIOR de la misma URL y presentar su
+     * veredicto como resultado del QR recién escaneado. La UI navega a
+     * DetalleUrl con este id exacto.
      */
     data class ResultadoListo(
-        val resultado: ResultadoAnalisis,
-        val idLocal: String? = null
+        val resultado: ResultadoAnalisis.ResultadoUrl,
+        val idLocal: String
+    ) : Estado()
+
+    /**
+     * El contenido del QR no era una URL — no se realizó inferencia ni se
+     * persistió nada (no hay id que exponer). Estado separado de
+     * [ResultadoListo] (antes era `ResultadoListo` con un `NoUrl` anidado e
+     * `idLocal == null`): el tipo ahora expresa directamente el contrato —
+     * resultado de URL ⇔ id de escaneo; sin URL ⇔ sin id.
+     */
+    data class NoUrlListo(
+        val resultado: ResultadoAnalisis.NoUrl
     ) : Estado()
 
     /** Ocurrio un error durante el analisis. */

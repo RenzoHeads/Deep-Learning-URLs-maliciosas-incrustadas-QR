@@ -44,29 +44,6 @@ import com.qrsecurity.detector.ui.theme.TamanosIcono
 import com.qrsecurity.detector.ui.theme.TamanosToque
 
 /**
- * Plantilla unificada para los modales de confirmacion de accion
- * (bloqueo / desbloqueo / eliminacion de URL / eliminacion de version).
- *
- * Reemplaza ~700 LOC de boilerplate duplicado entre [ModalBloqueoConfirmar],
- * [ModalDesbloqueoConfirmar], [ModalEliminarUrl] y [ModalEliminarVersion]
- * que compartian la misma estructura (overlay scrim → container glass →
- * titulo → cuerpo → lista de consecuencias → boton confirmar → boton
- * cancelar) diferenciandose solo en textos, color del boton y, en algunos
- * casos, icono del boton.
- *
- * **Por que NO muestra "PASO 1 DE 2"**: hoy ninguno de los 4 modales tiene
- * un "PASO 2" posterior — el step indicator miente sobre el flujo. Si se
- * anade una segunda etapa (p.ej. confirmacion escalonada), introducir un
- * parametro `mostrarStepIndicator: Boolean = false` y disear el segundo
- * modal como call-site separado con el indicator en el segundo estado.
- *
- * Las consecuencias se renderizan con [FilaRiesgo] (Warning icon + texto),
- * definida en este mismo archivo y reutilizada por los 4 modales.
- *
- * [ModalDesbloqueoOk] NO usa esta plantilla — es un modal de exito (icon
- * verde + 1 boton "Listo"), diferente shape.
- */
-/**
  * Contenedor visual unificado de TODOS los modales — overlay scrim + columna
  * glass centrada (radio xl, fondo [PencilModalFondo], hairline glass).
  *
@@ -105,6 +82,29 @@ internal fun ContenedorModalCyber(
     }
 }
 
+/**
+ * Plantilla unificada para los modales de confirmacion de accion
+ * (bloqueo / desbloqueo / eliminacion de URL / eliminacion de version).
+ *
+ * Reemplaza ~700 LOC de boilerplate duplicado entre [ModalBloqueoConfirmar],
+ * [ModalDesbloqueoConfirmar], [ModalEliminarUrl] y [ModalEliminarVersion]
+ * que compartian la misma estructura (overlay scrim → container glass →
+ * titulo → cuerpo → lista de consecuencias → boton confirmar → boton
+ * cancelar) diferenciandose solo en textos, color del boton y, en algunos
+ * casos, icono del boton.
+ *
+ * **Por que NO muestra "PASO 1 DE 2"**: hoy ninguno de los 4 modales tiene
+ * un "PASO 2" posterior — el step indicator miente sobre el flujo. Si se
+ * anade una segunda etapa (p.ej. confirmacion escalonada), introducir un
+ * parametro `mostrarStepIndicator: Boolean = false` y disear el segundo
+ * modal como call-site separado con el indicator en el segundo estado.
+ *
+ * Las consecuencias se renderizan con [FilaRiesgo] (Warning icon + texto),
+ * definida en este mismo archivo y reutilizada por los 4 modales.
+ *
+ * [ModalDesbloqueoOk] NO usa esta plantilla — es un modal de exito (icon
+ * verde + 1 boton "Listo"), diferente shape.
+ */
 @Composable
 internal fun PlantillaModalConfirmacion(
     titulo: String,
@@ -176,7 +176,7 @@ internal fun PlantillaModalConfirmacion(
  * plantilla — el archivo de origen no correspondia a su contenido.
  */
 @Composable
-internal fun FilaRiesgo(texto: String) {
+private fun FilaRiesgo(texto: String) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(Espaciado.md),

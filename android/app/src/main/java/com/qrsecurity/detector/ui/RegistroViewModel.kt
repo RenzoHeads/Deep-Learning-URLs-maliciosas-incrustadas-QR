@@ -2,14 +2,11 @@ package com.qrsecurity.detector.ui
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.auth0.android.authentication.storage.SecureCredentialsManager
-import com.qrsecurity.detector.datos.sync.MediadorSincronizacion
 import com.qrsecurity.detector.sesion.ExcepcionAuth0App
-import com.qrsecurity.detector.sesion.PerfilIdToken
 import com.qrsecurity.detector.sesion.ServicioAuth0
-import com.qrsecurity.detector.sesion.SesionUsuario
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -66,9 +63,7 @@ sealed interface RegistroAction {
 @HiltViewModel
 class RegistroViewModel @Inject constructor(
     private val servicioAuth0: ServicioAuth0,
-    private val credentialsManager: SecureCredentialsManager,
-    private val sesionUsuario: SesionUsuario,
-    private val mediadorSincronizacion: MediadorSincronizacion
+    private val iniciarSesionTrasAuth: IniciarSesionTrasAuth
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(RegistroUiState())
@@ -97,36 +92,17 @@ class RegistroViewModel @Inject constructor(
         if (_uiState.value.procesando) return
 
         // Validacion local antes de llamar a Auth0 (BUG-M5 fix: fallar
-        // rapido en el cliente con mensaje claro, sin gastar red).
-        if (correo.isBlank() || password.isBlank()) {
+        // rapido en el cliente, sin gastar red). S2: la política (formato
+        // de correo, longitud 15-72, confirmación) vive en
+        // [ValidadorCredenciales], compartida con Login.
+        val errorValidacion =
+            ValidadorCredenciales.validarCamposCompletos(correo, password)
+                ?: ValidadorCredenciales.validarCorreo(correo)
+                ?: ValidadorCredenciales.validarPassword(password)
+                ?: ValidadorCredenciales.validarConfirmacion(password, confirmarPassword)
+        if (errorValidacion != null) {
             viewModelScope.launch {
-                _eventos.send(RegistroEvento.Error("Completa todos los campos."))
-            }
-            return
-        }
-        if (!PATRON_CORREO.matches(correo)) {
-            viewModelScope.launch {
-                _eventos.send(RegistroEvento.Error("El correo no tiene un formato válido."))
-            }
-            return
-        }
-        // Politica real de la database connection de Auth0 (verificada
-        // contra el tenant): longitud 15-72, sin requisitos de clases.
-        if (password.length < 15) {
-            viewModelScope.launch {
-                _eventos.send(RegistroEvento.Error("La contraseña debe tener al menos 15 caracteres."))
-            }
-            return
-        }
-        if (password.length > 72) {
-            viewModelScope.launch {
-                _eventos.send(RegistroEvento.Error("La contraseña no puede superar los 72 caracteres."))
-            }
-            return
-        }
-        if (password != confirmarPassword) {
-            viewModelScope.launch {
-                _eventos.send(RegistroEvento.Error("Las contraseñas no coinciden."))
+                _eventos.send(RegistroEvento.Error(errorValidacion))
             }
             return
         }
@@ -141,19 +117,21 @@ class RegistroViewModel @Inject constructor(
                         nombre = nombre
                     )
                 }
-                withContext(Dispatchers.IO) {
-                    credentialsManager.saveCredentials(credenciales)
-                }
-                val perfil = PerfilIdToken.desdeIdToken(credenciales.idToken)
-                sesionUsuario.guardarSesion(
-                    token = credenciales.accessToken,
-                    usuario = perfil?.nombreMostrable()
-                        ?: nombre.ifBlank { correo.substringBefore("@") },
-                    correo = perfil?.correo ?: correo
+                // S2: persistencia de credenciales + sesión + PULL inicial
+                // centralizados en el caso de uso compartido con Login.
+                val error = iniciarSesionTrasAuth.invocar(
+                    credenciales = credenciales,
+                    correo = correo,
+                    fallbackNombre = nombre
                 )
-                mediadorSincronizacion.dispararSyncUnica()
                 _uiState.update { it.copy(procesando = false) }
-                _eventos.send(RegistroEvento.Exito)
+                if (error == null) {
+                    _eventos.send(RegistroEvento.Exito)
+                } else {
+                    _eventos.send(RegistroEvento.Error(error))
+                }
+            } catch (c: CancellationException) {
+                throw c
             } catch (e: ExcepcionAuth0App) {
                 _uiState.update { it.copy(procesando = false) }
                 _eventos.send(RegistroEvento.Error(servicioAuth0.mensajeError(e)))
@@ -162,10 +140,5 @@ class RegistroViewModel @Inject constructor(
                 _eventos.send(RegistroEvento.Error("No pudimos conectar. Revisa tu conexión e inténtalo de nuevo."))
             }
         }
-    }
-
-    private companion object {
-        /** RFC-lite: algo@algo.algo. */
-        val PATRON_CORREO = Regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")
     }
 }

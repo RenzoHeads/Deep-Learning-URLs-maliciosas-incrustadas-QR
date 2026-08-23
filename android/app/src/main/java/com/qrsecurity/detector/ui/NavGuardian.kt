@@ -85,9 +85,16 @@ private data class NavGuardianContexto(
 object Rutas {
     const val LOGIN = "login"
     const val REGISTRO = "registro"
-    const val ANALISIS = "analisis"
     const val HOME = "home"
     const val HISTORIAL = "historial"
+    /**
+     * Pantalla de análisis EN VIVO: se llega desde Home cuando el pipeline
+     * entra en [com.qrsecurity.detector.pipeline.Estado.Analizando]
+     * (inferencia real en vuelo). El modal de Home solo cubre dedup +
+     * preview de la URL; esta pantalla muestra el progreso y navega al
+     * detalle cuando el resultado está listo.
+     */
+    const val ANALISIS = "analisis"
     /**
      * Detalle de UN escaneo por id — sirve tanto la versión vigente como
      * las históricas (re-escaneos) de una URL. La pantalla distingue ambos
@@ -260,33 +267,34 @@ private fun NavGuardianRutas(
                 onMensaje = contexto.mostrarMensaje,
             )
         }
-        composable(Rutas.ANALISIS) {
-            PantallaAnalisis(
-                onResultadoMalicioso = { idEscaneo ->
-                    navController.navigate(Rutas.DETALLE_URL.replace("{id}", idEscaneo)) {
-                        popUpTo(Rutas.ANALISIS) { inclusive = true }
-                    }
-                },
-                onResultadoSeguro = { idEscaneo ->
-                    navController.navigate(Rutas.DETALLE_URL.replace("{id}", idEscaneo)) {
-                        popUpTo(Rutas.ANALISIS) { inclusive = true }
-                    }
-                },
-                onVolverHome = {
-                    navController.navigate(Rutas.HOME) {
-                        popUpTo(Rutas.ANALISIS) { inclusive = true }
-                    }
-                },
-                onMensaje = contexto.mostrarMensaje,
-                pipelineViewModel = viewModels.pipelineViewModel,
-                datosViewModel = viewModels.datosViewModel,
-            )
-        }
         composable(Rutas.HOME) {
             PantallaHome(
+                // UX restaurada: al iniciar la inferencia real se navega a
+                // la pantalla de análisis en vivo (el modal de Home solo
+                // cubre dedup + preview de la URL).
                 onEscanear = { navController.navigate(Rutas.ANALISIS) },
+                // Fast-path (conflagción de estados): si Home nunca observó
+                // el Analizando intermedio, resuelve el resultado directo al
+                // detalle con el idLocal del sealed.
+                onResultado = { idEscaneo ->
+                    navController.navigate(Rutas.DETALLE_URL.replace("{id}", idEscaneo))
+                },
                 pipelineViewModel = viewModels.pipelineViewModel,
                 onMensaje = contexto.mostrarMensaje,
+            )
+        }
+        composable(Rutas.ANALISIS) {
+            PantallaAnalisis(
+                onResultado = { idEscaneo ->
+                    // popUpTo(ANALISIS): el back desde el detalle regresa a
+                    // Home (cámara reseteada), no a esta pantalla terminada.
+                    navController.navigate(Rutas.DETALLE_URL.replace("{id}", idEscaneo)) {
+                        popUpTo(Rutas.ANALISIS) { inclusive = true }
+                    }
+                },
+                onVolverHome = { navController.popBackStack() },
+                onMensaje = contexto.mostrarMensaje,
+                pipelineViewModel = viewModels.pipelineViewModel,
             )
         }
         composable(Rutas.HISTORIAL) {

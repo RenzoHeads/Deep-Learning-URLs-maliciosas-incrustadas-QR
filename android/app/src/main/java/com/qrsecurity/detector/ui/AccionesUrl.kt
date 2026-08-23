@@ -18,10 +18,39 @@ private val ESQUEMAS_PERMITIDOS = setOf("http", "https")
 private val PATRON_ESQUEMA = Regex("^[A-Za-z][A-Za-z0-9+.-]*:")
 
 /**
- * Devuelve la URL lista para abrir en navegador:
+ * Resultado de validar una URL para abrir en navegador (M7 — auditoría
+ * frontend): antes `String?` + un callback `onInvalida` que el botón
+ * reenviaba con un string duplicado; el sealed distingue los DOS motivos de
+ * invalidez en un solo punto de decisión (la pantalla).
+ */
+sealed interface UrlParaAbrir {
+    /** URL sanitizada lista para `ACTION_VIEW` (esquema http/https). */
+    data class Valida(val url: String) : UrlParaAbrir
+
+    /** Ni [urlOriginal] ni [urlLimpia] tienen contenido. */
+    data object Vacia : UrlParaAbrir
+
+    /** La candidata trae un esquema explícito no permitido (`ftp:`, `intent:`, …). */
+    data object EsquemaInvalido : UrlParaAbrir
+}
+
+/**
+ * Mensaje de snackbar para los casos no-abribles — única fuente de la copy
+ * (antes "La URL está vacía" y "El enlace no se puede abrir de forma segura"
+ * vivían duplicados en DetalleUrlScreen y DetalleUrlAcciones).
+ */
+internal fun UrlParaAbrir.mensajeSiInvalida(): String? = when (this) {
+    is UrlParaAbrir.Valida -> null
+    UrlParaAbrir.Vacia -> "La URL está vacía"
+    UrlParaAbrir.EsquemaInvalido -> "El enlace no se puede abrir de forma segura"
+}
+
+/**
+ * Resuelve la URL lista para abrir en navegador:
  *  - Prefiere [urlLimpia] (sanitizada) sobre [urlOriginal] (cruda del QR).
  *  - Si la elegida no tiene esquema, antepone `https://`.
- *  - Devuelve `null` si ambas están vacías o si el esquema no es permitido.
+ *  - Devuelve [UrlParaAbrir.Vacia] si ambas están vacías y
+ *    [UrlParaAbrir.EsquemaInvalido] si el esquema no es permitido.
  *
  * Audit fix (esquema mangling): una candidata con CUALQUIER esquema
  * explícito que no sea `http(s)://` (`ftp://x`, `intent://x`,
@@ -29,16 +58,17 @@ private val PATRON_ESQUEMA = Regex("^[A-Za-z][A-Za-z0-9+.-]*:")
  * produciendo URLs deformadas (`https://ftp://x`) cuyo scheme parseado era
  * https (permitido) y se abrían igual.
  */
-fun urlParaAbrir(urlOriginal: String, urlLimpia: String): String? {
+fun resolverUrlParaAbrir(urlOriginal: String, urlLimpia: String): UrlParaAbrir {
     val candidata = urlLimpia.ifBlank { urlOriginal }.trim()
-    if (candidata.isEmpty()) return null
+    if (candidata.isEmpty()) return UrlParaAbrir.Vacia
     val conEsquema = when {
         ESQUEMAS_PERMITIDOS.any { candidata.startsWith("$it://", ignoreCase = true) } -> candidata
-        PATRON_ESQUEMA.containsMatchIn(candidata) -> return null
+        PATRON_ESQUEMA.containsMatchIn(candidata) -> return UrlParaAbrir.EsquemaInvalido
         else -> "https://$candidata"
     }
     val esquema = Uri.parse(conEsquema).scheme?.lowercase()
-    return if (esquema in ESQUEMAS_PERMITIDOS) conEsquema else null
+    return if (esquema in ESQUEMAS_PERMITIDOS) UrlParaAbrir.Valida(conEsquema)
+    else UrlParaAbrir.EsquemaInvalido
 }
 
 /**

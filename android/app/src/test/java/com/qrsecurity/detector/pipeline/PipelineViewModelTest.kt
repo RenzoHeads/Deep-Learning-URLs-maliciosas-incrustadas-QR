@@ -9,6 +9,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -161,23 +162,22 @@ class PipelineViewModelTest {
     }
 
     // ──────────────────────────────────────────────────────────────
-    // analizar con texto que NO es URL — path NoUrl (no TFLite, no Room)
+    // analizar con texto que NO es URL — path NoUrlListo (no TFLite, no Room)
     // ──────────────────────────────────────────────────────────────
 
     @Test
-    fun analizar_payloadNoUrl_llegaAResultadoListoNoUrl() = runTest(testDispatcher) {
+    fun analizar_payloadNoUrl_llegaANoUrlListo() = runTest(testDispatcher) {
         viewModel.analizar("BEGIN:VCARD\nFN:Test\nEND:VCARD")
         advanceUntilIdle()
 
         val estadoFinal = viewModel.estado.value
         assertTrue(
-            "Payload no-URL debe llegar a ResultadoListo. Estado actual: $estadoFinal",
-            estadoFinal is Estado.ResultadoListo
+            "Payload no-URL debe llegar a NoUrlListo. Estado actual: $estadoFinal",
+            estadoFinal is Estado.NoUrlListo
         )
-        val resultado = (estadoFinal as Estado.ResultadoListo).resultado
         assertTrue(
-            "Resultado debe ser ResultadoAnalisis.NoUrl. Fue: $resultado",
-            resultado is ResultadoAnalisis.NoUrl
+            "El resultado debe ser ResultadoAnalisis.NoUrl. Fue: ${(estadoFinal as Estado.NoUrlListo).resultado}",
+            (estadoFinal as Estado.NoUrlListo).resultado is ResultadoAnalisis.NoUrl
         )
     }
 
@@ -197,6 +197,65 @@ class PipelineViewModelTest {
         assertTrue(
             "Dos invocaciones secuenciales no deben deadlockar",
             true
+        )
+    }
+
+    // ──────────────────────────────────────────────────────────────
+    // escaneoActivo — señal de INTENCIÓN de navegación (fix race del
+    // primer escaneo): se enciende al iniciar el escaneo y SOLO se apaga
+    // al consumir la navegación / reiniciar / cancelar. A diferencia de
+    // `analizando` (estado de ejecución que se apaga en el finally del Job,
+    // en el mismo bloque síncrono que emite ResultadoListo), no sufre la
+    // carrera de conflagción de StateFlow que hacía que el primer escaneo
+    // guardara pero nunca navegara.
+    // ──────────────────────────────────────────────────────────────
+
+    @Test
+    fun escaneoActivo_arrancaEnFalse() {
+        assertFalse(
+            "Sin escaneo iniciado, la señal de intención debe estar apagada " +
+                "(un ResultadoListo restaurado por process-death no navega)",
+            viewModel.escaneoActivo.value
+        )
+    }
+
+    @Test
+    fun escaneoActivo_permaneceTrueTrasTerminarEnError_hastaReiniciar() = runTest(testDispatcher) {
+        // Payload vacío → path rápido a Estado.Error (sin TFLite/Room).
+        viewModel.analizar("")
+        advanceUntilIdle()
+
+        assertTrue(
+            "El Job terminó en Error pero escaneoActivo debe seguir true: es señal " +
+                "de intención, no de ejecución — la apaga la UI (reiniciar/consumir), " +
+                "no el finally del Job",
+            viewModel.escaneoActivo.value
+        )
+        assertTrue(
+            "Pre-condición: el análisis efectivamente terminó en Error",
+            viewModel.estado.value is Estado.Error
+        )
+
+        // El handler de Error de HomeScreen llama reiniciar() — ahí se apaga.
+        viewModel.reiniciar()
+        assertFalse(
+            "reiniciar() debe apagar la señal",
+            viewModel.escaneoActivo.value
+        )
+    }
+
+    @Test
+    fun escaneoActivo_consumirEscaneoActivo_laApaga() = runTest(testDispatcher) {
+        viewModel.analizar("")
+        advanceUntilIdle()
+        assertTrue(viewModel.escaneoActivo.value)
+
+        // La UI consume ANTES de navegar: el mismo ResultadoListo no puede
+        // disparar navegación dos veces.
+        viewModel.consumirEscaneoActivo()
+        assertFalse(
+            "consumirEscaneoActivo() debe apagar la señal",
+            viewModel.escaneoActivo.value
         )
     }
 }

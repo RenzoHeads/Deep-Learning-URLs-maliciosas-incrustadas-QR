@@ -15,17 +15,6 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
- * UiState para la pantalla de Ajustes.
- *
- * Audit fix M4: se eliminaron `nombreUsuario`/`correo` — la UI nunca los
- * leia (AjustesScreen solo consume `syncEnCurso`) y forzaban inyectar
- * [com.qrsecurity.detector.sesion.SesionUsuario] solo para alimentarlos.
- */
-data class AjustesUiState(
-    val syncEnCurso: Boolean = false
-)
-
-/**
  * Acciones que la UI puede despachar (Unidirectional Data Flow).
  *
  * Audit fix M3: se elimino `DispararSync` — nunca se despacho desde la UI.
@@ -61,20 +50,23 @@ class AjustesViewModel @Inject constructor(
     val eventos = _eventos.receiveAsFlow()
 
     /**
-     * Estado de UI: indicador reactivo de sync en curso (solo durante el
-     * sync inicial — ver [MediadorSincronizacion.observarSyncEnCurso]).
+     * Indicador reactivo de sync en curso (solo durante el sync inicial —
+     * ver [MediadorSincronizacion.observarSyncEnCurso]).
+     *
+     * S1 (auditoría frontend): StateFlow<Boolean> directo — el wrapper
+     * `AjustesUiState(syncEnCurso)` envolvía UN solo Boolean sin aportar
+     * nada (único consumidor: AjustesScreen).
      *
      * Audit fix: WhileSubscribed en vez de Eagerly — la coleccion solo
      * corre mientras Ajustes esta en primer plano (la pantalla que la
      * consume), no durante toda la vida del VM.
      */
-    val uiState: StateFlow<AjustesUiState> =
+    val syncEnCurso: StateFlow<Boolean> =
         mediadorSincronizacion.observarSyncEnCurso()
-            .map { syncEnCurso -> AjustesUiState(syncEnCurso = syncEnCurso) }
             .stateIn(
                 scope = viewModelScope,
                 started = SharingStarted.WhileSubscribed(5_000),
-                initialValue = AjustesUiState()
+                initialValue = false
             )
 
     fun onAction(action: AjustesAction) {

@@ -23,18 +23,24 @@ import androidx.compose.ui.graphics.Color
 
 /** Fondo base de la app — azul-negro profundo Pencil. */
 val CyberFondo = Color(0xFF0A0F16)
+
+// M11 (auditoría frontend): un solo `val` por hex — antes 5 valores tenían
+// 2-3 nombres idénticos cada uno (p.ej. 0xFF1B2735 era CyberGlassAlto,
+// CyberGlassVariant y PencilBrandMark a la vez), garantizando divergencia
+// silenciosa en el primer rediseño. Los alias explícitos conservan los
+// nombres semánticos donde el uso los justifica.
 val CyberFondoSuperficie = Color(0xFF0B1019)
 
 /** Superficies card — #111B27 Pencil. */
 val CyberGlass = Color(0xFF111B27)
 val CyberGlassBorde = Color(0x1AFFFFFF)
 val CyberGlassAlto = Color(0xFF1B2735)
-val CyberGlassVariant = Color(0xFF1B2735)
+val CyberGlassVariant = CyberGlassAlto
 
 /** Teal — acento primario Pencil #2DD4BF. */
 val CyberCyan = Color(0xFF2DD4BF)
 val CyberCyanClaro = Color(0xFFF1F5F9)
-val CyberCyanOn = Color(0xFF0A0F16)
+val CyberCyanOn = CyberFondo
 
 /** Texto — jerarquía Pencil. */
 val CyberTextoPrincipal = Color(0xFFF1F5F9)
@@ -57,17 +63,17 @@ val CyberVerdeAlertaClaro = Color(0xFF86F0B5)
 val CyberVerdeFondo = Color(0xFF0F2A1E)
 
 /** Outline / bordes sutiles. */
-val CyberOutlineMedio = Color(0xFF8CA3B8)
+val CyberOutlineMedio = CyberTextoSecundario
 
 // ──────────────────────────────────────────────────────────────────
 // Nuevos tokens Pencil — usados por las 11 pantallas rediseñadas.
 // ──────────────────────────────────────────────────────────────────
 
 /** Brand mark background — #1B2735 Pencil (caja del logo shield). */
-val PencilBrandMark = Color(0xFF1B2735)
+val PencilBrandMark = CyberGlassAlto
 
 /** Modal overlay background — #0B1019 Pencil. */
-val PencilModalFondo = Color(0xFF0B1019)
+val PencilModalFondo = CyberFondoSuperficie
 
 /** Overlay scrim para modales — negotiable 60% black. */
 val PencilOverlay = Color(0x99000000)

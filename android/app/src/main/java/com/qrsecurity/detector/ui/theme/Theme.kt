@@ -4,11 +4,8 @@ import android.app.Activity
 import android.os.Build
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
@@ -53,62 +50,36 @@ private val EsquemaCyberSentinel = darkColorScheme(
  * Tema Compose de la aplicacion — Cyber-Sentinel.
  *
  * La app fue diseñada exclusivamente para modo oscuro con fondo #0A0E1A
- * y acentos cyan; el design system de Stitch no define esquema claro.
- *
- * Bug 19 fix: antes los parametros `temaOscuro` y `colorDinamico` estaban
- * declarados con defaults (true / false) pero el cuerpo los ignoraba y
- * hardcodeaba `EsquemaCyberSentinel`. El contrato de la firma sugeria que
- * el llamador controlaba el modo, pero en realidad no tenia efecto.
- *
- * Ahora honramos los parametros:
- *  - `temaOscuro` = true (default)  → EsquemaCyberSentinel
- *  - `temaOscuro` = false          → EsquemaCyberSentinel (no existe paleta
- *    clara real — ver nota M8 arriba)
- *  - `colorDinamico` = true (API >= 31) → dynamicDark/LightColorScheme(LocalContext)
- *  - `colorDinamico` = false (default)  → paleta cyber-sentinel fija
- *
- * Nota: los callers actuales pasan defaults (oscuro, no dinamico), asi que
- * el comportamiento runtime de la app no cambia.
- *
- * @param temaOscuro true → esquema oscuro (default, recomendado).
- * @param colorDinamico true → Material You dynamic colors (API >= 31).
+ * y acentos cyan; el design system no define esquema claro. La paleta es
+ * FIJA: la UI referencia los tokens Cyber y Pencil directamente, no
+ * colorScheme.
  */
 @Composable
-fun TemaDetectorSeguridadQR(
-    temaOscuro: Boolean = true,
-    colorDinamico: Boolean = false,
-    content: @Composable () -> Unit
-) {
-    // Bug 19 fix: honrar los parametros en lugar de ignorarlos.
-    val context = LocalContext.current
-    val esquemaColor = when {
-        colorDinamico && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-            if (temaOscuro) dynamicDarkColorScheme(context)
-            else dynamicLightColorScheme(context)
-        }
-        else -> EsquemaCyberSentinel
-    }
-
+fun TemaDetectorSeguridadQR(content: @Composable () -> Unit) {
+    // M22 (auditoría frontend): eliminados los params `temaOscuro` /
+    // `colorDinamico` — eran una trampa latente: ningún caller los pasaba y
+    // activar `colorDinamico` habría dejado un híbrido roto (el 95% de la
+    // UI referencia tokens Cyber*/Pencil* fijos, no colorScheme). La app
+    // es siempre oscura con la paleta Pencil.
     val view = LocalView.current
     if (!view.isInEditMode) {
         SideEffect {
-            // Bug 19 fix + deprecation fix: MainActivity ya llama a enableEdgeToEdge()
-            // que gestiona traslucidez de barras del sistema. Aqui solo ajustamos
-            // la apariencia de los iconos de la status bar segun el modo activo.
-            // No tocamos statusBarColor/navigationBarColor (deprecated en API 35+).
+            // Bug 19 fix + deprecation fix: MainActivity ya llama a
+            // enableEdgeToEdge(). Aqui solo ajustamos la apariencia de los
+            // iconos de la status bar (siempre claros sobre fondo oscuro).
             //
             // Audit fix P8: cast seguro — el host puede no ser una Activity
             // (p.ej. unos entornos de preview/ test); sin window no hay nada
             // que ajustar.
             (view.context as? Activity)?.window?.let { window ->
                 WindowCompat.getInsetsController(window, view)
-                    .isAppearanceLightStatusBars = !temaOscuro
+                    .isAppearanceLightStatusBars = false
             }
         }
     }
 
     MaterialTheme(
-        colorScheme = esquemaColor,
+        colorScheme = EsquemaCyberSentinel,
         typography = TipografiaCyberSentinel,
         content = content
     )

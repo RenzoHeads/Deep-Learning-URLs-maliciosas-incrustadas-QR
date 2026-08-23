@@ -1,8 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- App name — único string referenciado (AndroidManifest.xml).
-         El resto de la copy de la UI vive en los composables (decisión
-         de arquitectura del rediseño F3); los 23 recursos huérfanos
+
+         DECISIÓN DE POLÍTICA (auditoría frontend 2026-08, Fase 5 — S6):
+         la copy de la UI vive en los composables, NO en recursos. La app es
+         monolenguaje (español) sin roadmap de i18n; centralizarla aquí
+         requeriría migrar ~70 literales para ganar solo traducción futura.
+         Pauta para nuevos código: los ViewModels NO emiten strings de
+         usuario — emiten eventos tipados (p.ej. MensajeDetalleUrl) y la
+         copy se resuelve en la capa UI, para que un eventual i18n toque
+         una sola capa. Si el proyecto adopta i18n, migrar los literales
+         de los composables a este archivo. Los 23 recursos huérfanos
          que quedaban de pantallas eliminadas (denuncias, etc.) fueron
          purgados tras verificar con grep que no tenían referencias. -->
     <string name="app_name">Detector QR Seguro</string>

@@ -129,7 +129,7 @@ class Pipeline @Inject constructor(
                             valorCrudo = extraido.valorCrudo,
                             tipoContenido = extraido.tipoContenido
                         )
-                        _estado.value = Estado.ResultadoListo(resultado)
+                        _estado.value = Estado.NoUrlListo(resultado)
                     }
                     is ExtractorUrls.Extraido.Urls -> {
                         // Bug F fix: dedup check ANTES de inference.
@@ -192,11 +192,24 @@ class Pipeline @Inject constructor(
                                     nivelAlerta = resultado.nivelAlerta,
                                     delegado = resultado.delegado
                                 )
-                                // Bug 1 fix: propagar el UUID del escaneo
-                                // persistido para que AnalisisScreen navege
-                                // a DetalleUrl con el id exacto (no match
-                                // heuristico en Flow historial).
-                                _estado.value = Estado.ResultadoListo(resultado, idLocal)
+                                if (idLocal == null) {
+                                    // B6: sin INSERT no hay id con el que
+                                    // navegar al detalle — antes se emitia un
+                                    // ResultadoListo con id null y la UI caia
+                                    // al match heuristico, que podia navegar
+                                    // al escaneo ANTERIOR de la misma URL y
+                                    // presentar su veredicto como resultado
+                                    // fresco.
+                                    _estado.value = Estado.Error(
+                                        "No pudimos guardar el análisis. Inténtalo de nuevo."
+                                    )
+                                } else {
+                                    // Bug 1 fix: propagar el UUID del escaneo
+                                    // persistido para que la UI navege a
+                                    // DetalleUrl con el id exacto (no match
+                                    // heuristico en Flow historial).
+                                    _estado.value = Estado.ResultadoListo(resultado, idLocal)
+                                }
                             }
                         }
                     }

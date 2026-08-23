@@ -73,6 +73,29 @@ class PipelineViewModel @Inject constructor(
     private val _analizando = MutableStateFlow(false)
     val analizando: StateFlow<Boolean> = _analizando.asStateFlow()
 
+    // ── Flag escaneoActivo: intencion de navegacion a resultado (no estado de ejecucion) ──
+    //
+    // Bug (race en navegacion del primer escaneo): el gate de navegacion en
+    // HomeScreen dependia de `analizando`, que es un estado de EJECUCION
+    // (true mientras el Job corre). `_analizando.value = false` se apaga en
+    // el bloque `finally` de analyzeWithJobControl, en el MISMO bloque
+    // sincrono que emite `Estado.ResultadoListo` (sin punto de suspension
+    // entre ambos). Por la conflacion de StateFlow, Compose observa ambos
+    // valores finales juntos (`ResultadoListo` + `analizando=false`), el gate
+    // falla y el primer escaneo nunca navega (vuelve a Home pese a guardar).
+    //
+    // `escaneoActivo` es una senal de INTENCION: se enciende al INICIAR el
+    // escaneo (muchos frames ANTES de que `ResultadoListo` exista, por lo que
+    // no hay carrera) y SOLO se apaga al consumir la navegacion
+    // ([consumirEscaneoActivo]), al [reiniciar], al [cancelarReescaneo] o al
+    // destruir el VM. Asi, un `ResultadoListo` legítimo producido por un
+    // escaneo iniciado SIEMPRE encuentra `escaneoActivo == true`, mientras
+    // que un `ResultadoListo` restaurado por process-death (sin escaneo
+    // iniciado en esta vida del VM) tiene `escaneoActivo == false` y no
+    // provoca navegacion espontanea.
+    private val _escaneoActivo = MutableStateFlow(false)
+    val escaneoActivo: StateFlow<Boolean> = _escaneoActivo.asStateFlow()
+
     // ── Bug C-09 fix: concurrencia estructurada para el escaneo en vuelo ──
     //
     // Antes, `analizar(payloadCrudo)` solo delegaba en `pipeline.analizar(...)`
@@ -182,6 +205,13 @@ class PipelineViewModel @Inject constructor(
         // de race entre cancelAndJoin() y launch{}.
         _analizando.value = true
 
+        // Flag escaneoActivo: se enciende al iniciar el escaneo (muchos frames
+        // antes de que `ResultadoListo` se emita) para que el gate de
+        // navegacion en HomeScreen lo vea `true` cuando el resultado llegue —
+        // sin la carrera de `analizando`, que se apaga en el mismo bloque
+        // sincrono que emite `ResultadoListo`.
+        _escaneoActivo.value = true
+
         scanJob = viewModelScope.launch {
             // Antes de mutar nada (pipeline.analizar pone Estado.Escaneando
             // al inicio), nos aseguramos de que este Job sigue activo.
@@ -199,11 +229,11 @@ class PipelineViewModel @Inject constructor(
                 // resultado pueden hacer fallback a este cache.
                 val estadoFinal = pipeline.estado.value
                 if (estadoFinal is Estado.ResultadoListo) {
-                    val res = estadoFinal.resultado as? ResultadoAnalisis.ResultadoUrl
-                    if (res != null) {
-                        _resultadoCacheado.value = res
-                        savedState[CLAVE_RESULTADO_CACHE] = serializarResultado(res)
-                    }
+                    // B6: con el split del sealed, `resultado` ya es
+                    // ResultadoUrl — sin el cast `as?` de antes.
+                    _resultadoCacheado.value = estadoFinal.resultado
+                    savedState[CLAVE_RESULTADO_CACHE] =
+                        serializarResultado(estadoFinal.resultado)
                 }
             } finally {
                 // Al terminar (exito o fallo): SOLO si este Job sigue siendo
@@ -262,7 +292,25 @@ class PipelineViewModel @Inject constructor(
         scanJob?.cancel()
         scanJob = null
         _analizando.value = false
+        _escaneoActivo.value = false
         pipeline.reiniciar()
+    }
+
+    /**
+     * Consume la senal [escaneoActivo] tras una navegacion exitosa al
+     * resultado. Llamado por la UI (HomeScreen) ANTES de disparar
+     * [onResultado] cuando un [Estado.ResultadoListo] (resultado de URL,
+     * con idLocal) provoca la navegacion.
+     *
+     * Esto garantiza que el MISMO resultado no vuelva a disparar navegacion
+     * (por ejemplo, si la HomeScreen sale y reentra en composicion con el
+     * `estado` aun en ResultadoListo sin que `reiniciar()` se haya
+     * ejecutado). Tambien blinda contra process-death: un `ResultadoListo`
+     * restaurado sin escaneo activo en esta vida del VM ya tiene
+     * `escaneoActivo == false`, asi que nunca navega.
+     */
+    fun consumirEscaneoActivo() {
+        _escaneoActivo.value = false
     }
 
     fun reiniciar() {
@@ -272,6 +320,7 @@ class PipelineViewModel @Inject constructor(
         scanJob?.cancel()
         scanJob = null
         _analizando.value = false
+        _escaneoActivo.value = false
         pipeline.reiniciar()
         // Bug D2 fix: limpiar el cache del ultimo resultado al reiniciar
         // — el usuario escanea otro QR, el resultado anterior ya no aplica.
@@ -294,6 +343,7 @@ class PipelineViewModel @Inject constructor(
         // Bug C-09 fix: cancela el escaneo en vuelo por defensa.
         scanJob?.cancel()
         scanJob = null
+        _escaneoActivo.value = false
         pipeline.destruir()
     }
 

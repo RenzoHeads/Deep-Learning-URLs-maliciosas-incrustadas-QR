@@ -21,7 +21,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -30,7 +29,6 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
-import com.qrsecurity.detector.datos.repositorios.RepositorioUrlsBloqueadas
 import com.qrsecurity.detector.ui.theme.CyberCyan
 import com.qrsecurity.detector.ui.theme.CyberFondo
 import com.qrsecurity.detector.ui.theme.CyberRojo
@@ -118,27 +116,22 @@ fun PantallaDetalleUrl(
 
     LaunchedEffect(id) { viewModel.cargarEscaneo(id) }
 
-    LaunchedEffect(viewModel) {
-        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
-            viewModel.mensaje.collect { mensaje ->
-                onMensaje(mensaje.tipo, mensaje.texto)
-            }
-        }
+    // M13: RecolectorEventos encapsula el boilerplate repeatOnLifecycle de
+    // los 3 canales one-shot del VM (mensaje, desbloqueo, eliminado).
+    // S6: el VM emite el evento tipado; la copy/severidad se resuelven en
+    // la capa UI.
+    RecolectorEventos(viewModel.mensaje) { mensaje ->
+        val ui = mensaje.aMensajeUi()
+        onMensaje(ui.tipo, ui.texto)
     }
 
     // El modal de exito del desbloqueo se abre SOLO con la señal tipada del
     // VM (exito real del repositorio), no sniffando tipos de mensaje.
-    LaunchedEffect(viewModel) {
-        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
-            viewModel.desbloqueoCompletado.collect { modalActiva = ModalDetalleUrl.OkDesbloqueo }
-        }
+    RecolectorEventos(viewModel.desbloqueoCompletado) {
+        modalActiva = ModalDetalleUrl.OkDesbloqueo
     }
 
-    LaunchedEffect(viewModel) {
-        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
-            viewModel.eliminarCompletado.collect { onBack() }
-        }
-    }
+    RecolectorEventos(viewModel.eliminarCompletado) { onBack() }
 
     // Audit fix B4 (corregido): back del sistema con un modal abierto cierra
     // el MODAL, no la pantalla. Los modales son overlays (no Dialog), asi que
@@ -179,17 +172,25 @@ fun PantallaDetalleUrl(
                 onSolicitarBloqueo = { modalActiva = ModalDetalleUrl.ConfirmarBloqueo },
                 onSolicitarEliminar = { modalActiva = ModalDetalleUrl.EliminarUrl },
                 onSolicitarEliminarVersion = { modalActiva = ModalDetalleUrl.EliminarVersion },
-                onAbrirEnlace = { onInvalida ->
-                    // Audit fix S1: nivel SEGURO → abre directo. Cualquier
-                    // otro nivel (SOSPECHOSO/MALICIOSO desbloqueada) pide
-                    // confirmación explícita ANTES de abrir el navegador —
-                    // antes el botón abría sin advertencia en el momento del
-                    // tap.
-                    if (estado.escaneo.nivelAlertaEnum == NivelAlerta.SEGURO) {
-                        val url = urlParaAbrir(estado.escaneo.urlOriginal, estado.escaneo.urlLimpia)
-                        if (url == null) onInvalida() else abrirEnNavegador(contexto, url)
-                    } else {
-                        modalActiva = ModalDetalleUrl.ConfirmarAbrirEnlace
+                // M7: el sealed UrlParaAbrir decide el mensaje de invalidez
+                // en este unico punto — el callback ya no recibe otro
+                // callback ni duplica strings de error.
+                onAbrirEnlace = {
+                    val resuelta = resolverUrlParaAbrir(
+                        estado.escaneo.urlOriginal,
+                        estado.escaneo.urlLimpia
+                    )
+                    val mensajeInvalida = resuelta.mensajeSiInvalida()
+                    when {
+                        // Audit fix P5: distinguir "URL vacía" de "esquema no
+                        // permitido" — antes ambos mostraban el mismo mensaje.
+                        mensajeInvalida != null -> onMensaje(TipoMensaje.ERROR, mensajeInvalida)
+                        // Audit fix S1: nivel SEGURO → abre directo. Cualquier
+                        // otro nivel (SOSPECHOSO/MALICIOSO desbloqueada) pide
+                        // confirmación explícita ANTES de abrir el navegador.
+                        estado.escaneo.nivelAlertaEnum == NivelAlerta.SEGURO ->
+                            abrirEnNavegador(contexto, (resuelta as UrlParaAbrir.Valida).url)
+                        else -> modalActiva = ModalDetalleUrl.ConfirmarAbrirEnlace
                     }
                 },
                 onMensaje = onMensaje
@@ -217,7 +218,7 @@ fun PantallaDetalleUrl(
             onConfirmar = {
                 modalActiva = ModalDetalleUrl.Ninguno
                 urlLimpiaActual?.let {
-                    viewModel.onAction(DetalleUrlAction.BloquearUrl(it, RepositorioUrlsBloqueadas.RAZON_MALICIOSA))
+                    viewModel.onAction(DetalleUrlAction.BloquearUrl(it))
                 }
             },
             onCancelar = { modalActiva = ModalDetalleUrl.Ninguno }
@@ -255,13 +256,15 @@ fun PantallaDetalleUrl(
                 colorBoton = CyberRojo,
                 onConfirmar = {
                     modalActiva = ModalDetalleUrl.Ninguno
-                    val url = cargado?.let {
-                        urlParaAbrir(it.escaneo.urlOriginal, it.escaneo.urlLimpia)
+                    val resuelta = cargado?.let {
+                        resolverUrlParaAbrir(it.escaneo.urlOriginal, it.escaneo.urlLimpia)
                     }
-                    if (url == null) {
-                        onMensaje(TipoMensaje.ERROR, "El enlace no se puede abrir de forma segura")
-                    } else {
-                        abrirEnNavegador(contexto, url)
+                    when (resuelta) {
+                        is UrlParaAbrir.Valida -> abrirEnNavegador(contexto, resuelta.url)
+                        // race: uiState dejó de ser Cargado — el modal ya se
+                        // cerró y no se dispara la acción (comportamiento seguro)
+                        null -> Unit
+                        else -> onMensaje(TipoMensaje.ERROR, resuelta.mensajeSiInvalida()!!)
                     }
                 },
                 onCancelar = { modalActiva = ModalDetalleUrl.Ninguno }
@@ -280,7 +283,7 @@ private fun ContenidoDetalle(
     onSolicitarBloqueo: () -> Unit,
     onSolicitarEliminar: () -> Unit,
     onSolicitarEliminarVersion: () -> Unit,
-    onAbrirEnlace: (onInvalida: () -> Unit) -> Unit,
+    onAbrirEnlace: () -> Unit,
     onMensaje: (TipoMensaje, String) -> Unit
 ) {
     val escaneo = estado.escaneo

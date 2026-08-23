@@ -8,14 +8,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -35,12 +33,9 @@ import androidx.lifecycle.Lifecycle.State.STARTED
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import com.qrsecurity.detector.ui.theme.CyberCyan
-import com.qrsecurity.detector.ui.theme.CyberGlass
 import com.qrsecurity.detector.ui.theme.CyberTextoPrincipal
 import com.qrsecurity.detector.ui.theme.CyberTextoSecundario
-import com.qrsecurity.detector.ui.theme.Elevacion
 import com.qrsecurity.detector.ui.theme.Espaciado
-import com.qrsecurity.detector.ui.theme.RadioBorde
 
 /**
  * Pantalla de Registro (Pencil frame fZjhl) — alta embebida en Auth0.
@@ -73,14 +68,11 @@ fun PantallaRegistro(
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val lifecycleOwner = LocalLifecycleOwner.current
 
-    LaunchedEffect(viewModel) {
-        lifecycleOwner.repeatOnLifecycle(STARTED) {
-            viewModel.eventos.collect { evento ->
-                when (evento) {
-                    is RegistroEvento.Exito -> onExito()
-                    is RegistroEvento.Error -> onMensaje(TipoMensaje.ERROR, evento.mensaje)
-                }
-            }
+    // M13: RecolectorEventos encapsula el boilerplate repeatOnLifecycle.
+    RecolectorEventos(viewModel.eventos) { evento ->
+        when (evento) {
+            is RegistroEvento.Exito -> onExito()
+            is RegistroEvento.Error -> onMensaje(TipoMensaje.ERROR, evento.mensaje)
         }
     }
 
@@ -120,16 +112,10 @@ fun PantallaRegistro(
         }
 
         // ─── Registration Form ───
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(RadioBorde.xxl),
-            colors = CardDefaults.cardColors(containerColor = CyberGlass),
-            elevation = CardDefaults.cardElevation(defaultElevation = Elevacion.ninguna)
-        ) {
+        // M13: receta Card glass absorbida por TarjetaCyber.
+        TarjetaCyber {
             Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(Espaciado.xl),
+                modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(Espaciado.lg)
             ) {
                 // Correo electronico
@@ -172,7 +158,7 @@ fun PantallaRegistro(
                     label = "Confirmar contraseña",
                 )
 
-                BotonSubmit(
+                BotonCyber(
                     texto = "Crear cuenta",
                     procesando = uiState.procesando,
                     onClick = {

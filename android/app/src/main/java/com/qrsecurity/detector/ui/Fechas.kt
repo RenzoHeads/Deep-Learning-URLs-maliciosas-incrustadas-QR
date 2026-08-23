@@ -73,7 +73,7 @@ internal fun formatoFechaEscaneo(creadoEnMillis: Long): String {
 }
 
 /** Hora del escaneo en formato "HH:mm" (24h, locale del dispositivo). */
-internal fun formatoHora(millis: Long): String {
+private fun formatoHora(millis: Long): String {
     val zoned = Instant.ofEpochMilli(millis).atZone(ZoneId.systemDefault())
     return FORMATO_HORA.format(zoned)
 }

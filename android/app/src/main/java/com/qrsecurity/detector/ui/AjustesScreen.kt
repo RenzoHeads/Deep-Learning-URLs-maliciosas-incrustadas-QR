@@ -21,7 +21,6 @@ import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -36,19 +35,16 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.hilt.navigation.compose.hiltViewModel
-import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import com.qrsecurity.detector.BuildConfig
 import com.qrsecurity.detector.ui.theme.Alphas
 import com.qrsecurity.detector.ui.theme.Borde
 import com.qrsecurity.detector.ui.theme.CyberFondo
-import com.qrsecurity.detector.ui.theme.CyberGlass
 import com.qrsecurity.detector.ui.theme.CyberGlassBorde
 import com.qrsecurity.detector.ui.theme.CyberRojo
 import com.qrsecurity.detector.ui.theme.CyberTextoPrincipal
 import com.qrsecurity.detector.ui.theme.CyberTextoSecundario
-import com.qrsecurity.detector.ui.theme.Elevacion
 import com.qrsecurity.detector.ui.theme.Espaciado
 import com.qrsecurity.detector.ui.theme.RadioBorde
 import com.qrsecurity.detector.ui.theme.TamanosIcono
@@ -78,27 +74,17 @@ fun PantallaAjustes(
     onCerrarSesion: () -> Unit,
     viewModel: AjustesViewModel = hiltViewModel()
 ) {
-    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val syncEnCurso by viewModel.syncEnCurso.collectAsStateWithLifecycle()
     val lifecycleOwner = LocalLifecycleOwner.current
 
     // Escucha eventos one-shot del VM. Solo navega al login cuando el
     // logout completo (LogoutCoordinator: clearAllTables + reset cursores
-    // + prefs + cancel work + clear cache) ha terminado. Antes se llamaba
-    // onCerrarSesion() en paralelo con viewModel.onAction(CerrarSesion),
-    // lo que navegaba ANTES de que la limpieza completara, dejando DB,
-    // cursores y SyncWorker en estado inconsistente.
-    //
-    // Audit fix B6: repeatOnLifecycle(STARTED) — antes el collect corria
-    // con LaunchedEffect(Unit) plano (inconsistente con las otras 5
-    // pantallas) y un LogoutCompletado podia consumirse con la pantalla en
-    // STOPPED, disparando la navegacion fuera de ciclo de vida.
-    LaunchedEffect(viewModel) {
-        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
-            viewModel.eventos.collect { evento ->
-                when (evento) {
-                    AjustesEvento.LogoutCompletado -> onCerrarSesion()
-                }
-            }
+    // + prefs + cancel work + clear cache) ha terminado.
+    // M13: RecolectorEventos encapsula el boilerplate repeatOnLifecycle
+    // (audit fix B6: solo consume con la pantalla STARTED).
+    RecolectorEventos(viewModel.eventos) { evento ->
+        when (evento) {
+            AjustesEvento.LogoutCompletado -> onCerrarSesion()
         }
     }
 
@@ -117,7 +103,7 @@ fun PantallaAjustes(
                 style = MaterialTheme.typography.displaySmall,
                 color = CyberTextoPrincipal
             )
-            if (uiState.syncEnCurso) {
+            if (syncEnCurso) {
                 EstadoSincronizacion()
             } else {
                 Text(
@@ -201,17 +187,9 @@ private fun TarjetaSeccion(
     titulo: String,
     contenido: @Composable () -> Unit
 ) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(RadioBorde.xxl),
-        colors = CardDefaults.cardColors(containerColor = CyberGlass),
-        elevation = CardDefaults.cardElevation(defaultElevation = Elevacion.ninguna)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(Espaciado.lg)
-        ) {
+    // M13: receta Card glass absorbida por TarjetaCyber (padding lg).
+    TarjetaCyber(paddingContenido = Espaciado.lg) {
+        Column(modifier = Modifier.fillMaxWidth()) {
             Text(
                 text = titulo,
                 style = MaterialTheme.typography.titleMedium,

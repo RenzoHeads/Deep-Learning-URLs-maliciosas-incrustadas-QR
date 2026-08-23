@@ -5,7 +5,6 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
@@ -27,7 +26,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import com.qrsecurity.detector.ui.theme.Alphas
-import com.qrsecurity.detector.ui.theme.Borde
 import com.qrsecurity.detector.ui.theme.CyberCyan
 import com.qrsecurity.detector.ui.theme.CyberFondo
 import com.qrsecurity.detector.ui.theme.CyberGlass
@@ -55,7 +53,7 @@ internal fun SeccionAcciones(
     onSolicitarDesbloqueo: () -> Unit,
     onSolicitarBloqueo: () -> Unit,
     onSolicitarEliminar: () -> Unit,
-    onAbrirEnlace: (onInvalida: () -> Unit) -> Unit,
+    onAbrirEnlace: () -> Unit,
     onMensaje: (TipoMensaje, String) -> Unit
 ) {
     val escaneo = estado.escaneo
@@ -79,17 +77,11 @@ internal fun SeccionAcciones(
                 // navegadores, no un "navegador protegido".
                 subEtiqueta = "Se abre en tu navegador",
                 habilitado = true,
-                onClick = {
-                    // Audit fix P5: distinguir "URL vacía" de "esquema no
-                    // permitido" — antes ambos mostraban el mismo mensaje.
-                    if (escaneo.urlOriginal.isBlank() && escaneo.urlLimpia.isBlank()) {
-                        onMensaje(TipoMensaje.ERROR, "La URL está vacía")
-                    } else {
-                        // La pantalla decide: nivel SEGURO → abre directo;
-                        // SOSPECHOSO/MALICIOSO → modal de confirmación.
-                        onAbrirEnlace { onMensaje(TipoMensaje.ERROR, "El enlace no se puede abrir de forma segura") }
-                    }
-                }
+                // M7: la sección solo delega — la pantalla resuelve el
+                // sealed UrlParaAbrir (mensaje de URL vacía / esquema
+                // inválido / abrir directo / modal de confirmación) en un
+                // único punto.
+                onClick = onAbrirEnlace
             )
         }
 
@@ -98,36 +90,22 @@ internal fun SeccionAcciones(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(Espaciado.md)
         ) {
-            // Compartir — siempre visible
-            OutlinedButton(
+            // Compartir — siempre visible. M9: receta absorbida por
+            // BotonCyberOutline.
+            BotonCyberOutline(
+                texto = "Compartir",
                 onClick = {
                     compartirUrl(
                         contexto,
-                        urlParaAbrir(escaneo.urlOriginal, escaneo.urlLimpia) ?: escaneo.urlLimpia
+                        (resolverUrlParaAbrir(escaneo.urlOriginal, escaneo.urlLimpia)
+                            as? UrlParaAbrir.Valida)?.url ?: escaneo.urlLimpia
                     )
                 },
-                modifier = Modifier
-                    .weight(1f)
-                    .heightIn(min = TamanosToque.boton),
-                shape = RoundedCornerShape(RadioBorde.lg),
-                colors = ButtonDefaults.outlinedButtonColors(
-                    containerColor = CyberGlass,
-                    contentColor = CyberTextoPrincipal
-                ),
-                border = BorderStroke(Borde.fino, CyberGlassBorde)
-            ) {
-                Icon(
-                    imageVector = Icons.Filled.Share,
-                    contentDescription = null,
-                    modifier = Modifier.size(TamanosIcono.estandar)
-                )
-                Spacer(modifier = Modifier.size(Espaciado.sm))
-                Text(
-                    text = "Compartir",
-                    style = MaterialTheme.typography.labelLarge,
-                    fontWeight = FontWeight.Bold
-                )
-            }
+                icono = Icons.Filled.Share,
+                colorAcento = CyberTextoPrincipal,
+                borde = CyberGlassBorde,
+                modifier = Modifier.weight(1f)
+            )
 
             // ─── Lock/Unlock Toggle ─── (solo URLs MALICIOSAS)
             // El auto-bloqueo sucede al escanear una URL MALICIOSO. Este toggle
@@ -154,30 +132,15 @@ internal fun SeccionAcciones(
         // Elimina TODOS los escaneos de esta URL del historial (ultima
         // version + reescaneos). Accion destructiva — el modal
         // [ModalEliminarUrl] pide confirmacion explicita antes de mutar.
-        OutlinedButton(
+        // M9: receta absorbida por BotonCyberOutline.
+        BotonCyberOutline(
+            texto = "Eliminar del historial",
             onClick = onSolicitarEliminar,
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = TamanosToque.boton),
-            shape = RoundedCornerShape(RadioBorde.lg),
-            colors = ButtonDefaults.outlinedButtonColors(
-                containerColor = CyberRojo.copy(Alphas.leve),
-                contentColor = CyberRojo
-            ),
-            border = BorderStroke(Borde.fino, CyberRojo.copy(Alphas.notorio))
-        ) {
-            Icon(
-                imageVector = Icons.Filled.Delete,
-                contentDescription = null,
-                modifier = Modifier.size(TamanosIcono.estandar)
-            )
-            Spacer(modifier = Modifier.size(Espaciado.sm))
-            Text(
-                text = "Eliminar del historial",
-                style = MaterialTheme.typography.labelLarge,
-                fontWeight = FontWeight.Bold
-            )
-        }
+            icono = Icons.Filled.Delete,
+            colorAcento = CyberRojo,
+            contenedor = CyberRojo.copy(Alphas.leve),
+            borde = CyberRojo.copy(Alphas.notorio)
+        )
     }
 }
 
@@ -269,27 +232,15 @@ private fun BotonToggleBloqueo(
     } else {
         Triple(Icons.Filled.LockOpen, "Desbloquear", onSolicitarDesbloqueo)
     }
-    OutlinedButton(
+    // M9: receta absorbida por BotonCyberOutline (el modifier llega por
+    // parametro porque weight es modificador de RowScope).
+    BotonCyberOutline(
+        texto = etiqueta,
         onClick = onClick,
+        icono = icono,
+        colorAcento = CyberRojo,
+        contenedor = CyberRojo.copy(Alphas.bajo),
+        borde = CyberRojo.copy(Alphas.fuerte),
         modifier = modifier
-            .heightIn(min = TamanosToque.boton),
-        shape = RoundedCornerShape(RadioBorde.lg),
-        colors = ButtonDefaults.outlinedButtonColors(
-            containerColor = CyberRojo.copy(Alphas.bajo),
-            contentColor = CyberRojo
-        ),
-        border = BorderStroke(Borde.fino, CyberRojo.copy(Alphas.fuerte))
-    ) {
-        Icon(
-            imageVector = icono,
-            contentDescription = null,
-            modifier = Modifier.size(TamanosIcono.estandar)
-        )
-        Spacer(modifier = Modifier.size(Espaciado.sm))
-        Text(
-            text = etiqueta,
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.Bold
-        )
-    }
+    )
 }
